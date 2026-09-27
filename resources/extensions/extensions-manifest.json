@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "version": "1.0.0",
-  "bundleSha256": "a870c4359eeb5b58e3c6d79650460dc17d9ec093ffccbb417f3dbdb9b35cf559",
-  "fileCount": 13,
+  "bundleSha256": "a3a58186cae4b8cf9b6792b27439ce40eee239ce34999adad824b2ab0ab04000",
+  "fileCount": 14,
   "files": [
     {
       "name": "pi-deck-ask-question.ts",
@@ -43,6 +43,11 @@
       "name": "pi-deck-session-title.ts",
       "sha256": "fe5734a430b0686040b74164e6aa1b8bf59c55c9331201d38452812d4f677477",
       "bytes": 24166
+    },
+    {
+      "name": "pi-deck-shell-proxy.ts",
+      "sha256": "c73f68c7c1e0f2464dead835c861146c9d32356d357444ce4a0bc736ae796e9f",
+      "bytes": 2137
     },
     {
       "name": "pi-deck-subagents.ts",

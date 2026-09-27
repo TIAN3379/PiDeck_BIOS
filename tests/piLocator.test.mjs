@@ -307,6 +307,12 @@ test("getSearchDirs uses ~/.local/share/mise on darwin and linux", () => {
 	}
 });
 
+test("createProcessEnv removes stale PiDeck proxy scope markers from inherited env", () => {
+	const { PiLocator } = loadPiLocatorModule("darwin", { PIDECK_PI_PROXY_SCOPE: "model-only" });
+	const env = new PiLocator().createProcessEnv();
+	assert.equal(env.PIDECK_PI_PROXY_SCOPE, undefined);
+});
+
 test("createProcessEnv prepends search dirs to PATH/Path without pathPrefix (npm check path)", () => {
 	const root = join(tmpdir(), `pi-desktop-locator-npm-env-${process.pid}-${Date.now()}`);
 	try {

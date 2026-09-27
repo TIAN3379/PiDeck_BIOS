@@ -21,7 +21,11 @@ export const BUILT_IN_EXTENSIONS = [
 	"pi-deck-vision.ts",
 ] as const;
 
-export type BuiltInExtensionName = (typeof BUILT_IN_EXTENSIONS)[number];
+/** Internal adapter loaded after user-facing tool policies; not listed in settings UI. */
+export const INTERNAL_BUILT_IN_EXTENSIONS = ["pi-deck-shell-proxy.ts"] as const;
+const ALL_BUILT_IN_EXTENSIONS = [...BUILT_IN_EXTENSIONS, ...INTERNAL_BUILT_IN_EXTENSIONS] as const;
+
+export type BuiltInExtensionName = (typeof BUILT_IN_EXTENSIONS | typeof INTERNAL_BUILT_IN_EXTENSIONS)[number];
 
 export type BuiltInExtensionPathRoots = {
 	/** 开发态 app 根（含 resources/extensions） */
@@ -40,7 +44,7 @@ export type BuiltInExtensionPathRoots = {
 /** 校验 source 是否为允许的内置扩展 basename（防路径穿越）。 */
 export function isBuiltInExtensionName(source: string): source is BuiltInExtensionName {
 	const name = basename(source.trim());
-	return (BUILT_IN_EXTENSIONS as readonly string[]).includes(name) && name === source.trim();
+	return (ALL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name) && name === source.trim();
 }
 
 /**
@@ -116,22 +120,25 @@ export function resolveBuiltInExtensionPath(extensionName: string, roots: BuiltI
 	// 覆盖层优先：热更新写入的版本必须真正参与 -e 注入，否则「更新成功」只是自欺。
 	// 但要整份校验通过才认——半截覆盖层（缺文件/被外部改动）会让 pi 解析不到相对 import。
 	if (roots.overlayDir && overlayArtifact(roots.overlayDir)) {
-		return join(roots.overlayDir, name);
+		const overlayPath = join(roots.overlayDir, name);
+		// 老版本覆盖层可能没有后来新增的内部适配器；回落到随包文件，
+		// 不让一个仍然有效的旧快照把新版本的代理隔离保护静默关掉。
+		if (existsSync(overlayPath)) return overlayPath;
 	}
 	return join(resolveBuiltInExtensionsDir(roots), name);
 }
 
 /**
  * 返回当前应注入到 pi RPC 的内置扩展绝对路径列表。
- * - removedBuiltInExtensions 中的跳过
+ * - removedBuiltInExtensions 中的用户扩展跳过；内部适配器始终保留
  * - 源文件缺失的跳过（打日志由调用方处理）
  * - piRpcNoExtensions 由调用方决定是否整段跳过
  */
 export function listActiveBuiltInExtensionPaths(roots: BuiltInExtensionPathRoots, removedBuiltInExtensions: readonly string[] = []): string[] {
 	const removed = new Set(removedBuiltInExtensions.map((item) => basename(item.trim())).filter(Boolean));
 	const paths: string[] = [];
-	for (const name of BUILT_IN_EXTENSIONS) {
-		if (removed.has(name)) continue;
+	for (const name of ALL_BUILT_IN_EXTENSIONS) {
+		if (name !== "pi-deck-shell-proxy.ts" && removed.has(name)) continue;
 		const fullPath = resolveBuiltInExtensionPath(name, roots);
 		if (!existsSync(fullPath)) continue;
 		paths.push(fullPath);

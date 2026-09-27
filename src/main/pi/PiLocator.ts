@@ -6,7 +6,7 @@ import type { AppSettings, PiInstallStatus } from "../../shared/types";
 import type { MainProcessTranslationKey } from "../../shared/i18n/mainProcessCopy";
 import { WSL_PI_NEGATIVE_CACHE_TTL_MS, WSL_PI_PROBE_TIMEOUT_MS, buildWslCommandMarker, buildWslPiExecArgs, buildWslPiProbeScript, isWslInteropPath, parseWslCommandMarker, parseWslPiProbeOutput, type WslPiProbeResult } from "../wsl/wslPiProbe";
 import { decodeWslOutput } from "../wsl/wslExe";
-import { buildPiProxyEnvPatch } from "../sessions/sessionProxyPolicy";
+import { buildPiProxyEnvPatch, PIDECK_PI_PROXY_SCOPE } from "../sessions/sessionProxyPolicy";
 
 /**
  * 进程级 WSL pi 探测缓存。
@@ -301,6 +301,8 @@ export class PiLocator {
 	 */
 	sanitizePiChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 		const next: NodeJS.ProcessEnv = { ...env };
+		// 该标记只能由本次 PiDeck 代理 patch 重新写入，不能从宿主环境或用户 shell 继承。
+		delete next[PIDECK_PI_PROXY_SCOPE];
 
 		for (const key of Object.keys(next)) {
 			if (key.startsWith("ELECTRON_") || key === "ELECTRON_RUN_AS_NODE") {

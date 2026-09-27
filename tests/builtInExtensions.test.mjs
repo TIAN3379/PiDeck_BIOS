@@ -59,6 +59,21 @@ test("listActiveBuiltInExtensionPaths respects removedBuiltIn and missing files"
 	}
 });
 
+test("internal shell proxy adapter is always injected even if user-facing built-ins are removed", () => {
+	const { listActiveBuiltInExtensionPaths, INTERNAL_BUILT_IN_EXTENSIONS } = loadBuiltInExtensionsModule();
+	const root = mkdtempSync(join(tmpdir(), "pideck-internal-ext-"));
+	const extDir = join(root, "resources", "extensions");
+	mkdirSync(extDir, { recursive: true });
+	writeFileSync(join(extDir, "pi-deck-shell-proxy.ts"), "// shell proxy\n", "utf8");
+	try {
+		const paths = listActiveBuiltInExtensionPaths({ appPath: root, resourcesPath: root, isDev: true }, [...INTERNAL_BUILT_IN_EXTENSIONS]);
+		assert.equal(paths.length, 1);
+		assert.ok(String(paths[0]).endsWith("pi-deck-shell-proxy.ts"));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("built-in extension removal has a registered IPC handler", () => {
 	const storeIpc = readFileSync("src/main/ipc/storeIpc.ts", "utf8");
 	const extensionsTab = readFileSync("src/renderer/src/config/ExtensionsTab.tsx", "utf8");
