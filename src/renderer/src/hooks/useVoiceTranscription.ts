@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAtomValue, useStore } from "jotai";
-import { VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES, type VoiceTranscriptionCloudProvider } from "../../../shared/voiceTranscriptionConfig";
-import type { VoiceTranscriptionErrorCode, VoiceTranscriptionPublicConfig } from "../../../shared/types/voiceTranscription";
+import { VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES, resolveVolcProtocol, type VoiceTranscriptionCloudProvider } from "../../../shared/voiceTranscriptionConfig";
+import type { VoiceTranscriptionErrorCode, VoiceTranscriptionPublicConfig, VoiceTranscriptionStreamPartial } from "../../../shared/types/voiceTranscription";
 import { currentSessionIdAtom, voiceConfigRevisionAtom } from "../atoms";
 import { desktopApi } from "../desktopApi";
 import { t } from "../i18n";
@@ -11,6 +11,8 @@ import { GUIDE_BOOTSTRAP_SESSION_ID } from "../utils/chatSessionBootstrap";
 import { ownsQuickMessageShortcut } from "../utils/quickMessageShortcut";
 import { encodeRecordingToWav, encodeWavPcm, VOICE_WAV_SAMPLE_RATE } from "../utils/voiceWavEncoder";
 import { createVoicePcmProcessorModuleUrl } from "../utils/voicePcmProcessor";
+import { startVoiceStreamCapture } from "../utils/voiceStreamCapture";
+import { VoiceStreamSession } from "../utils/voiceStreamSession";
 import type { VoiceTranscriptionTarget } from "../utils/voiceTranscriptionInsert";
 import { canCancelVoiceRecording, canStartVoiceRecording, hasSpeakableAudio, isVoiceTranscriptionConfigured, releaseVoiceRecordingResources, resolveVoiceStartBlockedReason, segmentHasSpeakableAudio, shouldRequestVoiceMicrophone, type VoiceTranscriptionState } from "../utils/voiceRecorderLifecycle";
 
@@ -41,6 +43,11 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 	const pcmCaptureRef = useRef<PcmCaptureHandle | null>(null);
 	// 电平表：录音动效的唯一数据源，两条引擎共用（本地另有一条 AudioWorklet 切段图）。
 	const levelMeterRef = useRef<VoiceLevelMeter | null>(null);
+	// 流式通路（豆包流式 2.0）：一次录音一条会话，帧边录边推，文本整段替换。
+	const streamSessionRef = useRef<VoiceStreamSession | null>(null);
+	const streamCaptureRef = useRef<Awaited<ReturnType<typeof startVoiceStreamCapture>> | null>(null);
+	// 本次录音走不走流式，在拿到配置那一刻定死，不受中途改设置影响（与 engineRef 同理）。
+	const streamModeRef = useRef(false);
 	const transcriptionTailRef = useRef<Promise<void>>(Promise.resolve());
 	// insertionCaretRef：本次录音从哪个光标位开始插入；每段插入成功后向前推进，
 	// 保证多段结果按顺序拼接，而不会互相覆盖用户后来打的字（仍走 applyText 的 stale 保护）。
@@ -84,6 +91,9 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 		levelMeterRef.current = null;
 		pcmCaptureRef.current?.stop();
 		pcmCaptureRef.current = null;
+		// 流式通路：先停采集（不再产生帧），会话本身交给 cancel()/stop() 的收尾路径处理。
+		streamCaptureRef.current?.stop();
+		streamCaptureRef.current = null;
 		workletRef.current?.port.close();
 		workletRef.current?.disconnect();
 		audioSourceRef.current?.disconnect();
@@ -99,12 +109,15 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 		insertionCaretRef.current = null;
 	}, []);
 
-	/** 中止所有进行中的分段转写请求（停止后整段取消 / 组件卸载 / 新一次录音前）。 */
+	/** 中止所有进行中的转写（分段请求、流式会话；停止后整段取消 / 组件卸载 / 新一次录音前）。 */
 	const cancelInFlight = useCallback(() => {
 		for (const requestId of inFlightSegmentsRef.current.values()) {
 			void desktopApi.voiceTranscription.cancel(requestId).catch(() => undefined);
 		}
 		inFlightSegmentsRef.current.clear();
+		// 流式会话的取消只在主进程侧丢结果：已上屏的文本不回滚，与整段通路的语义一致。
+		streamSessionRef.current?.cancel();
+		streamSessionRef.current = null;
 		// 丢弃尚未跑完的分段链，防止链上排队段在取消后继续插入。
 		segmentChainRef.current = Promise.resolve();
 		transcriptionTailRef.current = Promise.resolve();
@@ -248,6 +261,8 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 			// 记住引擎：停止转写时不再回读配置，保证本次录音始终使用同一引擎。
 			engineRef.current = config.engine;
 			cloudProviderRef.current = config.cloudProvider;
+			// 同理固定本次走不走流式：设置页中途换资源 ID 不该让一段录音半截改道。
+			streamModeRef.current = config.engine === "cloud" && config.cloudProvider === "volcengine" && resolveVolcProtocol(config.cloudResourceId) === "stream";
 			deviceId = config.inputDeviceId;
 		} catch {
 			if (!mountedRef.current || operationRef.current !== operation) return;
@@ -316,6 +331,52 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 				return;
 			}
 
+			if (streamModeRef.current) {
+				// 流式通路：一路会话对应一次录音，帧边录边推，文本整段替换（见 VoiceStreamSession）。
+				const session = new VoiceStreamSession({
+					captureTarget: () => captureTargetRef.current(),
+					applyText: (target, text) => applyTextRef.current(target, text),
+					onStale: () => {
+						if (!mountedRef.current || operationRef.current !== operation) return;
+						releaseMedia();
+						updateState("idle");
+						showNotice(t("voice.error.staleTarget"), 4000);
+					},
+					onError: (error) => {
+						if (!mountedRef.current || operationRef.current !== operation) return;
+						releaseMedia();
+						updateState("idle");
+						showNotice(voiceErrorMessage(error), 4000);
+					},
+				});
+				streamSessionRef.current = session;
+				// 先开流再采集：服务端在 init 包之前收到音频会直接判协议错误，顺序反了整次录音就废了。
+				if (!(await session.begin())) return;
+				if (!mountedRef.current || operationRef.current !== operation) {
+					session.cancel();
+					return;
+				}
+				const capture = await startVoiceStreamCapture(stream, {
+					onFrame: (pcm) => session.push(pcm),
+					onFlushed: () => {
+						// 尾巴帧推完才收尾：finish 拿的是服务端终值（含最后一次标点修正）。
+						void session.finish().then(() => {
+							if (!mountedRef.current || operationRef.current !== operation) return;
+							releaseMedia();
+							updateState("idle");
+						});
+					},
+				});
+				streamCaptureRef.current = capture;
+				if (!mountedRef.current || operationRef.current !== operation) {
+					session.cancel();
+					capture.stop();
+					return;
+				}
+				updateState("recording");
+				return;
+			}
+
 			if (typeof MediaRecorder === "undefined") throw new Error("MediaRecorder unavailable");
 			const mimeType = MIME_CANDIDATES.find((candidate) => MediaRecorder.isTypeSupported(candidate));
 			const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -363,6 +424,11 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 			workletRef.current?.port.postMessage("flush");
 			return;
 		}
+		// 流式：让 worklet 吐出不足一帧的尾巴，收到 flushed 后 session.finish() 自然收尾上屏。
+		if (streamModeRef.current) {
+			streamCaptureRef.current?.requestFlush();
+			return;
+		}
 		const recorder = recorderRef.current;
 		if (!recorder || recorder.state !== "recording") return;
 		recorder.stop();
@@ -392,6 +458,14 @@ export function useVoiceTranscription(input: { scopeKey: string; captureTarget: 
 			toggle();
 		});
 	}, [scopeKey, store, toggle]);
+
+	// 流式中间结果是主进程的单向下行，按 requestId 落到当前会话；不是自己的（上一段录音迟到的帧）
+	// 由 VoiceStreamSession 丢弃。多个输入框同时挂载时每个都订，也只有持有会话的那个会命中。
+	useEffect(() => {
+		return desktopApi.voiceTranscription.onStreamPartial((partial: VoiceTranscriptionStreamPartial) => {
+			streamSessionRef.current?.handlePartial(partial);
+		});
+	}, []);
 
 	useEffect(() => {
 		mountedRef.current = true;

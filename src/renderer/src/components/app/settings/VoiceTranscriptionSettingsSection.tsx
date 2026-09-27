@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSetAtom } from "jotai";
-import { DEFAULT_VOICE_TRANSCRIPTION_CONFIG, VOLC_ENGINE_DEFAULT_RESOURCE_ID, VOLC_SUPPORTED_RESOURCE_IDS } from "../../../../../shared/voiceTranscriptionConfig";
+import { DEFAULT_VOICE_TRANSCRIPTION_CONFIG, VOLC_SUPPORTED_RESOURCE_IDS } from "../../../../../shared/voiceTranscriptionConfig";
 import { formatBytes } from "../../../../../shared/formatBytes";
 import type { VoiceTranscriptionPublicConfig, VoiceTranscriptionTestResult } from "../../../../../shared/types/voiceTranscription";
 import { getWhisperModelDef, WHISPER_MODEL_CATALOG, type WhisperInstallProgress, type WhisperRuntimeStatus } from "../../../../../shared/types/whisperRuntime";
@@ -13,12 +13,17 @@ import { Input } from "../../ui-shadcn/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui-shadcn/select";
 import { SettingsSection } from "./SettingsStorageTab";
 import { SettingRow, SettingSwitchRow } from "./SettingRows";
+import { SecretFieldInput } from "./VoiceSecretFieldInput";
+import { installErrorCopy, testCopy, VOLC_RESOURCE_ID_LABELS } from "./voiceSettingsCopy";
 
 const DEFAULT_CONFIG: VoiceTranscriptionPublicConfig = {
 	...DEFAULT_VOICE_TRANSCRIPTION_CONFIG,
 	hasApiKey: false,
 	hasVolcAppId: false,
 	hasVolcAccessToken: false,
+	apiKeyHint: null,
+	volcAppIdHint: null,
+	volcAccessTokenHint: null,
 	runtimeReady: false,
 };
 
@@ -33,41 +38,11 @@ const DEFAULT_RUNTIME_STATUS: WhisperRuntimeStatus = {
 
 type RecordingDevice = { deviceId: string; label: string };
 
-/**
- * 资源 ID → 展示名。清单来自 shared（只有客户端真正实现了的协议才出现在这里），
- * 设置页因此不再给自由文本：填错一个字符就是服务端 45000001「参数无效」，用户完全无从下手。
- */
-const VOLC_RESOURCE_ID_LABELS: Record<(typeof VOLC_SUPPORTED_RESOURCE_IDS)[number], "voice.settings.cloudResourceIdTurbo"> = {
-	[VOLC_ENGINE_DEFAULT_RESOURCE_ID]: "voice.settings.cloudResourceIdTurbo",
-};
-
 /** 三个密钥输入框的名字：与主进程 saveConfig 的密钥字段同名，提交即清空对应草稿。 */
 type SecretField = "apiKey" | "volcAppId" | "volcAccessToken";
 
 /** 自动保存防抖：够短，用户感觉是「立刻存了」；够长，一次下拉/连续输入只写一次盘。 */
 const AUTO_SAVE_DELAY_MS = 400;
-
-/**
- * 安装失败码的展示文案：中止 / 并发这类已知码走 i18n，未知码原样带出
- * （size-mismatch、sha256-mismatch 这类信息对定位镜像问题是线索，不要翻译成空泛提示）。
- */
-function installErrorCopy(error?: string): string {
-	if (error === "cancelled") return t("voice.settings.error.cancelled");
-	if (error === "already-installing") return t("voice.settings.error.alreadyInstalling");
-	return error || t("voice.settings.error.installFailed");
-}
-
-/** 检测结果的文案：错误码复用录音失败那套话术，豆包的业务码追加在后面。 */
-function testCopy(result: VoiceTranscriptionTestResult | null): string {
-	if (!result) return t("voice.settings.test.unexpected");
-	if (result.ok) return t("voice.settings.test.ok");
-	const base = t(`voice.error.${result.error}`);
-	const statusCode = result.detail?.statusCode;
-	if (!statusCode) return base;
-	// 「未开通极速版 / 额度用尽」官方没有专用码，只会落到 http 或参数无效，故补一句排查方向。
-	const hint = result.error === "http" || result.error === "invalidRequest" ? ` ${t("voice.settings.test.volcHint")}` : "";
-	return `${base}（${statusCode}）${hint}`;
-}
 
 /** 下载中止入口：只在有安装任务在跑时出现（主进程 abortInstall 中止当前那一个）。 */
 function InstallCancelButton() {
@@ -453,27 +428,27 @@ export function VoiceTranscriptionSettingsSection() {
 							{isVolc ? (
 								<>
 									<SettingRow title={t("voice.settings.volcAppId")} description={t("voice.settings.volcAppIdDescription")} alignEnd={false} stacked>
-										<Input
-											type="password"
+										<SecretFieldInput
 											value={volcAppId}
 											disabled={busy}
-											placeholder={config.hasVolcAppId ? t("voice.settings.apiKeyConfigured") : t("voice.settings.apiKeyMissing")}
-											autoComplete="off"
-											onChange={(event) => setVolcAppId(event.target.value)}
+											field="volcAppId"
+											configured={config.hasVolcAppId}
+											hint={config.volcAppIdHint}
 											// 密钥不跟着每次按键落盘（半截 key 写进配置更难排查），失焦才提交。
+											onChange={setVolcAppId}
 											onBlur={() => {
 												if (volcAppId.trim()) void persist(configRef.current, { volcAppId });
 											}}
 										/>
 									</SettingRow>
 									<SettingRow title={t("voice.settings.volcAccessToken")} description={t("voice.settings.volcAccessTokenDescription")} alignEnd={false} stacked>
-										<Input
-											type="password"
+										<SecretFieldInput
 											value={volcAccessToken}
 											disabled={busy}
-											placeholder={config.hasVolcAccessToken ? t("voice.settings.apiKeyConfigured") : t("voice.settings.apiKeyMissing")}
-											autoComplete="off"
-											onChange={(event) => setVolcAccessToken(event.target.value)}
+											field="volcAccessToken"
+											configured={config.hasVolcAccessToken}
+											hint={config.volcAccessTokenHint}
+											onChange={setVolcAccessToken}
 											onBlur={() => {
 												if (volcAccessToken.trim()) void persist(configRef.current, { volcAccessToken });
 											}}
@@ -500,13 +475,13 @@ export function VoiceTranscriptionSettingsSection() {
 										<Input value={config.baseUrl} disabled={busy} onChange={(event) => patch({ baseUrl: event.target.value })} />
 									</SettingRow>
 									<SettingRow title={t("voice.settings.apiKey")} description={t("voice.settings.apiKeyAutoSaveHint")} alignEnd={false} stacked>
-										<Input
-											type="password"
+										<SecretFieldInput
 											value={apiKey}
 											disabled={busy}
-											placeholder={config.hasApiKey ? t("voice.settings.apiKeyConfigured") : t("voice.settings.apiKeyMissing")}
-											autoComplete="off"
-											onChange={(event) => setApiKey(event.target.value)}
+											field="apiKey"
+											configured={config.hasApiKey}
+											hint={config.apiKeyHint}
+											onChange={setApiKey}
 											onBlur={() => {
 												if (apiKey.trim()) void persist(configRef.current, { apiKey });
 											}}

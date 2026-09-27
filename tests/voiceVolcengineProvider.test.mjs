@@ -6,11 +6,12 @@ import test from "node:test";
 import { createTsSandbox } from "./helpers/createTsSandbox.mjs";
 
 /**
- * 云端第二家服务商：火山引擎「豆包录音文件识别极速版」。
+ * 云端第二家服务商：火山引擎「豆包语音」，两条通路都在这里。
  *
- * 契约要点（官方文档，非推测）：端点固定、鉴权全在 X-Api-* 请求头、音频以 base64 直传
- * （不接受本地文件以外的容器，也不走公网 URL 轮询那条标准版路径）、**业务状态码在响应头**
- * 而不是 HTTP 状态码里。这几条每条都曾被「顺手写成 OpenAI 兼容那套」破坏过，所以逐条钉住。
+ * 契约要点（官方文档 + 2026-09-27 真机探测，非推测）：端点固定、鉴权全在 X-Api-* 请求头、
+ * 音频以 base64 直传（极速版不接受本地文件以外的容器，也不走公网 URL 轮询那条标准版路径）、
+ * **业务状态码在响应头**而不是 HTTP 状态码里；流式 2.0 则是 WebSocket + 自定义二进制帧，
+ * 上行 16bit 裸 PCM。这几条每条都曾被「顺手写成 OpenAI 兼容那套」破坏过，所以逐条钉住。
  */
 const load = createTsSandbox({ globals: { Blob, FormData, Response, fetch, URL } });
 const shared = load("src/shared/voiceTranscriptionConfig.ts");
@@ -19,6 +20,8 @@ const { transcribeWithVolcengine } = load("src/main/voice/VolcengineSpeechClient
 const { VoiceTranscriptionService } = load("src/main/voice/VoiceTranscriptionService.ts");
 
 const FLASH_ENDPOINT = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
+/** 清单首位即默认资源（流式 2.0），测试用它而不是写死字符串，免得改名时测试悄悄失真。 */
+const DEFAULT_RESOURCE_ID = shared.VOLC_SUPPORTED_RESOURCE_IDS[0];
 
 function newSignal() {
 	return new AbortController().signal;
@@ -26,22 +29,25 @@ function newSignal() {
 
 /** 豆包路径的公共入参：音频恒为 WAV 字节。 */
 function volcInput(overrides = {}) {
-	return { audio: new Uint8Array([1, 2, 3, 4]).buffer, appId: "app-1", accessToken: "tok-1", resourceId: shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID, language: "zh", signal: newSignal(), ...overrides };
+	return { audio: new Uint8Array([1, 2, 3, 4]).buffer, appId: "app-1", accessToken: "tok-1", resourceId: shared.VOLC_FLASH_RESOURCE_ID, language: "zh", signal: newSignal(), ...overrides };
 }
 
 test("服务商为豆包时不要求 baseUrl/model，资源 ID 只认客户端已实现的那一个", () => {
 	const volc = shared.sanitizeVoiceTranscriptionConfig({ engine: "cloud", cloudProvider: "volcengine", baseUrl: "", model: "" });
 	assert.equal(volc.cloudProvider, "volcengine");
 	assert.equal(volc.baseUrl, "", "豆包没有自建端点概念，清空不该判为非法配置");
-	assert.equal(volc.cloudResourceId, shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID, "留空回落默认资源 ID");
-	// 资源 ID 直接进请求头：脏值（空格/换行这类注入尝试）与客户端没实现的协议一律整体作废并回落默认，
+	assert.equal(volc.cloudResourceId, DEFAULT_RESOURCE_ID, "留空回落首位（流式）资源 ID");
+	assert.equal(shared.resolveVolcProtocol(DEFAULT_RESOURCE_ID), "stream", "默认必须是流式 2.0，设置页首选项与运行时通路不能各说各话");
+	// 资源 ID 直接进请求头：脏值（空格/换行这类注入尝试）与客户端没实现的协议一律整体作废并回落首位，
 	// 而不是只裁空白——判据是「在不在已实现清单里」，所以只收公网 URL 的标准版协议也不会被误发。
 	// 这里是「回落」而不是「判非法」：读盘路径上 sanitize 失败会清空整个配置，
 	// 一个来自未来版本的资源 ID 不该让用户丢掉全部语音设置。
 	for (const dirty of ["ok id", "x\nX-Api-Sequence: 0", "volc.bigasr.auc", "volc.bigasr.auc_turbo;"]) {
-		assert.equal(shared.sanitizeVoiceTranscriptionConfig({ engine: "cloud", cloudProvider: "volcengine", cloudResourceId: dirty }).cloudResourceId, shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID, dirty);
+		assert.equal(shared.sanitizeVoiceTranscriptionConfig({ engine: "cloud", cloudProvider: "volcengine", cloudResourceId: dirty }).cloudResourceId, DEFAULT_RESOURCE_ID, dirty);
 	}
-	assert.deepEqual([...shared.VOLC_SUPPORTED_RESOURCE_IDS], [shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID]);
+	assert.equal(shared.sanitizeVoiceTranscriptionConfig({ engine: "cloud", cloudProvider: "volcengine", cloudResourceId: shared.VOLC_FLASH_RESOURCE_ID }).cloudResourceId, shared.VOLC_FLASH_RESOURCE_ID, "极速版仍在清单内，留在下拉备选");
+	assert.equal(shared.resolveVolcProtocol(shared.VOLC_FLASH_RESOURCE_ID), "flash");
+	assert.deepEqual([...shared.VOLC_SUPPORTED_RESOURCE_IDS], [shared.VOLC_STREAM_RESOURCE_ID, shared.VOLC_FLASH_RESOURCE_ID]);
 	// OpenAI 兼容那侧的必填项不受影响。
 	assert.equal(shared.sanitizeVoiceTranscriptionConfig({ engine: "cloud", cloudProvider: "openai", baseUrl: "", model: "" }), null);
 });
@@ -87,13 +93,26 @@ test("三家密钥各占一槽：切换服务商不覆盖另一家，清除只�
 		assert.equal(volcCredentials.provider, "volcengine");
 		assert.equal(volcCredentials.appId, "app-1");
 		assert.equal(volcCredentials.accessToken, "tok-1");
-		assert.equal(volcCredentials.resourceId, shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID);
+		assert.equal(volcCredentials.resourceId, DEFAULT_RESOURCE_ID, "未写资源 ID 的配置应回落到清单首位（流式）");
+
+		// 摘要 + 按需明文：设置页要靠这两件事回答「我到底存了什么」，否则看不见就只能靠检测猜。
+		const long = await store.saveConfig({ ...base, cloudProvider: "volcengine", volcAppId: "app-9122285961", volcAccessToken: "token-abcdefghij" });
+		assert.equal(long.config.volcAppIdHint.tail, "5961");
+		assert.equal(long.config.volcAppIdHint.length, 14);
+		assert.equal(long.config.volcAccessTokenHint.tail, "ghij", "长值只露末 4 位，够认出有没有被截断");
+		// 短值只露一半，避免「4 位的密钥」被整格还原。
+		assert.equal(long.config.apiKeyHint.tail, "-a", "另一家的槽位也要能摘要，切换服务商时才看得出没丢");
+		assert.equal(long.config.apiKeyHint.length, 4);
+		assert.equal(await store.revealSecret("volcAccessToken"), "token-abcdefghij");
+		assert.equal(await store.revealSecret("apiKey"), "sk-a");
 
 		// 清除：同批带来的新密钥必须输，否则「点清除时输入框里还有半截字」会把密钥又写回去。
 		const cleared = await store.saveConfig({ ...base, cloudProvider: "volcengine", clearApiKey: true, volcAppId: "must-not-win" });
 		assert.equal(cleared.config.hasVolcAppId, false);
 		assert.equal(cleared.config.hasVolcAccessToken, false);
 		assert.equal(cleared.config.hasApiKey, true, "清除只针对豆包");
+		assert.equal(cleared.config.volcAppIdHint, null, "清除后摘要也得消失，否则设置页还显示着一串旧尾号");
+		assert.equal(await store.revealSecret("volcAppId"), null);
 
 		const back = await store.saveConfig({ ...base });
 		assert.equal(back.config.hasApiKey, true);
@@ -128,7 +147,7 @@ test("豆包请求按极速版契约发出：X-Api-* 头 + base64 WAV + 标点/�
 	assert.equal(captured.init.method, "POST");
 	assert.equal(captured.init.headers["X-Api-App-Key"], "app-1");
 	assert.equal(captured.init.headers["X-Api-Access-Key"], "tok-1");
-	assert.equal(captured.init.headers["X-Api-Resource-Id"], shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID);
+	assert.equal(captured.init.headers["X-Api-Resource-Id"], shared.VOLC_FLASH_RESOURCE_ID);
 	assert.equal(captured.init.headers["X-Api-Sequence"], "-1", "极速版单次请求必须是 -1，否则服务端按流式分帧等后续包");
 	assert.match(captured.init.headers["X-Api-Request-Id"], /^[0-9a-f-]{36}$/);
 	const payload = JSON.parse(captured.init.body);
@@ -197,6 +216,26 @@ test("业务码在响应头里：静音/参数错/服务端忙各自映射，且
 	assert.equal(successButNoText.error, "empty");
 });
 
+test("401/403 也按业务码分类：资源没开通不能说成「Key 无效」", async () => {
+	// 2026-09-26 真机实测的两种失败，HTTP 状态同类、语义完全不同：
+	// 403 + 45000030 `requested resource not granted` = 应用没勾选极速版；
+	// 401 + 45000010 `request and grant appid mismatch` = App ID 与 Access Token 不配对。
+	// 只按状态码分类会把前者误报成凭据错误，用户于是反复改密钥，而该做的开通没人提示。
+	for (const [status, code, message, expected] of [
+		[403, "45000030", "[resource_id=volc.bigasr.auc_turbo] requested resource not granted", "notGranted"],
+		[401, "45000010", "request and grant appid mismatch", "invalidKey"],
+	]) {
+		const result = await transcribeWithVolcengine({ fetchImpl: async () => new Response("", { status, headers: { "X-Api-Status-Code": code, "X-Api-Message": message } }), log: () => undefined }, volcInput());
+		assert.equal(result.ok, false);
+		assert.equal(result.error, expected, `${code} 应分类为 ${expected}`);
+		assert.equal(result.detail.message, message, "服务端原文要透出：它比自造文案更具体");
+	}
+	// 响应头是外部数据，超长内容不得原样流进 UI 与日志。
+	const huge = await transcribeWithVolcengine({ fetchImpl: async () => new Response("", { status: 403, headers: { "X-Api-Status-Code": "45000099", "X-Api-Message": "x".repeat(5000) } }), log: () => undefined }, volcInput());
+	assert.equal(huge.error, "invalidKey", "码不在清单里时退回按状态码分类");
+	assert.ok(huge.detail.message.length <= 200, `原文需限行，实际 ${huge.detail.message.length}`);
+});
+
 test("服务层按服务商分派：豆包走 JSON+WAV，非 WAV 录音在本地就拒", async () => {
 	const config = {
 		enabled: true,
@@ -208,12 +247,12 @@ test("服务层按服务商分派：豆包走 JSON+WAV，非 WAV 录音在本地
 		inputDeviceId: "",
 		localModelId: "small-q5_1",
 		cliPath: "",
-		cloudResourceId: shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID,
+		cloudResourceId: shared.VOLC_FLASH_RESOURCE_ID,
 		hasApiKey: false,
 		hasVolcAppId: true,
 		runtimeReady: true,
 	};
-	const credentials = { provider: "volcengine", appId: "app-1", accessToken: "tok-1", resourceId: shared.VOLC_ENGINE_DEFAULT_RESOURCE_ID, language: "zh" };
+	const credentials = { provider: "volcengine", appId: "app-1", accessToken: "tok-1", resourceId: shared.VOLC_FLASH_RESOURCE_ID, language: "zh" };
 	let calls = 0;
 	const service = new VoiceTranscriptionService({
 		getPublicConfig: async () => config,

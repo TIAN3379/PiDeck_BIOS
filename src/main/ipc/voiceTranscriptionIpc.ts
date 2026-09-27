@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { ipcChannels } from "../../shared/ipc";
 import { getWhisperModelDef, type WhisperInstallProgress, type WhisperModelId } from "../../shared/types/whisperRuntime";
+import type { VoiceTranscriptionSecretField } from "../../shared/types/voiceTranscription";
 import type { VoiceTranscriptionConfigStore } from "../voice/VoiceTranscriptionConfigStore";
 import type { VoiceTranscriptionService } from "../voice/VoiceTranscriptionService";
 import type { WhisperRuntimeManager } from "../voice/WhisperRuntimeManager";
@@ -33,8 +34,27 @@ export function registerVoiceTranscriptionIpc(deps: {
 	ipcMain.handle(ipcChannels.voiceTranscriptionCancel, (_event, requestId: unknown) => {
 		if (isRequestId(requestId)) deps.service.cancel(requestId);
 	});
+
+	// ===== 流式识别（豆包流式 2.0）=====
+	ipcMain.handle(ipcChannels.voiceTranscriptionStreamStart, (_event, input: unknown) => {
+		if (!isRecord(input)) return { ok: false, error: "invalidRequest" } as const;
+		const requestId = input.requestId;
+		const sampleRate = input.sampleRate;
+		if (!isRequestId(requestId) || typeof sampleRate !== "number" || !Number.isInteger(sampleRate)) return { ok: false, error: "invalidRequest" } as const;
+		return deps.service.startStream({ requestId, sampleRate });
+	});
+	// 音频帧是单向流水：用 on 而不是 handle，省掉每帧一次 promise 往返。
+	ipcMain.on(ipcChannels.voiceTranscriptionStreamFrame, (_event, input: unknown) => {
+		if (!isRecord(input)) return;
+		const requestId = input.requestId;
+		const pcm = input.pcm;
+		if (isRequestId(requestId) && pcm instanceof ArrayBuffer) deps.service.pushStreamFrame({ requestId, pcm });
+	});
+	ipcMain.handle(ipcChannels.voiceTranscriptionStreamFinish, (_event, requestId: unknown) => (isRequestId(requestId) ? deps.service.finishStream(requestId) : Promise.resolve({ ok: false, error: "invalidRequest" } as const)));
 	// 检测连通性：无入参（配置以磁盘上的为准），探针音频由主进程自带，渲染层拿不到密钥。
 	ipcMain.handle(ipcChannels.voiceTranscriptionTest, () => deps.service.testConnection());
+	// 设置页点「显示」时按需取回某一格明文：入参只认三个字段名，其余一律 null。
+	ipcMain.handle(ipcChannels.voiceTranscriptionRevealSecret, (_event, field: unknown) => (isSecretField(field) ? deps.configStore.revealSecret(field) : Promise.resolve(null)));
 
 	ipcMain.handle(ipcChannels.voiceTranscriptionRuntimeStatus, async () => {
 		const config = await deps.configStore.getPublicConfig();
@@ -66,4 +86,9 @@ function isRecord(input: unknown): input is Record<string, unknown> {
 
 function isRequestId(input: unknown): input is string {
 	return typeof input === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(input);
+}
+
+/** 渲染层来的字段名一律不可信：只有这三格可以要求主进程解密。 */
+function isSecretField(input: unknown): input is VoiceTranscriptionSecretField {
+	return input === "apiKey" || input === "volcAppId" || input === "volcAccessToken";
 }

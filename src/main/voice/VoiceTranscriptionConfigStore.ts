@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DEFAULT_VOICE_TRANSCRIPTION_CONFIG, sanitizeVoiceTranscriptionApiKey, sanitizeVoiceTranscriptionConfig, type VoiceTranscriptionCloudProvider, type SanitizedVoiceTranscriptionConfig } from "../../shared/voiceTranscriptionConfig";
-import type { VoiceTranscriptionPublicConfig, VoiceTranscriptionSaveResult, VoiceTranscriptionSecretField } from "../../shared/types/voiceTranscription";
+import type { VoiceTranscriptionPublicConfig, VoiceTranscriptionSaveResult, VoiceTranscriptionSecretField, VoiceTranscriptionSecretHint } from "../../shared/types/voiceTranscription";
 
 const MAX_PROTECTED_SECRET_LENGTH = 8192;
 
@@ -105,6 +105,17 @@ export class VoiceTranscriptionConfigStore {
 		return apiKey ? { provider: "openai", baseUrl: config.baseUrl, model: config.model, language: config.language, apiKey } : null;
 	}
 
+	/**
+	 * 设置页「显示」按需取回某一格的明文：只在这里出主进程，不写日志、不进错误对象。
+	 * 刻意允许取回「不是当前服务商」的那一格——用户会在两家之间来回核对，藏起来反而看不清状态。
+	 */
+	async revealSecret(field: VoiceTranscriptionSecretField): Promise<string | null> {
+		if (!this.deps.isEncryptionAvailable()) return null;
+		const slot = SECRET_SLOTS.find((entry) => entry.field === field)?.slot;
+		if (!slot) return null;
+		return this.unprotectSecret((await this.readPersisted())[slot]);
+	}
+
 	/** 解密一个槽；密文缺失或被外部改动导致 unprotect 失败时返回 null（调用方按未配置处理）。 */
 	private unprotectSecret(protectedSecret: string | undefined): string | null {
 		if (!protectedSecret) return null;
@@ -159,8 +170,19 @@ export class VoiceTranscriptionConfigStore {
 			hasApiKey: Boolean(config.protectedApiKey),
 			hasVolcAppId: Boolean(config.protectedVolcAppId),
 			hasVolcAccessToken: Boolean(config.protectedVolcAccessToken),
+			// 「留空则保留」的输入框看不见存了什么，摘要（末几位 + 总长）由主进程算好带给设置页自查。
+			apiKeyHint: this.secretHint(config.protectedApiKey),
+			volcAppIdHint: this.secretHint(config.protectedVolcAppId),
+			volcAccessTokenHint: this.secretHint(config.protectedVolcAccessToken),
 			runtimeReady,
 		};
+	}
+
+	/** 核对摘要：最多露出末 4 位与原长度，够认出「填反了 / 被截断」，不足以还原凭据。 */
+	private secretHint(protectedSecret: string | undefined): VoiceTranscriptionSecretHint | null {
+		const plain = this.unprotectSecret(protectedSecret);
+		if (!plain) return null;
+		return { tail: plain.slice(-Math.min(4, Math.floor(plain.length / 2))), length: plain.length };
 	}
 
 	/** 云端「能力就绪」按服务商各自的必填项判定，避免用 openai 的 baseUrl/model 去要求豆包。 */

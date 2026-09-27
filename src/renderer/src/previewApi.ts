@@ -1595,7 +1595,7 @@ export function createPreviewApi(): PiDesktopApi {
 			readImageBlob: async () => null,
 		},
 		voiceTranscription: {
-			getConfig: async () => ({ ...DEFAULT_VOICE_TRANSCRIPTION_CONFIG, hasApiKey: false, hasVolcAppId: false, hasVolcAccessToken: false, runtimeReady: false }),
+			getConfig: async () => ({ ...DEFAULT_VOICE_TRANSCRIPTION_CONFIG, hasApiKey: false, hasVolcAppId: false, hasVolcAccessToken: false, apiKeyHint: null, volcAppIdHint: null, volcAccessTokenHint: null, runtimeReady: false }),
 			saveConfig: async (config) => ({
 				ok: true,
 				config: {
@@ -1612,12 +1612,21 @@ export function createPreviewApi(): PiDesktopApi {
 					hasApiKey: false,
 					hasVolcAppId: false,
 					hasVolcAccessToken: false,
+					apiKeyHint: null,
+					volcAppIdHint: null,
+					volcAccessTokenHint: null,
 					runtimeReady: false,
 				},
 			}),
 			transcribe: async () => ({ ok: false, error: "notConfigured" }),
 			test: async () => ({ ok: false, error: "notConfigured" }),
+			revealSecret: async () => null,
 			cancel: async () => {},
+			// 预览环境没有 WebSocket 服务：开流直接回 notConfigured，录音链路会照直落在整段转写的桩上。
+			startStream: async () => ({ ok: false, error: "notConfigured" }),
+			sendStreamFrame: () => {},
+			finishStream: async () => ({ ok: false, error: "notConfigured" }),
+			onStreamPartial: () => () => undefined,
 			runtimeStatus: async () => ({ autoRuntimeSupported: false, cliReady: false, cliSource: "none", cliPath: null, runtimeVersion: null, models: [] }),
 			installRuntime: async () => ({ ok: false, error: "preview stub" }),
 			installModel: async () => ({ ok: false, error: "preview stub" }),

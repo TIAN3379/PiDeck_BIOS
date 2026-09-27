@@ -804,7 +804,18 @@ export const ipcChannels = {
 	voiceTranscriptionTranscribe: "voice-transcription:transcribe",
 	/** 用一小段静音走一遍当前配置的真实链路，把「凭据/权限/额度」问题在设置页就说清楚。 */
 	voiceTranscriptionTest: "voice-transcription:test",
+	/** 设置页点「显示」时按需取回某一格的明文（入参是密钥字段名，不写日志）。 */
+	voiceTranscriptionRevealSecret: "voice-transcription:reveal-secret",
 	voiceTranscriptionCancel: "voice-transcription:cancel",
+	/**
+	 * 流式识别（豆包流式 2.0）三段式：开流 → 逐帧上推 PCM → 收尾拿终值。
+	 * 帧走 send/on 而非 invoke：200ms 一帧的单向数据不值得每条都等一次 IPC 往返。
+	 */
+	voiceTranscriptionStreamStart: "voice-transcription:stream-start",
+	voiceTranscriptionStreamFrame: "voice-transcription:stream-frame",
+	voiceTranscriptionStreamFinish: "voice-transcription:stream-finish",
+	/** 中间结果推送（订阅式，返回退订）；文本是整段累积值，渲染层整段替换。 */
+	voiceTranscriptionStreamPartial: "voice-transcription:stream-partial",
 	/** 本地 whisper 运行时/模型安装状态（主进程 stat + 哈希锁记录）。 */
 	voiceTranscriptionRuntimeStatus: "voice-transcription:runtime-status",
 	/** 按需下载 whisper-cli 二进制归档（不进安装包）。 */

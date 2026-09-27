@@ -12,6 +12,8 @@ import test from "node:test";
  * 「每一项改动都必须经过 patch → 落盘」钉住，而不是靠肉眼检查 JSX。
  */
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/renderer/src/components/app/settings/VoiceTranscriptionSettingsSection.tsx"), "utf8");
+/** 密钥输入框拆到了同级模块，「看一眼不该丢内容」的契约跟着组件走。 */
+const secretFieldSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/renderer/src/components/app/settings/VoiceSecretFieldInput.tsx"), "utf8");
 
 test("patch() 是唯一配置改动入口，并且每次都排一次自动保存", () => {
 	const patchBody = /const patch = \(next: Partial<VoiceTranscriptionPublicConfig>\) => \{[\s\S]{0,240}?\n\t\};/.exec(source);
@@ -67,4 +69,14 @@ test("总开关关闭时不渲染下方配置项，只留开关本身", () => {
 	const actionsIndex = source.indexOf('title={t("voice.settings.actions")}');
 	const elseIndex = source.lastIndexOf(") : null}");
 	assert.ok(actionsIndex > guardIndex && actionsIndex < elseIndex, "配置操作按钮必须落在条件分支内");
+});
+
+test("明文「只看了一眼」不得落盘，切换可见性不得抢输入框焦点", () => {
+	// 回归（用户反馈）：落盘会顺手清空草稿，用户点完眼睛回来发现内容凭空消失。
+	// 所以「取回的明文未被改动」必须直接 return，把这次失焦当成没发生过。
+	assert.match(secretFieldSource, /if \(revealedValue !== null && props\.value === revealedValue\) return;/);
+	// 按钮必须挡住 mousedown 的默认行为，否则 onClick 之前输入框已经 blur 并触发一次落盘。
+	assert.match(secretFieldSource, /onMouseDown=\{\(event\) => event\.preventDefault\(\)\}/);
+	// 明文按需向主进程取，取失败要吞掉：没有可 reveal 的内容时不该弹错。
+	assert.match(secretFieldSource, /revealSecret\(props\.field\)\.catch\(\(\) => null\)/);
 });

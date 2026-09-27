@@ -21,6 +21,8 @@ const WORKLET_PRELUDE = ["const VOICE_MIN_SPEAKING_PEAK = 0.01;", "const VOICE_M
 
 /** 与 `voiceWavEncoder.VOICE_WAV_SAMPLE_RATE` 一致；whisper 训练口径 16kHz。 */
 const VOICE_WORKLET_TARGET_RATE = 16000;
+/** 流式上行单帧的采样数：200ms × 16kHz = 3200 样本 = 6400 字节（16bit），与共享层 VOICE_STREAM_FRAME_BYTES 同口径。 */
+const VOICE_WORKLET_FRAME_SAMPLES = 3200;
 
 /**
  * worklet 侧处理器：接收麦克风单声道块，切段后线性重采样到 16kHz，
@@ -58,7 +60,73 @@ registerProcessor("pideck-voice-processor", PiDeckVoiceProcessor);
 `;
 }
 
+/**
+ * 流式识别（豆包流式 2.0）的采集路径：**定长帧**而不是 VAD 切段。
+ *
+ * 为什么两种模式并存：分段是本地 whisper 的必需（whisper-cli 一次调用只吃一个自包含文件），
+ * 而流式协议本来就是「一条会话 + 连续 PCM」，断句由服务端负责。把流式也切成段，等于让
+ * 每个 VAD 段各开一条 WebSocket —— 首字延迟与请求数翻倍，还拿不到跨句上下文。
+ *
+ * 上行规格官方只吃 16bit 小端裸 PCM（无 WAV 头），所以这里直接把 Float32 量化成 Int16，
+ * 按 3200 样本（200ms）出帧：帧太长首字慢，太短纯属多打请求。
+ */
+function frameProcessorSource(): string {
+	return `
+class PiDeckVoiceFrameProcessor extends AudioWorkletProcessor {
+	constructor() {
+		super();
+		this.pending = new Float32Array(0);
+		this.port.onmessage = (event) => {
+			if (event.data === "flush") this.flush();
+			else if (event.data === "reset") this.pending = new Float32Array(0);
+		};
+	}
+	process(inputs) {
+		const channels = inputs[0];
+		if (!channels || channels.length === 0) return true;
+		this.accumulate(resampleLinear(downMix(channels), sampleRate, ${VOICE_WORKLET_TARGET_RATE}));
+		return true;
+	}
+	/** 攒够一帧就出帧；不足一帧留到下次（麦克风块只有 128 样本，远小于帧长）。 */
+	accumulate(chunk) {
+		if (!chunk.length) return;
+		const merged = new Float32Array(this.pending.length + chunk.length);
+		merged.set(this.pending, 0);
+		merged.set(chunk, this.pending.length);
+		let offset = 0;
+		while (merged.length - offset >= ${VOICE_WORKLET_FRAME_SAMPLES}) {
+			this.postFrame(quantize16(merged.subarray(offset, offset + ${VOICE_WORKLET_FRAME_SAMPLES})));
+			offset += ${VOICE_WORKLET_FRAME_SAMPLES};
+		}
+		this.pending = merged.slice(offset);
+	}
+	/** 停录时把最后不足一帧的尾巴也发出去，否则句尾一个字都识别不到。 */
+	flush() {
+		const tail = this.pending;
+		this.pending = new Float32Array(0);
+		if (tail.length) this.postFrame(quantize16(tail));
+		this.port.postMessage({ type: "flushed" });
+	}
+	postFrame(pcm) {
+		const buffer = pcm.buffer;
+		this.port.postMessage({ type: "frame", pcm: buffer }, [buffer]);
+	}
+}
+registerProcessor("pideck-voice-frame-processor", PiDeckVoiceFrameProcessor);
+`;
+}
+
 const WORKLET_HELPERS = `
+/** Float32 [-1,1] 量化为 16bit PCM：溢出先裁到端点，否则 1.0 会回绕成 -32768。 */
+function quantize16(samples) {
+	const pcm = new Int16Array(samples.length);
+	for (let index = 0; index < samples.length; index += 1) {
+		const value = Math.max(-1, Math.min(1, samples[index] || 0));
+		pcm[index] = Math.round(value * 32767);
+	}
+	return pcm;
+}
+
 /** 多声道下混为单声道；单声道直接拷贝，避免调用方拿到会被 worklet 复用的缓冲。 */
 function downMix(channels) {
 	if (channels.length === 1) return channels[0].slice();
@@ -111,7 +179,7 @@ function segmentationSource(): string {
  * 调用方负责在停止录音时 `URL.revokeObjectURL` 释放。
  */
 export function createVoicePcmProcessorModuleUrl(): string {
-	const parts = [WORKLET_PRELUDE, segmentationSource(), WORKLET_HELPERS, workletProcessorSource()];
+	const parts = [WORKLET_PRELUDE, segmentationSource(), WORKLET_HELPERS, workletProcessorSource(), frameProcessorSource()];
 	const blob = new Blob([parts.join("\n")], { type: "text/javascript" });
 	return URL.createObjectURL(blob);
 }

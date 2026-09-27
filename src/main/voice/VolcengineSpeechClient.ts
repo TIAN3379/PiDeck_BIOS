@@ -1,19 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { normalizeVolcLanguageTag } from "../../shared/voiceTranscriptionConfig";
-import type { VoiceTranscriptionErrorCode, VoiceTranscriptionFailureDetail, VoiceTranscriptionResult } from "../../shared/types/voiceTranscription";
+import type { VoiceTranscriptionResult } from "../../shared/types/voiceTranscription";
 import { readBoundedResponseText } from "./responseText";
+import { boundVolcMessage, classifyVolcFailure, volcFailureDetail, VOLC_CODE_SILENT_AUDIO, VOLC_CODE_SUCCESS } from "./volcErrorCodes";
 
 /**
- * 火山引擎「豆包语音 · 录音文件识别极速版」客户端。
+ * 火山引擎「豆包语音 · 录音文件识别极速版」客户端 —— 流式 2.0 之后的**备选通路**。
  *
- * 为什么选这一条接口而不是同族的另外两条（官方文档 docs/6561/1631584 与 1354868）：
- * - 极速版 `recognize/flash`：**一次请求即返回**，音频走 `audio.data` base64 直传，
- *   与本地录音分段（≤10 秒 WAV、≤100MB）的限制天然吻合；
- * - 标准版 `auc/bigmodel/submit` + `query`：只接受**公网可访问的音频 URL**，
- *   桌面端要把用户语音传去某个对象存储——既多一条外部依赖，也和「音频只在本地短暂存在」
- *   的边界冲突；
- * - 流式版：WebSocket 自定义二进制帧协议，为「边说边出字」设计，而渲染层已经按 VAD
- *   分段并逐段插字，收益不抵复杂度。
+ * 两条豆包通路的分工（设置页的资源 ID 下拉即这两项，流式为默认）：
+ * - 流式 2.0（`VolcengineStreamSession`）：WebSocket 边录边推，边说边出字；
+ * - 极速版 `recognize/flash`（本文件）：**一次请求即返回**，音频走 `audio.data` base64 直传，
+ *   一段录完才出字，作为「不想用长连接」时的显式备选。
+ * 同族的**标准版** `auc/bigmodel/submit` + `query` 不提供：它只接受**公网可访问的音频 URL**，
+ * 桌面端要把用户语音传去某个对象存储——既多一条外部依赖，也和「音频只在本地短暂存在」的边界冲突。
+ *
+ * 极速版是**独立计费的资源**：控制台「开通管理」里没勾选它，即使 App ID / Access Token
+ * 完全正确、同凭据在流式接口上能用，这里也会拿到 403 + 45000030 `requested resource not granted`
+ * （2026-09-26 实测）。所以检测失败必须把这个码原样带给用户，否则看不出是「没开通」还是「填错了」
+ * ——分类表与流式共用 {@link ./volcErrorCodes}，两条通路对同一个码必须说同一句话。
  *
  * 鉴权按控制台版本分两种，官方文档在同一个表里给出：
  * - 旧版控制台：`X-Api-App-Key`(App ID) + `X-Api-Access-Key`(Access Token)，**两者都是必选**，
@@ -23,12 +27,6 @@ import { readBoundedResponseText } from "./responseText";
  * 反过来说，「填了 App ID、留空 Token」对旧版应用必然失败，这正是要靠设置页检测按钮暴露的坑。
  */
 const VOLC_RECOGNIZE_ENDPOINT = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
-/** 业务状态码在**响应头**里（X-Api-Status-Code），HTTP 状态码只表示传输层结果。 */
-const CODE_SUCCESS = "20000000";
-const CODE_SILENT_AUDIO = "20000003";
-const CODE_INVALID_PARAMS = "45000001";
-const CODE_EMPTY_AUDIO = "45000002";
-const CODE_BAD_FORMAT = "45000151";
 /** 转写输出上限：10 分钟语音的正常输出远小于此，超出视为异常响应。 */
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
@@ -53,12 +51,9 @@ export type VolcengineTranscribeInput = {
 
 /**
  * 极速版的业务码只出现在响应头，泛泛的 `http` 无法区分「凭据错」「未开通极速版」「额度用尽」，
- * 所以这里在共享错误形态之上再带一层原始线索，由服务层按需透传（OpenAI 兼容路径不需要）。
+ * 所以失败一律带 `detail`（码 + 服务端文案 + logId），由服务层原样透传给设置页的检测按钮。
  */
-export type VolcengineTranscribeResult = VoiceTranscriptionResult | { ok: false; error: VoiceTranscriptionErrorCode; detail: VoiceTranscriptionFailureDetail };
-
-/** 豆包语音转写：网络与中止交给调用方 catch（与 OpenAI 兼容路径同一套错误语义）。 */
-export async function transcribeWithVolcengine(deps: VolcengineSpeechDeps, input: VolcengineTranscribeInput): Promise<VolcengineTranscribeResult> {
+export async function transcribeWithVolcengine(deps: VolcengineSpeechDeps, input: VolcengineTranscribeInput): Promise<VoiceTranscriptionResult> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 		"X-Api-Resource-Id": input.resourceId,
@@ -99,24 +94,22 @@ export async function transcribeWithVolcengine(deps: VolcengineSpeechDeps, input
 	});
 	const logId = response.headers.get("x-tt-logid") ?? "";
 	const statusCode = response.headers.get("x-api-status-code") ?? "";
-	const apiMessage = response.headers.get("x-api-message") ?? "";
+	const apiMessage = boundVolcMessage(response.headers.get("x-api-message"));
 	// 原始线索始终随错误返回：设置页的检测按钮要按码给差异化文案，工单也要 logId。
-	const detail: VoiceTranscriptionFailureDetail = { statusCode, message: apiMessage, logId };
+	// `X-Api-Status-Code` 才是结果判据，HTTP 状态码只表示传输层结果（没业务码时兜底分类）。
+	const detail = volcFailureDetail(statusCode, apiMessage, logId);
 	if (!response.ok) {
-		const error = response.status === 401 || response.status === 403 ? "invalidKey" : response.status === 404 || response.status === 405 ? "badBaseUrl" : "http";
+		const error = classifyVolcFailure(statusCode, response.status);
 		deps.log("volcengine request rejected", { status: response.status, ...detail, error });
 		return { ok: false, error, detail };
 	}
 	const body = await readBoundedResponseText(response, MAX_RESPONSE_BYTES);
 	if (body === null) return { ok: false, error: "http", detail };
 	// 业务码不是 20000000 时正文里的 result 不可信，只按码映射错误语义。
-	if (statusCode && statusCode !== CODE_SUCCESS) {
+	if (statusCode && statusCode !== VOLC_CODE_SUCCESS) {
 		deps.log("volcengine returned business error", { ...detail });
-		if (statusCode === CODE_SILENT_AUDIO || statusCode === CODE_EMPTY_AUDIO) return { ok: false, error: "empty", detail };
-		if (statusCode === CODE_INVALID_PARAMS || statusCode === CODE_BAD_FORMAT) return { ok: false, error: "invalidRequest", detail };
-		// 「应用未开通极速版 / 免费额度用尽」官方没有给码，只能落到这一支，
-		// 所以文案上要带上「多半是权限或额度」的提示，而不是空泛的一句服务错误。
-		return { ok: false, error: "http", detail };
+		if (statusCode === VOLC_CODE_SILENT_AUDIO) return { ok: false, error: "empty", detail };
+		return { ok: false, error: classifyVolcFailure(statusCode), detail };
 	}
 	const text = parseVolcTranscript(body);
 	if (!text) {

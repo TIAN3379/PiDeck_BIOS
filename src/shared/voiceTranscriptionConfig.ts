@@ -12,17 +12,42 @@ export type VoiceTranscriptionEngine = "cloud" | "local";
 export type VoiceTranscriptionCloudProvider = "openai" | "volcengine";
 
 /**
- * 极速版固定资源 ID（官方文档：X-Api-Resource-Id 为固定值）。
- * 标准版走 submit/query 且只接受公网音频 URL，桌面端本地录音不适用，所以不开放。
+ * 火山豆包语音在桌面端有两条可用协议，靠**资源 ID** 选择（资源 ID 同时决定服务端按哪套报文解析）：
+ * - `volc.bigasr.sauc.duration`：「豆包流式语音识别模型 2.0 · 小时版」，WebSocket 自定义二进制帧，
+ *   边录边推、每帧回一次**整段累积文本**，因此能做到「边说边出字」；
+ * - `volc.bigasr.auc_turbo`：「大模型录音文件识别极速版」，一次 HTTP 请求带整段 base64 音频。
+ *
+ * 两者是**各自独立计费、各自单独开通**的资源：同一对 App ID / Access Token，
+ * 一边开通另一边没开通是常态（实测未开通方回 45000030 `requested resource not granted`）。
+ * 标准版 `auc/bigmodel/submit` 只接受公网音频 URL，本地录音不适用，故不开放。
  */
-export const VOLC_ENGINE_DEFAULT_RESOURCE_ID = "volc.bigasr.auc_turbo";
+export const VOLC_STREAM_RESOURCE_ID = "volc.bigasr.sauc.duration";
+export const VOLC_FLASH_RESOURCE_ID = "volc.bigasr.auc_turbo";
 
 /**
- * 客户端只实现了极速版（单次 HTTP + base64 音频）这一条协议，因此官方在这里也只登记这一个值。
- * 资源 ID 直接决定服务端按哪套协议解析请求，填成标准版的 `volc.bigasr.auc` 只会得到 45000001，
- * 所以设置页把它收成下拉而不是自由文本；将来接入别的资源时往这个清单里加。
+ * 客户端已实现的资源清单，顺序即设置页下拉顺序：**流式 2.0 排在首位作为首选默认**。
+ * 已保存的配置里若写着清单外的值（手改文件、旧版本残留）一律回落到首位，
+ * 因为「回到推荐项」比「保留一个服务端解不了的值」更可诊断。
  */
-export const VOLC_SUPPORTED_RESOURCE_IDS = [VOLC_ENGINE_DEFAULT_RESOURCE_ID] as const;
+export const VOLC_SUPPORTED_RESOURCE_IDS = [VOLC_STREAM_RESOURCE_ID, VOLC_FLASH_RESOURCE_ID] as const;
+
+/** 资源 ID → 该走哪条通路。只认清单内的值，其余按极速版（与历史行为一致）。 */
+export function resolveVolcProtocol(resourceId: string): "stream" | "flash" {
+	return resourceId === VOLC_STREAM_RESOURCE_ID ? "stream" : "flash";
+}
+
+/** 流式 2.0 的固定端点（与资源 ID 一样由官方指定，不开放自定义）。 */
+export const VOLC_STREAM_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel";
+/** 流式上行音频规格：官方只吃 16bit 小端 PCM，采样率与本地引擎、极速版转码保持一致口径。 */
+export const VOICE_STREAM_SAMPLE_RATE = 16000;
+/** 单个 WS 音频帧时长：200ms = 3200 样本 = 6400 字节，兼顾请求数与首字延迟。 */
+export const VOICE_STREAM_FRAME_MS = 200;
+export const VOICE_STREAM_FRAME_BYTES = ((VOICE_STREAM_SAMPLE_RATE * VOICE_STREAM_FRAME_MS) / 1000) * 2;
+/**
+ * 一次流式会话的帧数上限（约 30 分钟）：麦克风忘关时的止损上界，
+ * 超限即收尾并把「会话过长」作为结果返回，而不是无限占用一条 WS。
+ */
+export const VOICE_STREAM_MAX_FRAMES = 9000;
 
 export const DEFAULT_VOICE_TRANSCRIPTION_CONFIG = {
 	enabled: false,
@@ -34,7 +59,7 @@ export const DEFAULT_VOICE_TRANSCRIPTION_CONFIG = {
 	inputDeviceId: "",
 	localModelId: DEFAULT_WHISPER_MODEL_ID,
 	cliPath: "",
-	cloudResourceId: VOLC_ENGINE_DEFAULT_RESOURCE_ID,
+	cloudResourceId: VOLC_STREAM_RESOURCE_ID,
 } as const;
 
 export const VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -70,8 +95,9 @@ export type SanitizedVoiceTranscriptionConfig = {
  * 目录内的模型 id 与合法的自定义路径，不强制 baseUrl/model。
  *
  * cloud=volcengine 是例外：它没有 baseUrl/model 概念（端点与模型名由官方固定），
- * 资源 ID 只接受客户端已实现的那一个，其余（手改配置文件、旧版本残留）一律回落默认值——
- * 让它归零到可用默认，比整次保存被判 invalidConfig 更好排查。凭据是否齐全在运行时按 notConfigured 处理。
+ * 资源 ID 只接受客户端已实现的那两个（流式 2.0 / 极速版），其余（手改配置文件、旧版本残留）
+ * 一律回落清单首位即流式——让它归零到可用默认，比整次保存被判 invalidConfig 更好排查。
+ * 凭据是否齐全在运行时按 notConfigured 处理。
  */
 export function sanitizeVoiceTranscriptionConfig(input: unknown): SanitizedVoiceTranscriptionConfig | null {
 	if (!isRecord(input)) return null;
@@ -84,7 +110,7 @@ export function sanitizeVoiceTranscriptionConfig(input: unknown): SanitizedVoice
 	const inputDeviceId = readBoundedString(Reflect.get(input, "inputDeviceId"), MAX_DEVICE_ID_LENGTH);
 	const cliPath = readBoundedString(Reflect.get(input, "cliPath"), MAX_CLI_PATH_LENGTH);
 	const rawResourceId = readBoundedString(Reflect.get(input, "cloudResourceId"), MAX_RESOURCE_ID_LENGTH);
-	const cloudResourceId = (VOLC_SUPPORTED_RESOURCE_IDS as readonly string[]).includes(rawResourceId) ? rawResourceId : VOLC_ENGINE_DEFAULT_RESOURCE_ID;
+	const cloudResourceId = (VOLC_SUPPORTED_RESOURCE_IDS as readonly string[]).includes(rawResourceId) ? rawResourceId : VOLC_SUPPORTED_RESOURCE_IDS[0];
 	const localModel = getWhisperModelDef(Reflect.get(input, "localModelId"));
 	const localModelId = localModel ? localModel.id : DEFAULT_WHISPER_MODEL_ID;
 	if (engine === "cloud" && cloudProvider === "openai") {

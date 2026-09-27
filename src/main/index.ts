@@ -293,6 +293,7 @@ import { ImageGenConfigStore } from "./imagegen/ImageGenConfigStore";
 import { registerVoiceTranscriptionIpc } from "./ipc/voiceTranscriptionIpc";
 import { VoiceTranscriptionConfigStore } from "./voice/VoiceTranscriptionConfigStore";
 import { VoiceTranscriptionService } from "./voice/VoiceTranscriptionService";
+import { createVolcStreamSocket } from "./voice/volcStreamSocket";
 import { fetchWhisperReleaseDigests, WhisperRuntimeManager } from "./voice/WhisperRuntimeManager";
 import { getWhisperModelDef } from "../shared/types/whisperRuntime";
 import { WhisperTranscriber } from "./voice/WhisperTranscriber";
@@ -2525,6 +2526,11 @@ function registerIpc() {
 			getCredentials: () => voiceTranscriptionConfigStore.getCredentials(),
 			transcribeLocal: (input) => whisperTranscriber.transcribe(input),
 			cancelLocal: (requestId) => whisperTranscriber.cancel(requestId),
+			// 流式 2.0：主进程只负责建连与转发帧，握手/序号/收尾都在 VolcengineStreamSession 里。
+			createStreamSocket: createVolcStreamSocket,
+			emitStreamPartial: (partial) => {
+				if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ipcChannels.voiceTranscriptionStreamPartial, partial);
+			},
 			log: (message, details) => void appLogger.info("voice-transcription", message, details),
 		}),
 		runtimeManager: whisperRuntimeManager,

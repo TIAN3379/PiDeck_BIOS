@@ -19,19 +19,29 @@ function loadWhisperRuntime() {
 
 function loadRegistration() {
 	const handlers = new Map();
+	const listeners = new Map();
 	const ipcChannels = {
 		voiceTranscriptionGetConfig: "voice:get-config",
 		voiceTranscriptionSaveConfig: "voice:save-config",
 		voiceTranscriptionTranscribe: "voice:transcribe",
 		voiceTranscriptionCancel: "voice:cancel",
 		voiceTranscriptionTest: "voice:test",
-		// 安装进度是 webContents.send 推送通道，不走 ipcMain.handle，故不出现在这里。
+		voiceTranscriptionRevealSecret: "voice:reveal-secret",
+		// 流式：开流/收尾走 handle，音频帧走 on（单向流水，不等 promise 往返）。
+		voiceTranscriptionStreamStart: "voice:stream-start",
+		voiceTranscriptionStreamFrame: "voice:stream-frame",
+		voiceTranscriptionStreamFinish: "voice:stream-finish",
+		// 安装进度与流式中间结果是 webContents.send 推送通道，不走 ipcMain.handle，故不出现在这里。
+		voiceTranscriptionStreamPartial: "voice:stream-partial",
 		voiceTranscriptionRuntimeStatus: "voice:runtime-status",
 		voiceTranscriptionRuntimeInstall: "voice:runtime-install",
 		voiceTranscriptionModelInstall: "voice:model-install",
 		voiceTranscriptionModelDelete: "voice:model-delete",
 		voiceTranscriptionInstallCancel: "voice:install-cancel",
 	};
+	/** 由 handle 注册的通道：推送通道与 `on` 通道单列，否则断言会误报「漏注册」。 */
+	const pushOnlyChannels = [ipcChannels.voiceTranscriptionStreamPartial];
+	const onOnlyChannels = [ipcChannels.voiceTranscriptionStreamFrame];
 	const whisperRuntime = loadWhisperRuntime();
 	const module = { exports: {} };
 	vm.runInNewContext(transpile("src/main/ipc/voiceTranscriptionIpc.ts"), {
@@ -40,22 +50,31 @@ function loadRegistration() {
 		ArrayBuffer,
 		require: (id) => {
 			if (id === "electron") {
-				return { ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) } };
+				return {
+					ipcMain: {
+						handle: (channel, handler) => handlers.set(channel, handler),
+						on: (channel, listener) => listeners.set(channel, listener),
+					},
+				};
 			}
 			if (id === "../../shared/ipc") return { ipcChannels };
 			if (id === "../../shared/types/whisperRuntime") return whisperRuntime;
 			throw new Error(`unexpected require: ${id}`);
 		},
 	});
-	return { handlers, ipcChannels, register: module.exports.registerVoiceTranscriptionIpc };
+	return { handlers, listeners, ipcChannels, pushOnlyChannels, onOnlyChannels, register: module.exports.registerVoiceTranscriptionIpc };
 }
 
 test("voice IPC registers narrow handlers and validates transcription input", async () => {
-	const { handlers, ipcChannels, register } = loadRegistration();
-	const calls = { cancelled: [], transcribed: [] };
+	const { handlers, listeners, ipcChannels, pushOnlyChannels, onOnlyChannels, register } = loadRegistration();
+	const calls = { cancelled: [], transcribed: [], revealed: [], streams: [], frames: [], finished: [] };
 	const configStore = {
 		getPublicConfig: async () => ({ hasApiKey: false, cliPath: "", localModelId: "small-q5_1" }),
 		saveConfig: async () => ({ ok: false, error: "invalidConfig" }),
+		revealSecret: async (field) => {
+			calls.revealed.push(field);
+			return "plain-value";
+		},
 	};
 	const service = {
 		transcribe: async (input) => {
@@ -66,6 +85,15 @@ test("voice IPC registers narrow handlers and validates transcription input", as
 		testConnection: async () => {
 			calls.tests = (calls.tests ?? 0) + 1;
 			return { ok: true };
+		},
+		startStream: async (input) => {
+			calls.streams.push(input);
+			return { ok: true };
+		},
+		pushStreamFrame: (frame) => calls.frames.push(frame),
+		finishStream: async (requestId) => {
+			calls.finished.push(requestId);
+			return { ok: true, text: "stream" };
 		},
 	};
 	const runtimeCalls = { status: [], installRuntime: 0, installModel: [], deleteModel: [], abortInstall: 0 };
@@ -94,7 +122,38 @@ test("voice IPC registers narrow handlers and validates transcription input", as
 	const emitted = [];
 	register({ configStore, service, runtimeManager, emitRuntimeProgress: (p) => emitted.push(p) });
 
-	assert.deepEqual(Array.from(handlers.keys()).sort(), Object.values(ipcChannels).sort());
+	assert.deepEqual(
+		Array.from(handlers.keys()).sort(),
+		Object.values(ipcChannels)
+			.filter((channel) => !onOnlyChannels.includes(channel) && !pushOnlyChannels.includes(channel))
+			.sort(),
+	);
+	assert.deepEqual(Array.from(listeners.keys()), [ipcChannels.voiceTranscriptionStreamFrame], "音频帧必须走 on（单向、不等 promise 往返）");
+	const startStream = handlers.get(ipcChannels.voiceTranscriptionStreamStart);
+	assert.equal((await startStream({}, { requestId: "bad id", sampleRate: 16000 })).error, "invalidRequest");
+	assert.equal((await startStream({}, { requestId: "request-1", sampleRate: "16000" })).error, "invalidRequest");
+	assert.equal((await startStream({}, { requestId: "request-1", sampleRate: 16000.5 })).error, "invalidRequest");
+	assert.equal((await startStream({}, { requestId: "request-1", sampleRate: 16000 })).ok, true);
+	assert.equal(calls.streams.length, 1);
+	// 对象是在 vm 上下文里构造的，跨 realm 不能 deepStrictEqual，逐字段比。
+	assert.deepEqual({ ...calls.streams[0] }, { requestId: "request-1", sampleRate: 16000 });
+
+	const pushFrame = listeners.get(ipcChannels.voiceTranscriptionStreamFrame);
+	pushFrame({}, { requestId: "request-1", pcm: "not-bytes" });
+	pushFrame({}, { requestId: "bad id", pcm: new ArrayBuffer(4) });
+	pushFrame({}, null);
+	assert.equal(calls.frames.length, 0, "非法帧必须在主进程边界丢掉，不能进会话");
+	const frame = new ArrayBuffer(4);
+	pushFrame({}, { requestId: "request-1", pcm: frame });
+	assert.equal(calls.frames.length, 1);
+	assert.deepEqual({ requestId: calls.frames[0].requestId }, { requestId: "request-1" });
+	assert.equal(calls.frames[0].pcm, frame);
+
+	const finishStream = handlers.get(ipcChannels.voiceTranscriptionStreamFinish);
+	assert.equal((await finishStream({}, "bad id")).error, "invalidRequest");
+	assert.equal((await finishStream({}, "request-1")).text, "stream");
+	assert.deepEqual(calls.finished, ["request-1"]);
+
 	const transcribe = handlers.get(ipcChannels.voiceTranscriptionTranscribe);
 	assert.equal((await transcribe({}, { requestId: "bad id", audio: new ArrayBuffer(1), mimeType: "audio/webm" })).error, "invalidRequest");
 	assert.equal((await transcribe({}, { requestId: "request-1", audio: "not-bytes", mimeType: "audio/webm" })).error, "invalidRequest");
@@ -108,6 +167,13 @@ test("voice IPC registers narrow handlers and validates transcription input", as
 	const probe = handlers.get(ipcChannels.voiceTranscriptionTest);
 	assert.equal((await probe({})).ok, true);
 	assert.equal(calls.tests, 1);
+
+	// reveal-secret 只认三个字段名：其余入参不得触达解密（渲染层数据一律不可信）。
+	const reveal = handlers.get(ipcChannels.voiceTranscriptionRevealSecret);
+	assert.equal(await reveal({}, "volcAccessToken"), "plain-value");
+	assert.equal(await reveal({}, "protectedVolcAccessToken"), null);
+	assert.equal(await reveal({}, "configPath"), null);
+	assert.deepEqual(calls.revealed, ["volcAccessToken"]);
 
 	const cancel = handlers.get(ipcChannels.voiceTranscriptionCancel);
 	await cancel({}, "bad id");

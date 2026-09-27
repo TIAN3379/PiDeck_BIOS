@@ -12,7 +12,19 @@ import type { ImageBlobPayload, ImageGenConfigFile, ImageGenRequest, ImageGenRes
 import type { CatalogCheckResult, CatalogUpdateResult, CatalogUpdateStatus } from "../shared/types/catalog";
 import type { BuiltInExtensionsCheckResult, BuiltInExtensionsUpdateResult, BuiltInExtensionsUpdateStatus } from "../shared/types/extensionsUpdate";
 import type { BuiltinContentCheckResult, BuiltinContentUpdateResult, BuiltinContentUpdateStatus } from "../shared/types/contentUpdate";
-import type { VoiceTranscriptionPublicConfig, VoiceTranscriptionRequest, VoiceTranscriptionResult, VoiceTranscriptionSaveInput, VoiceTranscriptionSaveResult, VoiceTranscriptionTestResult } from "../shared/types/voiceTranscription";
+import type {
+	VoiceTranscriptionPublicConfig,
+	VoiceTranscriptionRequest,
+	VoiceTranscriptionResult,
+	VoiceTranscriptionSaveInput,
+	VoiceTranscriptionSaveResult,
+	VoiceTranscriptionSecretField,
+	VoiceTranscriptionStreamFrame,
+	VoiceTranscriptionStreamPartial,
+	VoiceTranscriptionStreamStartInput,
+	VoiceTranscriptionStreamStartResult,
+	VoiceTranscriptionTestResult,
+} from "../shared/types/voiceTranscription";
 import type { WhisperInstallProgress, WhisperInstallResult, WhisperRuntimeStatus } from "../shared/types/whisperRuntime";
 import type { QuickMessagesSaveResult, QuickMessagesSnapshot } from "../shared/types/quickMessages";
 import type {
@@ -1320,8 +1332,18 @@ const api = {
 		saveConfig: (config: VoiceTranscriptionSaveInput) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionSaveConfig, config) as Promise<VoiceTranscriptionSaveResult>,
 		transcribe: (request: VoiceTranscriptionRequest) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionTranscribe, request) as Promise<VoiceTranscriptionResult>,
 		cancel: (requestId: string) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionCancel, requestId) as Promise<void>,
+		/**
+		 * 流式识别（豆包流式 2.0）：开流 → 逐帧 send → 收尾拿终值，中间结果走 onStreamPartial 订阅。
+		 * 帧刻意用 `send` 而非 `invoke`：200ms 一帧的单向数据不该每条都等一次往返。
+		 */
+		startStream: (input: VoiceTranscriptionStreamStartInput) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionStreamStart, input) as Promise<VoiceTranscriptionStreamStartResult>,
+		sendStreamFrame: (frame: VoiceTranscriptionStreamFrame) => ipcRenderer.send(ipcChannels.voiceTranscriptionStreamFrame, frame),
+		finishStream: (requestId: string) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionStreamFinish, requestId) as Promise<VoiceTranscriptionResult>,
+		onStreamPartial: (callback: (partial: VoiceTranscriptionStreamPartial) => void) => subscribe(ipcChannels.voiceTranscriptionStreamPartial, callback),
 		/** 用静音探针检测当前配置是否真的能转写（密钥留在主进程，渲染层只拿结论）。 */
 		test: () => ipcRenderer.invoke(ipcChannels.voiceTranscriptionTest) as Promise<VoiceTranscriptionTestResult>,
+		/** 点「显示」时按需取回某一格明文；null = 该格没配置或系统安全存储不可用。 */
+		revealSecret: (field: VoiceTranscriptionSecretField) => ipcRenderer.invoke(ipcChannels.voiceTranscriptionRevealSecret, field) as Promise<string | null>,
 		/** 本地 whisper 运行时/模型安装状态（含自定义 CLI 路径生效判定）。 */
 		runtimeStatus: () => ipcRenderer.invoke(ipcChannels.voiceTranscriptionRuntimeStatus) as Promise<WhisperRuntimeStatus>,
 		/** 按需下载 whisper-cli 二进制（进度走 onRuntimeProgress）。 */

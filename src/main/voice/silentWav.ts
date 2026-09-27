@@ -28,3 +28,12 @@ export function createSilentWav(durationMs: number): ArrayBuffer {
 	view.setUint32(40, samples * 2, true);
 	return buffer; // PCM 区保持全零 = 静音
 }
+
+/**
+ * 流式通路用的静音裸 PCM（无 RIFF 头）：与 {@link createSilentWav} 同一采样率口径，
+ * 差别只在容器——流式 2.0 只吃 16bit 小端 PCM，把 WAV 头当音频发出去会被判格式错误。
+ */
+export function createSilentPcm(durationMs: number): Uint8Array {
+	const samples = Math.max(1, Math.round((PROBE_SAMPLE_RATE * durationMs) / 1000));
+	return new Uint8Array(samples * 2);
+}

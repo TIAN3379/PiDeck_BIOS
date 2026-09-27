@@ -50,27 +50,29 @@ function loadWorkletModuleSource() {
 	return captured;
 }
 
-/** 在模拟的 AudioWorklet 作用域里实例化处理器，返回它回传给主线程的消息。 */
-function createProcessor() {
+/** 在模拟的 AudioWorklet 作用域里实例化指定名称的处理器，返回它回传给主线程的消息。 */
+function createProcessor(name = "pideck-voice-processor") {
 	const messages = [];
-	let registered = null;
+	const registered = new Map();
 	vm.runInNewContext(MODULE_SOURCE, {
 		AudioWorkletProcessor: class {
 			constructor() {
 				this.port = { onmessage: null, postMessage: (message) => messages.push(message) };
 			}
 		},
-		registerProcessor: (name, ctor) => {
-			registered = { name, ctor };
+		registerProcessor: (processorName, ctor) => {
+			registered.set(processorName, ctor);
 		},
 		sampleRate: 48000,
 		Float32Array,
+		Int16Array,
 		Math,
 		Number,
 	});
-	assert.ok(registered, "registerProcessor 必须被调用");
-	assert.equal(registered.name, "pideck-voice-processor");
-	return { processor: new registered.ctor(), messages };
+	assert.ok(registered.size, "registerProcessor 必须被调用");
+	const ctor = registered.get(name);
+	assert.ok(ctor, `模块必须注册 ${name} 处理器`);
+	return { processor: new ctor(), messages };
 }
 
 test("worklet 模块可执行、注册处理器并把语音段重采样为 16kHz PCM", () => {
@@ -116,4 +118,43 @@ test("reset 丢弃未完成分段（取消录音不应残留音频）", () => {
 	processor.port.onmessage({ data: "reset" });
 	processor.flush();
 	assert.equal(messages.filter((message) => message.type === "segment").length, 0);
+});
+
+/**
+ * 流式通路（豆包流式 2.0）出的是定长 16bit PCM 帧，不是 VAD 段。
+ * 帧长写死在协议里（200ms @16kHz = 3200 样本 = 6400 字节），出帧口径一旦和共享层
+ * `VOICE_STREAM_FRAME_BYTES` 漂移，服务端会按错误的字节数解析出噪声。
+ */
+test("流式帧处理器按 200ms 出 16bit 定长帧，flush 补齐尾巴", () => {
+	const { processor, messages } = createProcessor("pideck-voice-frame-processor");
+	// 0.5s @48kHz → 重采样 8000 样本：2 个整帧（6400）+ 1600 样本尾巴。
+	processor.process([[new Float32Array(24000).fill(0.4)]]);
+	const frames = messages.filter((message) => message.type === "frame");
+	assert.equal(frames.length, 2, "整帧应立即上抛，不等停录");
+	assert.ok(
+		frames.every((frame) => frame.pcm.byteLength === 6400),
+		"一帧应为 3200 样本 16bit",
+	);
+	const samples = new Int16Array(frames[0].pcm);
+	assert.ok(
+		samples.every((sample) => sample === 13107),
+		"0.4 应量化为 round(0.4*32767)",
+	);
+
+	processor.flush();
+	const flushed = messages.filter((message) => message.type === "frame");
+	assert.equal(flushed.length, 3, "不足一帧的尾巴必须补发，否则句尾一个字都识别不到");
+	assert.equal(new Int16Array(flushed[2].pcm).length, 1600);
+	assert.ok(
+		messages.some((message) => message.type === "flushed"),
+		"主线程靠 flushed 才知道可以收尾",
+	);
+});
+
+test("流式帧处理器 reset 丢弃未成帧音频（取消录音不残留上行数据）", () => {
+	const { processor, messages } = createProcessor("pideck-voice-frame-processor");
+	processor.process([[new Float32Array(1000).fill(0.4)]]);
+	processor.port.onmessage({ data: "reset" });
+	processor.flush();
+	assert.equal(messages.filter((message) => message.type === "frame").length, 0);
 });
