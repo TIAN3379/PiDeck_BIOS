@@ -79,6 +79,10 @@ import { usePiUpdate } from "./hooks/usePiUpdate";
 import { useProviderUsageStartupWarmup } from "./hooks/useProviderUsage";
 
 import { useBackgroundUpdateWatch } from "./hooks/useBackgroundUpdateWatch";
+import { useChannelSwitchWatch } from "./hooks/useChannelSwitchWatch";
+import { useDataEnvWatch } from "./hooks/useDataEnvWatch";
+import { DataModeChoiceDialog } from "./components/app/DataModeChoiceDialog";
+import { DataEnvMismatchDialog } from "./components/app/DataEnvMismatchDialog";
 import { useProjectSync } from "./hooks/useProjectSync";
 import {
 	agentInventoryAtom,
@@ -621,6 +625,12 @@ export function App() {
 		openSettings: () => store.set(openSettingsAtom, { tab: "dev" }),
 	});
 
+	// 通道切换状态订阅：初拉当前通道 + 切换快照，AppUpdateCard 徽章/切换向导消费。
+	useChannelSwitchWatch({ api });
+
+	// 数据环境事件订阅：dev 首启模式选择 / 目录标记警告 / 导入进度（弹窗由 dataEnvAtoms 驱动）。
+	useDataEnvWatch({ api });
+
 	const PROJECT_EXPANDED_DIRS_KEY_PREFIX = "pid:project-expanded-dirs:";
 
 	// localStorage 只负责首屏；展开项目的权威设置必须等首次 settings.get 返回后才参与迁移。
@@ -650,8 +660,8 @@ export function App() {
 		/** 提示词模板禁用列表：与 SettingsStore 默认一致，空数组 = 不启用模板白名单 */
 		disabledPrompts: [],
 		sessionTabOpenMode: "preview",
-		// 与 main SettingsStore 默认一致：标题生成默认关闭，避免首轮结束后无感知消耗 token
-		autoSessionTitle: false,
+		// 与 main SettingsStore 默认一致：标题生成默认开启，侧栏不再全是「新会话」
+		autoSessionTitle: true,
 		// 与 main SettingsStore 默认一致：忙碌时发送默认「插入当前回合」
 		busySendDelivery: "steer",
 		// 遗留字段：快捷消息已改存独立配置文件 userData/quick-messages.json（见 useQuickMessages），
@@ -678,8 +688,8 @@ export function App() {
 		showThinking: true,
 		// 流式对话行为：默认自动展开中间过程（与 SettingsStore 一致）
 		expandInterimDuringStream: true,
-		// 过程组显示默认关闭：与主进程 SettingsStore 默认一致，首屏未拉到真实设置前保持平铺渲染
-		processGroupDisplay: false,
+		// 过程组显示默认开启：与主进程 SettingsStore 默认一致，首屏即按过程组渲染
+		processGroupDisplay: true,
 		showDevTools: false,
 		developerDiagnostics: false,
 		// Electron Chromium 沙箱默认关，与主进程历史兼容策略一致
@@ -4336,6 +4346,10 @@ export function App() {
         不主动提示就等于不存在。看完即写 localStorage，只弹一次。
         空状态（没项目）不弹——那时面板本身也没什么可搜的。 */}
 				{!quickTask.active && <CommandPaletteOnboarding enabled={Boolean(activeProjectId) && !commandPaletteOpen} onTryNow={openCommandPalette} />}
+
+				{/* 数据环境弹窗族：首启数据模式选择（内含导入向导）与目录标记警告，事件/atom 驱动 */}
+				<DataModeChoiceDialog />
+				<DataEnvMismatchDialog />
 			</>
 		</FileLinkBaseProvider>
 	);
