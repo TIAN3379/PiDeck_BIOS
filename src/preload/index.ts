@@ -5,6 +5,7 @@ import type { AnnouncementState } from "../shared/types/announcement";
 import type { RpcLogBatch, RpcLogEntry } from "../shared/types/rpcLog";
 import type { DshRuntimeStatus, DshRuntimeInstallProgress } from "../shared/types/dshRuntime";
 import type { DshHomeSharingState } from "../shared/types/dshHome";
+import type { UserDataNameMigrationNotice } from "../shared/types/userDataMigration";
 import type { GitExecutableInfo } from "../shared/types/git";
 import type { DshRunnerNodeInfo, DshRunnerNodeInstallResult } from "../shared/types/dshRunnerNode";
 import type { ImageBlobPayload, ImageGenConfigFile, ImageGenRequest, ImageGenResult, ImageGenSaveResult } from "../shared/types/imagegen";
@@ -253,6 +254,8 @@ const api = {
 		chooseChatPath: () => ipcRenderer.invoke(ipcChannels.projectsChooseChatPath) as Promise<string | null>,
 		// 设置聊天记录目录
 		setChatPath: (path: string) => ipcRenderer.invoke(ipcChannels.projectsSetChatPath, path) as Promise<Project | null>,
+		// 领取 userData 更名（pi-desktop → PiDeck）的一次性迁移提示（消费式，只返回一次）
+		consumeMigrationNotice: () => ipcRenderer.invoke(ipcChannels.userDataMigrationConsumeNotice) as Promise<UserDataNameMigrationNotice | null>,
 		// 通过 pi --list-models 获取可用模型列表（无需启动 agent）
 		listModels: (projectId?: string) => ipcRenderer.invoke(ipcChannels.projectsListModels, projectId) as Promise<AvailableModel[]>,
 		// 模型列表诊断报告：模型 + 失败原因分类（版本过低/配置损坏/pi 未安装），

@@ -678,6 +678,7 @@ export const enUS: Record<TranslationKey, string> = {
 	"app.modelRestartDone": "Agent restarted, new model applied",
 	"app.modelPendingTitle": "Model switches after this generation: {from} → {to}",
 	"app.chatProjectPathUpdated": "Chat directory updated",
+	"app.userDataMigrationNotice": "Data folder migrated to PiDeck ({newPath}); your settings and chat history were kept as-is",
 	"app.chatPathOverlapsProject": "This folder is already registered as a project and cannot be used as the chat directory (a shared path would shadow the project area). Please pick another folder.",
 	"app.projectRemoveTitle": "Remove project record",
 	"app.projectRemoveBlockedTitle": "Cannot remove project",

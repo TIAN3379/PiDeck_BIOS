@@ -1,3 +1,8 @@
+## v0.7.9（未发布）
+
+### 🚀 新功能
+- **数据目录更名为 PiDeck 并自动迁移历史数据** — 正式包的 userData 目录从此前的历史名 `pi-desktop` 改名为 `PiDeck`（Windows `%APPDATA%\PiDeck`、macOS `~/Library/Application Support/PiDeck`、Linux `~/.config/PiDeck`），默认聊天记录目录随之不再显示为「pi desktop」。更新后首次启动自动完成：整个目录改名、设置与目录记录里的旧绝对路径就地改写、`~/.pi/agent/sessions` 下对应的会话目录同步改名（会话内容逐字节不动），完成后弹一次「数据目录已迁移」提示，此后永不再打扰。改名失败（文件被占用等）时本次照旧使用旧目录并在下次启动重试；便携版与显式 `--user-data-dir` 不参与；新旧目录并存的冲突场景保守使用新目录。
+
 ## v0.7.8 - 2026-09-26
 
 ### 🚀 新功能

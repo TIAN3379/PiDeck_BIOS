@@ -22,7 +22,7 @@ import { isDevToolsShortcut, toggleMainWindowDevTools } from "./devTools";
 import { isShortcutInput, refreshShortcutBindings } from "./appShortcuts";
 import { createWindowZoomShortcutHandler } from "./windowZoom";
 import { DEFAULT_DEV_USER_DATA_NAME, isSharedDevBranch, readDevGitBranch, resolveDevUserDataDirName, sanitizeDevBranchSegment } from "./devIsolation";
-import { resolvePackagedUserDataDir } from "./portableUserData";
+import { isPortablePackagedEnv } from "./portableUserData";
 import { extractFocusTargetFromArgv } from "./utils/focusTarget";
 import type { Project, StartupWindowMode } from "../shared/types";
 // 使用 ?asset 后缀导入图标，electron-vite 会在构建时将其复制到输出目录并提供正确的运行时路径
@@ -46,6 +46,7 @@ const isE2E = process.env.PIDECK_E2E === "1";
 // 避免多个 worktree 同时启动共用 catalog / 单实例锁 / DSH home。main/dev 仍用历史目录。
 // 打包的 dist:win:dev 仍固定 pi-desktop-dev（与脚本约定一致，复用现有开发配置）。
 // 必须在读取 settings / 版本单实例锁之前设置。
+let userDataNameMigrationResult: UserDataNameMigration | null = null;
 const isolateDevByGitBranch = !app.isPackaged;
 const devGitBranch = isolateDevByGitBranch ? readDevGitBranch() : undefined;
 const devUserDataDirName = isolateDevByGitBranch ? resolveDevUserDataDirName(devGitBranch) : DEFAULT_DEV_USER_DATA_NAME;
@@ -67,11 +68,19 @@ if (isDevBuild) {
 	// 仅测试标记下尊重显式临时 profile；生产发行物仍固定使用历史 pi-desktop 数据目录。
 	app.setPath("userData", explicitUserDataDir);
 } else {
-	// 正式版：安装包仍用历史 %APPDATA%/pi-desktop；Windows 便携 exe 改落到
-	// PORTABLE_EXECUTABLE_DIR/data，避免与安装版抢同一把版本单实例锁
-	// （次实例会 app.exit(0)，用户看到「启动没反应」）。
+	// 正式版：安装版数据目录已由历史 %APPDATA%/pi-desktop 更名为 %APPDATA%/PiDeck；
+	// 老用户首启在这里做一次性迁移（整目录改名 + 持久化绝对路径改写 + pi 会话 encoded 目录改名），
+	// 迁移失败自动回退旧目录、下次启动重试。Windows 便携 exe 落到 PORTABLE_EXECUTABLE_DIR/data，
+	// 与安装版隔离（否则同版本单实例锁让第二次启动静默退出）。
 	// 必须在读取 settings / 版本单实例锁之前设置。
-	app.setPath("userData", resolvePackagedUserDataDir({ appData: app.getPath("appData") }));
+	const packagedAppDataDir = app.getPath("appData");
+	userDataNameMigrationResult = runUserDataNameMigration({
+		appDataDir: packagedAppDataDir,
+		homeDir: app.getPath("home"),
+		portableOrExplicit: isPortablePackagedEnv(),
+	});
+	recordUserDataNameMigrationNotice(userDataNameMigrationResult);
+	app.setPath("userData", userDataNameMigrationResult.userDataPath);
 }
 
 // Linux XWayland 兼容层：仅当桌面宠物启用时才强制 ozone-platform=x11（#108，
@@ -188,6 +197,7 @@ import type {
 } from "../shared/types";
 import { msUntilNextThemeBoundary, resolveAppColorScheme } from "../shared/themeSchedule";
 import { ProjectStore } from "./projects/ProjectStore";
+import { runUserDataNameMigration, recordUserDataNameMigrationNotice, type UserDataNameMigration } from "./projects/userDataNameMigration";
 import { shouldAutoRegisterForeignCwd } from "./projects/projectPathPolicy";
 import { defaultPathCheck } from "./projects/projectPresence";
 import { FileSystemService } from "./fs/FileSystemService";
@@ -3308,6 +3318,19 @@ app
 		});
 		appLogger = new AppLogger();
 		setAppLogger(appLogger);
+		// userData 更名迁移（pi-desktop → PiDeck）在 setPath 前同步执行，当时还没有日志器；
+		// 结果在此补记，失败/回退路径必须可从日志诊断。
+		if (userDataNameMigrationResult?.kind === "migrated") {
+			void appLogger.info("migration", "userData directory renamed to PiDeck", {
+				from: userDataNameMigrationResult.oldPath,
+				to: userDataNameMigrationResult.userDataPath,
+				sessionDirs: userDataNameMigrationResult.migratedSessionDirs.length,
+			});
+		} else if (userDataNameMigrationResult?.kind === "failed") {
+			void appLogger.warn("migration", "userData rename failed; continuing on legacy dir, retry next launch", {
+				reason: userDataNameMigrationResult.reason,
+			});
+		}
 		rpcLogger = new RpcLogger();
 		// 用量统计：pi-tracker 的 <agentDir>/analytics/usage.jsonl
 		// + dsh-bill 的 <DSH_HOME>/dsh-bill/records.jsonl（采集由插件负责，此处只读）。

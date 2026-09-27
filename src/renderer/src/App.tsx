@@ -308,6 +308,16 @@ export function App() {
 	const showToast = useCallback((message: string, duration?: number, kind?: NoticeKind) => {
 		showNotice(message, duration, kind);
 	}, []);
+	// userData 更名（pi-desktop → PiDeck）一次性提示：主进程在 setPath 前已完成迁移，
+	// 这里首挂载消费式领取结果 toast——领过一次即清空，之后启动永不再弹。
+	useEffect(() => {
+		void api.projects
+			.consumeMigrationNotice()
+			.then((notice) => {
+				if (notice) showToast(t("app.userDataMigrationNotice", { newPath: notice.newPath }), 8000);
+			})
+			.catch(() => undefined);
+	}, [showToast]);
 	// 历史命令：按 agent 隔离，agent 关闭即清除（不持久化）
 	const promptHistoryRef = useRef<Record<string, string[]>>({});
 

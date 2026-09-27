@@ -25,6 +25,8 @@ export const ipcChannels = {
 	projectsChooseChatPath: "projects:choose-chat-path",
 	// 设置聊天记录目录并持久化
 	projectsSetChatPath: "projects:set-chat-path",
+	/** 领取 userData 更名（pi-desktop → PiDeck）的一次性迁移提示（消费式：领取后不再返回） */
+	userDataMigrationConsumeNotice: "user-data-migration:consume-notice",
 	editorsList: "editors:list",
 	editorsRedetect: "editors:redetect",
 	editorsUpdate: "editors:update",

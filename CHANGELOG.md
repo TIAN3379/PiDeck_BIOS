@@ -1,3 +1,8 @@
+## v0.7.9 (Unreleased)
+
+### 🚀 New Features
+- **Data folder renamed to PiDeck with automatic migration** — The packaged userData folder moves off its legacy name `pi-desktop` to `PiDeck` (Windows `%APPDATA%\PiDeck`, macOS `~/Library/Application Support/PiDeck`, Linux `~/.config/PiDeck`), so the default chat folder no longer reads as "pi desktop". On the first launch after updating, PiDeck renames the folder, rewrites stored absolute paths in settings and directory records, and renames the matching session folders under `~/.pi/agent/sessions` (session files are left byte-for-byte untouched), then shows a one-time "Data folder migrated" notice that never repeats. If the rename fails (folder locked, etc.) this launch keeps using the old folder and retries next time; portable builds and an explicit `--user-data-dir` are never touched, and a new/old folder collision conservatively keeps the new folder.
+
 ## v0.7.8 - 2026-09-26
 
 ### 🚀 New Features

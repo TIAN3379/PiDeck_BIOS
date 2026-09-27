@@ -12,6 +12,7 @@ import type { AppLogger } from "../logging/AppLogger";
 import type { ProjectResourceManager } from "../projects/ProjectResourceManager";
 import type { SessionCatalog } from "../sessions/SessionCatalog";
 import { attachProjectPresence } from "../projects/projectPresence";
+import { consumeUserDataNameMigrationNotice } from "../projects/userDataNameMigration";
 import { registerProjectResourceIpc } from "./projectResourceIpc";
 import { normalizeSelectedWslProjectPath, toWindowsHostPath, type WslEnvironment } from "../wsl/WslPaths";
 
@@ -192,6 +193,10 @@ export function registerProjectsIpc({ projectStore, settingsStore, gitService, w
 		void appLogger.info("project", "Chat project path updated", { path });
 		return project;
 	});
+
+	// userData 更名（pi-desktop → PiDeck）的一次性迁移提示：启动早期已同步完成迁移，
+	// 渲染层首挂载领取一次即清空（消费式），保证「只提示一次、之后不再打扰」。
+	ipcMain.handle(ipcChannels.userDataMigrationConsumeNotice, async () => consumeUserDataNameMigrationNotice());
 
 	registerProjectResourceIpc({
 		appLogger,
