@@ -8,6 +8,7 @@ import { detectSubagentFailure } from "./subagentStatus";
 import { Button } from "../ui-shadcn/button";
 import type { ChatMessage } from "../../../../shared/types";
 import { TimelineMarker } from "./TimelineMarker";
+import { RowText } from "./RowText";
 import { LiveDuration } from "./LiveDuration";
 import { getToolKind, getToolKindLabel } from "./toolKind";
 import { getToolPhraseFromArgs } from "./timeline/toolPhrase";
@@ -15,6 +16,7 @@ import { ToolResult, ToolResultOutput } from "../agents/tool-result";
 import { FileDiff } from "../agents/file-diff";
 import { desktopApi } from "../../desktopApi";
 import { formatDuration, getToolDetailText, getToolDiffTarget, getToolExitCode, getToolLiveStartTimestamp, getToolName, getToolStatus, fileChangeToDiffLines } from "./TimelineFormat";
+import { BridgeGuiSlot } from "../bridge/BridgeSlot";
 
 export type DiffFileHandler = (path: string, originalContent?: string, content?: string) => void;
 
@@ -282,42 +284,47 @@ export const ToolCard = memo(function ToolCard(props: {
 					{status === "running" && <span aria-hidden className="pointer-events-none absolute inset-y-0 left-[-300px] w-[300px] animate-tool-sweep motion-reduce:animate-none bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--color-bg-app)_55%,transparent),transparent)]" />}
 					<button type="button" className="flex min-h-7 min-w-0 flex-[1_1_auto] cursor-pointer items-center gap-2 border-0 bg-transparent py-1 pr-0.5 pl-1 text-left text-chat-row text-text-faint focus-visible:-outline-offset-2 focus-visible:outline-2" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
 						<span className="tool-card-icon inline-flex shrink-0 items-center justify-center">{isSkillRead ? <Brain size={16} /> : isAskCard ? <MessageCircle size={16} /> : toolIcon(toolName)}</span>
-						{/* 工具名标签：过程层文字，用 faint 浅色（比 tertiary 更贴近背景）退到正文之后；
-					    字重保持 normal（不降档），过轻在 CJK 下会有锯齿/发虚。 */}
-						<span className="shrink-0 text-chat-row lowercase text-text-faint">{isSkillRead ? `skill:${skillName}` : isAskCard ? t("ask.toolName") : toolName}</span>
-						{expanded ? <ChevronDown size={14} className="shrink-0 text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 text-text-faint" aria-hidden="true" />}
-						{!isSkillRead && kindLabel && <span className="tool-card-kind">{kindLabel}</span>}
-						{statusBadge}
-						{/* 耗时数字用界面字体（与行头时间/输入框统计条一致），工具名/路径仍走等宽 */}
-						{showDuration && (
-							<span className="shrink-0 text-chat-detail tabular-nums text-text-tertiary" title={isAskCard && status === "running" ? t("ask.waitingHint") : t("tool.durationTitle")}>
-								{isAskCard && status === "running" ? (
-									// ask 等待用户回答阶段不计入工具耗时：不展示累加秒表，改用「等待回答…」
-									// 提示。用户回答后 tool_execution_end 落地的 durationMs 已由主进程扣除等待时长。
-									t("ask.waitingForAnswer")
-								) : status === "running" ? (
-									// 工具执行中：以 meta.startedAt 为秒表起点实时计时。消息 timestamp 会被主进程
-									// 在每次 update/end 时刷新（见 getToolLiveStartTimestamp），直接用会让长命令的
-									// 耗时显示反复归零，结束才突然跳到总时长。
-									<LiveDuration startedAt={getToolLiveStartTimestamp(props.message)} isStreaming />
-								) : (
-									formatDuration(durationMs ?? 0)
-								)}
-							</span>
-						)}
-						{isAskCard && askCard?.question ? (
-							<span className="min-w-0 flex-[1_1_auto] whitespace-normal break-words font-mono text-chat-detail text-text-faint" title={askCard.question}>
-								| {askCard.question}
-							</span>
-						) : displayLabel ? (
-							<span className="min-w-0 flex-[1_1_auto] truncate font-mono text-chat-detail text-text-faint" title={subtitle || displayLabel}>
-								{displayLabel}
-							</span>
-						) : subtitle ? (
-							<span className="min-w-0 flex-[1_1_auto] truncate font-mono text-chat-detail text-text-faint" title={subtitle}>
-								| {subtitle}
-							</span>
-						) : null}
+						{/* 文本段：工具名（14px）与耗时 / 命令·路径（12px 等宽）必须共基线，否则等宽详情
+						    比正文高约 3px、看起来「没纵向居中」（原理解释见 RowText）。
+						    徽章 / chevron / kind pill 是盒子，self-center 保持原有居中观感。 */}
+						<RowText className="flex-[1_1_auto]">
+							{/* 工具名标签：过程层文字，用 faint 浅色（比 tertiary 更贴近背景）退到正文之后；
+						    字重保持 normal（不降档），过轻在 CJK 下会有锯齿/发虚。 */}
+							<span className="shrink-0 text-chat-row lowercase text-text-faint">{isSkillRead ? `skill:${skillName}` : isAskCard ? t("ask.toolName") : toolName}</span>
+							{expanded ? <ChevronDown size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" />}
+							{!isSkillRead && kindLabel && <span className="tool-card-kind self-center">{kindLabel}</span>}
+							<span className="inline-flex self-center">{statusBadge}</span>
+							{/* 耗时数字用界面字体（与行头时间/输入框统计条一致），工具名/路径仍走等宽 */}
+							{showDuration && (
+								<span className="shrink-0 text-chat-detail tabular-nums text-text-tertiary" title={isAskCard && status === "running" ? t("ask.waitingHint") : t("tool.durationTitle")}>
+									{isAskCard && status === "running" ? (
+										// ask 等待用户回答阶段不计入工具耗时：不展示累加秒表，改用「等待回答…」
+										// 提示。用户回答后 tool_execution_end 落地的 durationMs 已由主进程扣除等待时长。
+										t("ask.waitingForAnswer")
+									) : status === "running" ? (
+										// 工具执行中：以 meta.startedAt 为秒表起点实时计时。消息 timestamp 会被主进程
+										// 在每次 update/end 时刷新（见 getToolLiveStartTimestamp），直接用会让长命令的
+										// 耗时显示反复归零，结束才突然跳到总时长。
+										<LiveDuration startedAt={getToolLiveStartTimestamp(props.message)} isStreaming />
+									) : (
+										formatDuration(durationMs ?? 0)
+									)}
+								</span>
+							)}
+							{isAskCard && askCard?.question ? (
+								<span className="min-w-0 flex-[1_1_auto] whitespace-normal break-words font-mono text-chat-detail text-text-faint" title={askCard.question}>
+									| {askCard.question}
+								</span>
+							) : displayLabel ? (
+								<span className="min-w-0 flex-[1_1_auto] truncate font-mono text-chat-detail text-text-faint" title={subtitle || displayLabel}>
+									{displayLabel}
+								</span>
+							) : subtitle ? (
+								<span className="min-w-0 flex-[1_1_auto] truncate font-mono text-chat-detail text-text-faint" title={subtitle}>
+									| {subtitle}
+								</span>
+							) : null}
+						</RowText>
 					</button>
 				</div>
 				{expanded && (
@@ -398,6 +405,10 @@ export const ToolCard = memo(function ToolCard(props: {
 						)}
 					</div>
 				)}
+				{/* GUI 扩展桥：工具卡附加落点（ctx.gui.setToolExtra，key = toolName）。
+				    **在默认内容下方追加**，不顶替默认工具卡（§7.1-B / §7.4 只追加）。
+				    无该 toolName 的贡献时返回 null，不占位。 */}
+				<BridgeGuiSlot sessionId={props.sessionId} slot="tool.extra" matchKey={toolName} className="ml-5 mt-1 flex flex-col gap-1 pl-3" />
 			</section>
 		</TimelineMarker>
 	);

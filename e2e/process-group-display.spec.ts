@@ -59,6 +59,58 @@ async function ensureFoldOpen(window: Page) {
 	if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 
+/**
+ * 读取一行内**所有**文本项的文字基线（0×0 inline-block 探针：其 top 即该行基线）。
+ *
+ * 只取 `[data-row-text]` 文本段的**直接子元素**，且跳过盒子类元素
+ * （徽章 / chevron / 状态 pill 由 `self-center` 单独居中，基线与文字没有同一性要求）。
+ *
+ * 为什么把字体族分组是**错的**：本 bug 恰恰是「等宽详情 vs 正文」的**跨字体**基线差，
+ * 按字体族分组后 mono 组只剩 1 项 → 极差恒为 0，断言退化成空气断言（2026-09 踩过）。
+ * 所以这里必须把同组所有文本放在**同一个极差**里比。
+ */
+function readRowTextBaselines(row: import("@playwright/test").Locator) {
+	return row.locator("[data-row-text] > *").evaluateAll((els) =>
+		els
+			.filter((el) => (el.textContent ?? "").trim().length > 0)
+			.filter((el) => getComputedStyle(el).alignSelf !== "center")
+			.filter((el) => {
+				const d = getComputedStyle(el).display;
+				return d !== "flex" && !d.startsWith("inline-flex");
+			})
+			.map((el) => {
+				const probe = document.createElement("span");
+				probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;";
+				el.appendChild(probe);
+				const top = probe.getBoundingClientRect().top;
+				probe.remove();
+				return top;
+			}),
+	);
+}
+
+/**
+ * 断言「同一行的文本共基线」：极差 ≤0.75px，且至少 `minItems` 项参与。
+ *
+ * `minItems` 是防退化门槛：工具行必须同时量到「14px 工具名 + 12px 耗时 + 12px 等宽命令」
+ * 三项，少一项说明详情还没落地，不能算通过。
+ */
+async function expectSharedTextBaseline(row: import("@playwright/test").Locator, minItems: number) {
+	// 先等文本段真的渲染出来（过程行只在流式窗口内存在，错过窗口就永远等不到），
+	// 再量基线；否则 poll 会在窗口关闭后一直拿到空数组，把「真回归」掩盖成 NaN 超时。
+	await expect(row.locator("[data-row-text]").first()).toBeAttached({ timeout: 30_000 });
+	await expect
+		.poll(
+			async () => {
+				const baselines = await readRowTextBaselines(row);
+				if (baselines.length < minItems) return Number.NaN;
+				return Math.max(...baselines) - Math.min(...baselines);
+			},
+			{ timeout: 10_000 },
+		)
+		.toBeLessThanOrEqual(0.75);
+}
+
 test.describe("开关开启：过程组显示", () => {
 	test.use({ seedSettings: { processGroupDisplay: true } });
 
@@ -99,6 +151,22 @@ test.describe("开关开启：过程组显示", () => {
 
 		// ③ 组体里必须是**既有的**工具行（复用 ToolCard，不新造行样）
 		await expect(window.locator("[data-process-group-body] .tool-card").first()).toBeVisible({ timeout: 15_000 });
+	});
+
+	test("同行文本共基线：等宽详情不得比主文本高", async ({ window }) => {
+		test.setTimeout(120_000);
+		await runProcessTurn(window);
+
+		// 组头：主标签 + 分隔符 + 12px 等宽实时详情（running 态才有实时详情行，先量）。
+		const head = window.locator("[data-process-group-head]").first();
+		await expect(head).toBeVisible({ timeout: 20_000 });
+		await expectSharedTextBaseline(head, 3);
+
+		// 成员行（ToolCard）：工具名 14px + 耗时 12px + 等宽命令 12px 三项必须共基线。
+		// 修复前真机实测极差 2.23–3.00px（等宽详情整体偏上），修复后 0。
+		const toolRow = window.locator("[data-process-group-body] .tool-card").first();
+		await expect(toolRow).toBeVisible({ timeout: 20_000 });
+		await expectSharedTextBaseline(toolRow, 3);
 	});
 
 	test("组内滚轮不得幽灵解锁外层：到边后时间线一像素不动，也不得出回底按钮", async ({ window }) => {
@@ -196,7 +264,11 @@ test.describe("开关开启：过程组显示", () => {
 	});
 });
 
-test.describe("默认（开关关闭）", () => {
+test.describe("显式关闭（seed processGroupDisplay: false）", () => {
+	// 默认值已改为开启（2026-11）：平铺渲染路径仍由本分组显式关闭开关来覆盖，
+	// 保证关闭路径不会被默认开启挤掉。
+	test.use({ seedSettings: { processGroupDisplay: false } });
+
 	test("不出现过程组，保持原平铺渲染", async ({ window }) => {
 		test.setTimeout(90_000);
 		await runProcessTurn(window);

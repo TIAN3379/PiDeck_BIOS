@@ -106,8 +106,9 @@ const defaultSettings: AppSettings = {
 	startupWindowMode: "last",
 	piEnvironmentChecked: false,
 	sessionTabOpenMode: "preview",
-	// 默认关闭：标题请求会额外调用当前 pi 模型并消耗 token，避免用户无感知地产生用量。
-	autoSessionTitle: false,
+	// 默认开启：标题由当前 pi 模型异步生成，侧栏不再全是「新会话」；
+	// 会额外消耗一次模型调用和少量 token，设置说明已写明，用户可随时关闭。
+	autoSessionTitle: true,
 	// 忙碌时发送默认「插入当前回合」（对齐 pi 历史行为）；dsh 会话此前默认排队，
 	// 统一后由本设置项决定，用户可在常用设置→会话中改回。
 	busySendDelivery: "steer",
@@ -156,12 +157,10 @@ Gitmoji 对应关系：
 	// toast 展示时长：全局统一时长（见 AppSettings.toastDurationMs）
 	toastDurationMs: DEFAULT_TOAST_DURATION_MS,
 	showThinking: readPiAgentShowThinking() ?? true,
-	// 流式对话设置：默认自动展开中间过程（思考/工具详情随最新轮流式展开）；
-	// 新一轮开始默认收起非最新轮（含手动展开的），用户可在设置中关闭。
+	// 流式对话设置：默认自动展开中间过程（思考/工具详情随最新轮流式展开）。
 	expandInterimDuringStream: true,
-	// 过程组显示默认关闭（保守项）：默认走现有平铺渲染，用户显式开启后才走过程组。
-	processGroupDisplay: false,
-	collapsePrevRunsOnNewTurn: true,
+	// 过程组显示默认开启：连续思考/工具调用合并成过程组，设置里可随时关回平铺显示。
+	processGroupDisplay: true,
 	showDevTools: false,
 	developerDiagnostics: false,
 	// 默认关闭 Chromium 沙箱：与历史 Windows no-sandbox 兼容策略一致
@@ -375,6 +374,8 @@ export class SettingsStore {
 			this.settings.sessionTabMaxWidth = clampSessionTabMaxWidth(this.settings.sessionTabMaxWidth);
 			// 兼容迁移：全局用量自动查询开关已删除（改为每个 provider 徽章/弹窗里的开关）。
 			this.migrateRemovedUsageAutoQuerySwitch();
+			// 兼容迁移：「新一轮开始时收起上一轮」开关已删除，改为恒定行为（见 useTurnExecution）。
+			this.migrateRemovedCollapsePrevRunsSwitch();
 			// 兼容迁移：按供应商/模型过滤的代理白名单，旧数据缺省为 []（不按名单过滤，保持全局行为）。
 			this.normalizePiProxyProviders();
 			this.normalizePiProxyModels();
@@ -480,6 +481,19 @@ export class SettingsStore {
 		const legacy = this.settings as unknown as Record<string, unknown>;
 		if (!("providerUsageAutoQueryEnabled" in legacy)) return;
 		delete legacy.providerUsageAutoQueryEnabled;
+		void this.save().catch(() => undefined);
+	}
+
+	/**
+	 * 兼容迁移：「新一轮开始时收起上一轮」开关已删除，行为恒定开启。
+	 *
+	 * 与用量开关同因：设置对象整体持久化，旧字段留在内存里会被下一次任意保存写回磁盘，
+	 * 而它已不再被任何代码读取。删除后立即落盘一次；磁盘 JSON 无类型，先按 unknown 收窄再删。
+	 */
+	private migrateRemovedCollapsePrevRunsSwitch() {
+		const legacy = this.settings as unknown as Record<string, unknown>;
+		if (!("collapsePrevRunsOnNewTurn" in legacy)) return;
+		delete legacy.collapsePrevRunsOnNewTurn;
 		void this.save().catch(() => undefined);
 	}
 

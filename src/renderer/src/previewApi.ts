@@ -119,8 +119,8 @@ let previewSettings: AppSettings = {
 	closeToTray: true,
 	singleInstance: true,
 	enableNotifications: true,
-	// 与主进程 SettingsStore 默认一致：标题生成默认关闭，避免预览壳与真实设置产生分歧
-	autoSessionTitle: false,
+	// 与主进程 SettingsStore 默认一致：标题生成默认开启，预览壳与真实设置保持一致
+	autoSessionTitle: true,
 	// Ask 提问系统通知默认关闭：与主进程 SettingsStore 默认一致
 	askNotificationEnabled: false,
 	// 人文关怀提醒开关：与主进程 SettingsStore 默认值保持一致（预览 mock 需覆盖 AppSettings 全部必填字段）
@@ -133,9 +133,8 @@ let previewSettings: AppSettings = {
 	showThinking: true,
 	// 流式对话行为：与主进程 SettingsStore 默认一致（预览窗口保持相同观感）
 	expandInterimDuringStream: true,
-	// 过程组显示默认关闭：与主进程 SettingsStore 默认一致（预览窗口保持平铺观感）
-	processGroupDisplay: false,
-	collapsePrevRunsOnNewTurn: true,
+	// 过程组显示默认开启：与主进程 SettingsStore 默认一致（预览窗口按过程组渲染）
+	processGroupDisplay: true,
 	showDevTools: false,
 	developerDiagnostics: false,
 	electronChromiumSandbox: false,
@@ -255,6 +254,27 @@ export function createPreviewApi(): PiDesktopApi {
 			cancel: async () => false,
 			logout: async (providerId: string) => ({ ok: false, providerId, error: "Pi auth is unavailable in preview mode." }),
 			onFlowUpdate: () => () => undefined,
+		},
+		// 数据环境预览桩：预览模式无真实数据目录，按 stable 通道未决策返回；导入同步不可用
+		dataEnv: {
+			getInfo: async () => ({ channel: "stable" as const, decided: false, dataMode: null, activeDirectory: "shared" as const }),
+			chooseMode: async () => ({ ok: false as const, error: "invalid-mode" as const }),
+			restart: async () => undefined,
+			confirmMismatch: async () => undefined,
+			onDecisionRequired: () => () => undefined,
+			onMismatchDetected: () => () => undefined,
+			getImportPreview: async () => ({ ok: false as const, error: "unavailable" as const }),
+			importStart: async () => ({ ok: false as const, error: "unavailable" as const }),
+			importCancel: async () => undefined,
+			onImportProgress: () => () => undefined,
+		},
+		// 频道切换预览桩：预览模式不接真实更新源，查询/下载均不可用，状态恒 idle。
+		channelSwitch: {
+			query: async () => ({ ok: false as const, error: "preview-unavailable" as const }),
+			download: async () => ({ ok: false as const, error: "preview-unavailable" as const }),
+			launch: async () => ({ ok: false as const, error: "preview-unavailable" as const }),
+			getStatus: async () => ({ phase: "idle" as const }),
+			onStateChanged: () => () => undefined,
 		},
 		shellMenu: {
 			getQuickTaskState: async () => ({ supported: false, registered: false }),
@@ -624,6 +644,9 @@ export function createPreviewApi(): PiDesktopApi {
 				runtimeGeneration: 1,
 			}),
 			sendUiResponse: async () => undefined,
+			// GUI 扩展桥：预览模式无桥端点，恒丢弃
+			sendBridgeEvent: async () => false,
+			requestBridgeResync: async () => false,
 			onRuntimeEvent: noop,
 			listRuntimes: async () => [],
 			activateRuntime: async () => ({
@@ -971,6 +994,7 @@ export function createPreviewApi(): PiDesktopApi {
 			preferredSystemLanguages: async () => (navigator.languages?.length ? [...navigator.languages] : [navigator.language]),
 			networkAddresses: async () => [{ address: "192.168.1.100", interfaceName: "Wi-Fi", cidr: "192.168.1.100/24", isPrivate: true }],
 			checkUpdate: async () => undefined,
+			getChannel: async () => ({ channel: "stable" as const, currentVersion: "preview" }),
 			onUpdateStatus: () => () => undefined,
 			onOpenSettings: () => () => undefined,
 			// 预览/浏览器模式没有全局快捷键，订阅退化为空操作

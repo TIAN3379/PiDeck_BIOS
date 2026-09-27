@@ -30,6 +30,7 @@ import { RetryStep } from "./RetryStep";
 import { ErrorStep } from "./ErrorStep";
 import { ToolStep } from "./ToolStep";
 import { useTurnExecution } from "./useTurnExecution";
+import { BridgeGuiSlot, useBridgeThinkingLabel } from "../../bridge/BridgeSlot";
 import type { DiffFileHandler } from "../ToolCallComponents";
 
 /** sessionId 为空时的占位 atom：恒 false（无会话不挂 live）。 */
@@ -182,6 +183,9 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 	// 流式对话行为设置（App 同步写入）+ 新一轮信号（composer 发送成功后 bump）。
 	// 设置变化低频；tick 经 atomFamily selectAtom 隔离，跨会话 bump 不触发本行重渲染。
 	const flowSettings = useAtomValue(turnFlowSettingsAtom);
+	// GUI 扩展桥：扩展设的折叠思考块标签（ctx.ui.setHiddenThinkingLabel）。
+	// 无贡献时为 undefined，ThinkingBlock 保持原生耗时小字（§7.4 只追加）。
+	const bridgeThinkingLabel = useBridgeThinkingLabel(props.sessionId);
 	const newTurnCollapseTick = useAtomValue(props.sessionId ? newTurnCollapseTickBySessionIdAtomFamily(props.sessionId) : NO_TURN_TICK_ATOM);
 	// 执行过程展开状态跨挂载记忆（run 级）：切会话再切回时恢复手动/流式展开的
 	// 轮次；selectAtom 按 run.id 取值，同会话其它 run 变化不重渲染本行。
@@ -208,7 +212,6 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 		hasFinalAnswer,
 		isLatestRun: props.isLatestRun,
 		expandInterimDuringStream: flowSettings.expandInterimDuringStream,
-		collapsePrevRunsOnNewTurn: flowSettings.collapsePrevRunsOnNewTurn,
 		newTurnCollapseTick,
 		autoCollapseTick: props.autoCollapseTick,
 		onAutoCollapsed: props.onAutoCollapsed,
@@ -344,7 +347,7 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 											if (item.kind === "process-entry") {
 												itemKey = item.entry.id;
 												if (item.entry.kind === "thinking-entry") {
-													content = <ThinkingStep group={item.entry.group} hidden={!stepsVisible} showThinking={props.showThinking} onOpenExternal={props.onOpenExternal} onOpenFile={props.onOpenFile} />;
+													content = <ThinkingStep group={item.entry.group} hidden={!stepsVisible} showThinking={props.showThinking} onOpenExternal={props.onOpenExternal} onOpenFile={props.onOpenFile} sessionId={props.sessionId} hiddenLabel={bridgeThinkingLabel} />;
 												} else if (item.entry.kind === "retry-entry") {
 													// 自动重试过程行：与工具/思考同层，失败红、运行中旋转（见 RetryStep 注释）
 													content = <RetryStep group={{ kind: "retry-group", id: item.entry.id, message: item.entry.message }} hidden={!stepsVisible} />;
@@ -368,6 +371,8 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 														// 折叠区内一律 process：正文已与最终回答同尺寸，process 只负责 my-3 间距。
 														// 无最终回答的末段也要这段间距，否则会贴着上方工具行。
 														variant="process"
+														// 中间回复引用锚点：settled 正文根节点带 data-message-id，划选可解析来源消息。
+														messageId={item.id}
 														onOpenExternal={props.onOpenExternal}
 														onOpenFile={props.onOpenFile}
 													/>
@@ -460,6 +465,10 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 					</div>
 				)}
 			</div>
+			{/* GUI 扩展桥：消息气泡附加落点（ctx.gui.setMessageExtra，key = role）。
+			    TurnRow 渲染的是助手回合，故按 role="assistant" 匹配。
+			    **追加在默认内容下方**，不顶替气泡（§7.1-B / §7.4）。无贡献时不占位。 */}
+			<BridgeGuiSlot sessionId={props.sessionId} slot="message.extra" matchKey="assistant" className="mt-1 flex flex-col gap-1" />
 		</article>
 	);
 }, turnRowPropsEqual);

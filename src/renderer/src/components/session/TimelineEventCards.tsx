@@ -6,6 +6,7 @@ import { formatDuration, formatTime, stripAnsi } from "./TimelineFormat";
 import { Textarea } from "../ui-shadcn/textarea";
 import { StackTrace } from "../ui-shadcn/stack-trace";
 import { ApprovalCard } from "../ui-shadcn/approval-card";
+import { BridgeGuiSlot } from "../bridge/BridgeSlot";
 import { TimelineMarker } from "./TimelineMarker";
 import { LiveDuration } from "./LiveDuration";
 import { MarkdownStream } from "./MarkdownStream";
@@ -14,6 +15,7 @@ import { ReasoningText } from "../agents/loading-states/reasoning-text";
 import { Loader } from "../motion/loader";
 import { useSmoothStream } from "../../utils/useSmoothStream";
 import { SingleLinePreview } from "./SingleLinePreview";
+import { RowText } from "./RowText";
 import { deriveRespondingKind, type RespondingKind } from "./timeline/respondingKind";
 import { getToolPhrase } from "./timeline/toolPhrase";
 import { isRetryStatusMessage } from "./timelineFailureNotice";
@@ -82,6 +84,10 @@ export const ThinkingBlock = memo(
 		isStreaming?: boolean;
 		onOpenExternal: (url: string) => void;
 		onOpenFile?: (path: string) => void;
+		/** 所属会话：GUI 扩展桥的 thinking.extra 落点按它取贡献 */
+		sessionId?: string;
+		/** GUI 扩展桥：ctx.ui.setHiddenThinkingLabel 设的折叠标签（有值时替换耗时小字） */
+		hiddenLabel?: string;
 	}) {
 		const [expanded, setExpanded] = useState(props.defaultExpanded ?? false);
 		// 折叠行的打字机：流式中始终推进（预览吃 displayedContent + 尾部跟随 = 跑马灯）。
@@ -104,7 +110,7 @@ export const ThinkingBlock = memo(
 				// 与工具行一样压扁底距：思考不再是「标题行 + 虚线框」双行块
 				contentClassName="pb-1"
 			>
-				<section className="w-full min-w-0 overflow-hidden rounded-md border-0">
+				<section data-thinking-step="true" className="w-full min-w-0 overflow-hidden rounded-md border-0">
 					{/* 整行可点，结构对齐 ToolCard trigger：图标 + 耗时 + chevron + 折叠预览。 */}
 					<button
 						type="button"
@@ -117,25 +123,33 @@ export const ThinkingBlock = memo(
 				    预览嵌在同一行里，不再给 SingleLinePreview 第二道光带，避免叠扫。 */}
 						{props.isStreaming && <span aria-hidden className="pointer-events-none absolute inset-y-0 left-[-300px] w-[300px] animate-thinking-sweep motion-reduce:animate-none bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--color-bg-app)_55%,transparent),transparent)]" />}
 						<Brain size={16} className="thinking-row-icon shrink-0" aria-hidden="true" />
-						{(hasEnded || props.isStreaming) && props.startedAt && (
-							<small className="shrink-0 text-chat-row tabular-nums text-text-faint">
-								{hasEnded ? (
-									t("thinking.duration", { duration: durationText })
-								) : (
-									// 流式中：思考未结束，用同一「思考了 Xs」文案 + LiveDuration 实时跳动，
-									// 思考结束只是数字冻结，不会出现前缀/文案整体蹦出。
-									<>
-										{t("thinking.durationPrefix")}
-										<LiveDuration startedAt={props.startedAt} isStreaming />
-									</>
-								)}
-							</small>
-						)}
-						{/* chevron 语言对齐工具行：折叠 ChevronRight，展开 ChevronDown */}
-						{expanded ? <ChevronDown size={14} className="shrink-0 text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 text-text-faint" aria-hidden="true" />}
-						{/* 折叠才挂预览：与工具 displayLabel 一样 truncate 在同一行；
-				    展开后正文在下方，行内预览会抢宽度、和打字机重复。 */}
-						{!expanded && <SingleLinePreview text={displayedContent} running={props.isStreaming} showSweep={false} className="min-w-0 flex-[1_1_auto] font-mono text-chat-detail text-text-faint" />}
+						{/* 文本段：「思考了 Xs」（14px）与折叠预览（12px 等宽）必须共基线，否则预览
+						    比左侧文本高约 3px（原理解释见 RowText）。chevron 是盒子，self-center。 */}
+						<RowText className="flex-[1_1_auto]">
+							{/* GUI 扩展桥：ctx.ui.setHiddenThinkingLabel —— 有值时**替换**折叠行的耗时小字（§8.2 A 组）。
+							    这是 pi 的「折叠思考块标签」语义：扩展想换掉这行提示文案。 */}
+							{props.hiddenLabel ? (
+								<small className="shrink-0 text-chat-row text-text-faint">{props.hiddenLabel}</small>
+							) : (hasEnded || props.isStreaming) && props.startedAt ? (
+								<small className="shrink-0 text-chat-row tabular-nums text-text-faint">
+									{hasEnded ? (
+										t("thinking.duration", { duration: durationText })
+									) : (
+										// 流式中：思考未结束，用同一「思考了 Xs」文案 + LiveDuration 实时跳动，
+										// 思考结束只是数字冻结，不会出现前缀/文案整体蹦出。
+										<>
+											{t("thinking.durationPrefix")}
+											<LiveDuration startedAt={props.startedAt} isStreaming />
+										</>
+									)}
+								</small>
+							) : null}
+							{/* chevron 语言对齐工具行：折叠 ChevronRight，展开 ChevronDown */}
+							{expanded ? <ChevronDown size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" />}
+							{/* 折叠才挂预览：与工具 displayLabel 一样 truncate 在同一行；
+							    展开后正文在下方，行内预览会抢宽度、和打字机重复。 */}
+							{!expanded && <SingleLinePreview text={displayedContent} running={props.isStreaming} showSweep={false} className="min-w-0 flex-[1_1_auto] font-mono text-chat-detail text-text-faint" />}
+						</RowText>
 					</button>
 					{expanded && (
 						<div className="relative ml-5 mt-1 mb-2 rounded-b-sm border-l-2 border-border-subtle bg-transparent pl-3 animate-in fade-in duration-100 motion-reduce:animate-none">
@@ -153,6 +167,9 @@ export const ThinkingBlock = memo(
 									{t("thinking.collapse")}
 								</button>
 							</div>
+							{/* GUI 扩展桥：折叠思考块内附加落点（ctx.gui.setThinkingExtra）。
+							 **在默认内容下方追加**，不顶替思考正文（§7.1-B / §7.4）。无贡献时不占位。 */}
+							<BridgeGuiSlot sessionId={props.sessionId} slot="thinking.extra" className="flex flex-col gap-1 pb-1" />
 						</div>
 					)}
 				</section>
@@ -161,7 +178,17 @@ export const ThinkingBlock = memo(
 	},
 	// 外部链接回调通常稳定；文件回调会随分屏栏的 cwd/project 变化，必须参与比较，
 	// 否则展开后的 Markdown 会继续使用旧栏的文件授权上下文。
-	(prev, next) => prev.text === next.text && prev.startedAt === next.startedAt && prev.endedAt === next.endedAt && prev.showThinking === next.showThinking && prev.isStreaming === next.isStreaming && prev.onOpenExternal === next.onOpenExternal && prev.onOpenFile === next.onOpenFile,
+	// 桥新增的 sessionId / hiddenLabel 同样必须参与比较，否则会话切换或扩展改标签后不重渲。
+	(prev, next) =>
+		prev.text === next.text &&
+		prev.startedAt === next.startedAt &&
+		prev.endedAt === next.endedAt &&
+		prev.showThinking === next.showThinking &&
+		prev.isStreaming === next.isStreaming &&
+		prev.onOpenExternal === next.onOpenExternal &&
+		prev.onOpenFile === next.onOpenFile &&
+		prev.sessionId === next.sessionId &&
+		prev.hiddenLabel === next.hiddenLabel,
 );
 
 /**
