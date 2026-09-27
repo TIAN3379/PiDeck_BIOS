@@ -163,7 +163,7 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 	const showSurfaceEmptyState = !hasActiveConversation || (!isConversationLoading && activeMessages.length === 0);
 	const canLoadMoreMessages = canLoadSessionTimelineMore(modernSurfaceState.isStarting, activeMessages.length);
 	// 划选引用：选区落在同一条消息内时在选区上方提供「引用并提问」按钮
-	const { quote: selectionQuote, clear: clearSelectionQuote } = useTimelineSelection(timelineRef);
+	const { quote: selectionQuote, clear: clearSelectionQuote, toolbarRef: selectionToolbarRef } = useTimelineSelection(timelineRef);
 	const activeRuntimeState = runtime?.state;
 	const activeConversationStatus = modernSurfaceState.status;
 	// 只订 live id：思考正文由 ThinkingStep 叶子订阅，避免 50ms 戳醒整条 timeline。
@@ -1020,7 +1020,7 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 			{multiSelectOpen && <MultiSelectModal renderedRuns={reconciledRuns} onClose={() => setMultiSelectOpen(false)} onCopy={copySelectedMessages} />}
 
 			{/* 划选引用浮层：portal 到 body，fixed 定位；空会话起始页无消息不出现 */}
-			{!showSurfaceEmptyState && sessionId && <SelectionToolbar quote={selectionQuote} sessionId={sessionId} onConsume={clearSelectionQuote} />}
+			{!showSurfaceEmptyState && sessionId && <SelectionToolbar quote={selectionQuote} sessionId={sessionId} onConsume={clearSelectionQuote} toolbarRef={selectionToolbarRef} />}
 		</MessageScroller>
 	);
 }

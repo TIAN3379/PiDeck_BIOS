@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useAtomValue, useSetAtom } from "jotai";
 import { Quote } from "lucide-react";
@@ -19,7 +19,7 @@ const TOOLBAR_HEIGHT = 28;
  * 2. 草稿末尾追加 #q<id> token（composer 内渲染为 ❝ 引用 chip）；
  * 3. 清除浏览器选区并聚焦本栏 composer。
  */
-export function SelectionToolbar(props: { quote: TimelineSelectionQuote | null; sessionId: string; onConsume: () => void }) {
+export function SelectionToolbar(props: { quote: TimelineSelectionQuote | null; sessionId: string; onConsume: () => void; toolbarRef: RefObject<HTMLButtonElement | null> }) {
 	const drafts = useAtomValue(sessionDraftByIdAtom);
 	const setDraft = useSetAtom(setSessionDraftAtom);
 	const setQuotes = useSetAtom(setSessionQuotesAtom);
@@ -58,6 +58,7 @@ export function SelectionToolbar(props: { quote: TimelineSelectionQuote | null; 
 
 	return createPortal(
 		<button
+			ref={props.toolbarRef}
 			type="button"
 			// 挂载点标记：useTimelineSelection 的 pointerdown 守卫用它识别「点击浮层自身」，
 			// 避免先收起导致随后的 click 拿不到 quote。改名前先同步两处。
