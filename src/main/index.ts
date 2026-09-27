@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray, Notification } from "electron";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
@@ -22,57 +23,65 @@ import { isDevToolsShortcut, toggleMainWindowDevTools } from "./devTools";
 import { isShortcutInput, refreshShortcutBindings } from "./appShortcuts";
 import { createWindowZoomShortcutHandler } from "./windowZoom";
 import { DEFAULT_DEV_USER_DATA_NAME, isSharedDevBranch, readDevGitBranch, resolveDevUserDataDirName, sanitizeDevBranchSegment } from "./devIsolation";
-import { resolvePackagedUserDataDir } from "./portableUserData";
+import { resolveAppUserDataDir, resolveChannelDevDataDir, resolvePackagedUserDataDir } from "./portableUserData";
+import { readDataEnvDecision, validateStartupDataEnv, writeDataEnvDecision } from "./dataEnv/dataEnvMarker";
+import { registerDataEnvIpc } from "./ipc/dataEnvIpc";
+import { ChannelSwitchService } from "./update/ChannelSwitchService";
+import { registerChannelSwitchIpc } from "./ipc/channelSwitchIpc";
+import { resolveUpdateChannel } from "./update/channelIdentity";
+import { APP_DEEP_LINK_SCHEME } from "./utils/deepLinkScheme";
 import { extractFocusTargetFromArgv } from "./utils/focusTarget";
 import type { Project, StartupWindowMode } from "../shared/types";
+import type { DataEnvMode } from "../shared/types/dataEnv";
 // 使用 ?asset 后缀导入图标，electron-vite 会在构建时将其复制到输出目录并提供正确的运行时路径
 // 这解决了打包后 build/ 目录不在 asar 中导致托盘图标丢失的问题
 import iconPath from "../../build/icon.png?asset";
 
-// 构建标记：npm run dist:win:dev 打包时由 vite define 注入 true（构建期替换，非运行时环境变量）。
+// 构建标记：npm run dist:*:dev 打包时由 vite define 注入 true（构建期替换，非运行时环境变量）。
 declare const __PIDECK_DEV_BUILD__: boolean;
 
-// 开发态（electron-vite dev）或 dev 构建（dist:win:dev）统一使用 -dev 配置目录，
-// 避免与正式版（pi-desktop / phids）的数据、单实例锁和通知归属互相污染。
+// dev 构建（PiDeck Dev 安装包）只影响通知归属（AUMID）与 deep link scheme（pideck-dev://），
+// userData 与正式版**共用** pi-desktop——双通道共用数据目录是刻意决策（2026-09）：
+// 用户在 stable / dev 安装包之间切换不丢 settings / 会话 / 扩展配置。
+// 未打包的 npm run dev 仍隔离到 pi-desktop-dev(±分支后缀)，避免开发调试误写坏真实数据。
 const isDevBuild = !app.isPackaged || __PIDECK_DEV_BUILD__;
 
 // E2E（Playwright 驱动）静默运行：窗口显示但不抢焦点、不最大化铺满屏，
 // 避免打断用户在其他软件的输入。fixture 通过 env PIDECK_E2E=1 标识。
 const isE2E = process.env.PIDECK_E2E === "1";
 
-// 开发态与正式版隔离 userData。
-// 否则 npm run dev 会与已安装的 PiDeck 共用数据/锁，表现为「开发启动被复用到正式版窗口」。
-// 未打包的 npm run dev：功能分支再按 git 分支名拆目录（pi-desktop-dev-<branch>），
-// 避免多个 worktree 同时启动共用 catalog / 单实例锁 / DSH home。main/dev 仍用历史目录。
-// 打包的 dist:win:dev 仍固定 pi-desktop-dev（与脚本约定一致，复用现有开发配置）。
+// userData 决策（三分支判定在 portableUserData.resolveAppUserDataDir，单测覆盖）：
+// - 未打包 npm run dev：功能分支再按 git 分支名拆目录（pi-desktop-dev-<branch>），
+//   避免多个 worktree 同时启动共用 catalog / 单实例锁 / DSH home；main/dev 仍用历史目录。
+// - 打包态（stable 与 dev 通道安装包）：共用历史 %APPDATA%/pi-desktop（便携版 exe 同级 data/）。
 // 必须在读取 settings / 版本单实例锁之前设置。
 const isolateDevByGitBranch = !app.isPackaged;
 const devGitBranch = isolateDevByGitBranch ? readDevGitBranch() : undefined;
 const devUserDataDirName = isolateDevByGitBranch ? resolveDevUserDataDirName(devGitBranch) : DEFAULT_DEV_USER_DATA_NAME;
 const explicitUserDataDir = (isE2E ? process.env.PIDECK_E2E_USER_DATA_DIR?.trim() : undefined) || app.commandLine.getSwitchValue("user-data-dir") || process.argv.find((arg) => arg.startsWith("--user-data-dir="))?.slice("--user-data-dir=".length);
-if (isDevBuild) {
-	// 显式固定目录名：dev 构建的 productName 是 phidsDev，
-	// 默认 userData 会落在 %APPDATA%\PiDeckDev，必须指回 dev 配置目录以复用现有配置。
-	// 例外：命令行显式传入 --user-data-dir（e2e 隔离、多实例调试）时尊重该路径，
-	// 否则 e2e 会读到本机真实开发数据（settings/projects 全部污染测试断言）。
-	if (explicitUserDataDir) {
-		// Chromium accepts this switch independently, but Electron's app storage
-		// APIs need the same path before settings and single-instance state load.
-		app.setPath("userData", explicitUserDataDir);
-	} else {
-		app.setPath("userData", join(app.getPath("appData"), devUserDataDirName));
-	}
-} else if (isE2E && explicitUserDataDir) {
-	// 打包 E2E 必须在真实 app.isPackaged 分支运行，却不能抢占用户同版本实例锁。
-	// 仅测试标记下尊重显式临时 profile；生产发行物仍固定使用历史 pi-desktop 数据目录。
-	app.setPath("userData", explicitUserDataDir);
-} else {
-	// 正式版：安装包仍用历史 %APPDATA%/pi-desktop；Windows 便携 exe 改落到
-	// PORTABLE_EXECUTABLE_DIR/data，避免与安装版抢同一把版本单实例锁
-	// （次实例会 app.exit(0)，用户看到「启动没反应」）。
-	// 必须在读取 settings / 版本单实例锁之前设置。
-	app.setPath("userData", resolvePackagedUserDataDir({ appData: app.getPath("appData") }));
-}
+// 显式目录仅在 dev 态或 E2E 下生效：生产发行物不受外部参数影响，数据目录保持稳定
+// （否则 e2e 会读到本机真实开发数据，settings/projects 全部污染测试断言）。
+const gatedExplicitUserDataDir = explicitUserDataDir && (isDevBuild || isE2E) ? explicitUserDataDir : undefined;
+// —— 数据环境决策（规格 §6 启动序列：ready 前只读不写，保持 setPath 时序）——
+// 只有 dev 通道读决策指针：stable 恒走共用目录，不碰 dev 独立目录。
+// 决策指针与独立数据目录同处（规格 §6）：读到 null = dev 首启未决策，本会话临时落共用目录运行。
+const updateChannel = resolveUpdateChannel();
+const channelDevDataDir = updateChannel === "dev" ? resolveChannelDevDataDir({ appDataDir: app.getPath("appData"), portableExeDir: process.env.PORTABLE_EXECUTABLE_DIR }) : "";
+const devDataMode: DataEnvMode | null = updateChannel === "dev" ? (readDataEnvDecision(channelDevDataDir)?.dataMode ?? null) : null;
+// 共用数据目录：既是 setPath 的 shared 分支，也是数据导入的源目录（与 fallbackSharedDir 同源，规格 §6 单向正式→dev）。
+const fallbackSharedDataDir = resolvePackagedUserDataDir({ appData: app.getPath("appData") });
+app.setPath(
+	"userData",
+	resolveAppUserDataDir({
+		explicitDir: gatedExplicitUserDataDir,
+		unpackagedDevDir: join(app.getPath("appData"), devUserDataDirName),
+		isPackaged: app.isPackaged,
+		channel: updateChannel,
+		devDataMode,
+		channelDevDataDir,
+		fallbackSharedDir: fallbackSharedDataDir,
+	}),
+);
 
 // Linux XWayland 兼容层：仅当桌面宠物启用时才强制 ozone-platform=x11（#108，
 // 强制 XWayland 在部分 GNOME/Wayland 环境会导致主窗口不可见）。
@@ -105,16 +114,20 @@ if (process.platform === "win32") {
 	app.setAppUserModelId(isDevBuild ? devAppId : "com.ayuayue.pi-desktop");
 }
 
-// 注册 pideck:// 自定义协议：系统通知点击（toast activationType="protocol"）通过该协议唤起应用，
+// 注册 deep link 自定义协议：系统通知点击（toast activationType="protocol"）通过该协议唤起应用，
 // 唤起实例的 argv 携带 pideck://session/<id> URL，主进程据此跳转对应会话。
 // 仅 packaged 应用注册：dev 模式跑的是 electron 二进制，注册会把协议关联劫持到 electron.exe，
 // 覆盖已安装正式版的关联；dev 模式下通知点击依赖 Electron 原生 click 事件聚焦即可。
 // 安装包内 electron-builder 的 protocols 配置也会在安装时写入注册表，此处是运行时兜底。
+// dev 通道构建注册 pideck-dev://（安装清单同 scheme）：注册表按 scheme 为键，
+// 两通道同 scheme 会互相抢占关联，点击通知会唤起错误的通道。
 if (app.isPackaged) {
-	app.setAsDefaultProtocolClient("pideck");
+	app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
 }
 
 // 按「应用版本」隔离的单实例：同版本复用窗口，不同版本可并行。
+// 双通道共用 userData（pi-desktop）的前提下，锁文件仍按版本分文件：
+// stable 与 dev 通道版本号不同即可并存；同版本（含同版本的两个通道包）会复用窗口。
 // 不用 Electron requestSingleInstanceLock：它按 userData 全局互斥，会导致 0.6.7 与 0.6.8 无法同开。
 // focus 回调稍后挂到 focusMainWindow（定义在文件后部），避免顶层 TDZ。
 // payload 携带次实例的 argv，可解析「点击系统通知」激活时携带的跳转目标。
@@ -1609,6 +1622,21 @@ async function createWindow() {
 		mainWindow?.webContents.setZoomFactor(settingsStore.get().zoomFactor);
 		// 加载期排队的通知跳转目标补发一次（renderer 挂载后还会主动拉取，幂等兜底）
 		flushPendingFocusTargetOnLoad();
+		// —— 数据环境通知（规格 §6：首帧后与渲染层对齐目录归属）——
+		// dev 打包首启未决策 → 请渲染层弹数据模式选择（本会话临时落共用目录运行）；
+		// 未打包 dev 恒走开发隔离目录，不弹。
+		if (updateChannel === "dev" && app.isPackaged && devDataMode === null) {
+			mainWindow?.webContents.send(ipcChannels.dataEnvDecisionRequired);
+		}
+		// 目录标记与通道匹配校验（存量无标记 → ok 不打扰）：stable 包落在 channel-dev 目录才 mismatch。
+		const markerInDataDir = readDataEnvDecision(app.getPath("userData"));
+		if (markerInDataDir && validateStartupDataEnv(updateChannel, markerInDataDir) === "mismatch") {
+			mainWindow?.webContents.send(ipcChannels.dataEnvMismatchDetected, { dataModeInDir: markerInDataDir.dataMode });
+		}
+		// 共用目录存量标记补写（向后兼容：无标记视为 shared，首启补一次，之后只在缺失时写）。
+		if (updateChannel === "stable" && markerInDataDir === null) {
+			writeDataEnvDecision(app.getPath("userData"), "shared", app.getVersion());
+		}
 	});
 	mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
 		void appLogger.error("app", "Main window load failed", {
@@ -2398,6 +2426,55 @@ function registerIpc() {
 	registerUsageStatsIpc(ipcMain, usageStatsService);
 	// 供应商认证（/login）：同样只做校验/适配，进程与协议在 PiAuthService
 	registerPiAuthIpc(ipcMain, piAuthService);
+	// 数据环境（数据模式决策 / 目录归属校验）：业务在 dataEnvService，handler 只校验/适配。
+	// relaunchApp 复用 restartApp（先停常驻服务 + isQuitting，防止 closeToTray 吞掉 relaunch）；
+	// quitApp 先置 isQuitting，与托盘「退出」菜单同一写法，避免 closeToTray 把退出吞成隐藏到托盘。
+	registerDataEnvIpc({
+		getChannel: () => updateChannel,
+		getDecisionDir: () => channelDevDataDir,
+		getActiveDirectory: () => (devDataMode === "channel-dev" ? "channel-dev" : "shared"),
+		getAppVersion: () => app.getVersion(),
+		relaunchApp: restartApp,
+		quitApp: () => {
+			isQuitting = true;
+			app.quit();
+		},
+		// 数据导入（规格 §6 单向正式→dev）：源 = 共用目录（与 setPath 的 fallbackSharedDir 同源），目标 = dev 独立目录。
+		getSharedDataDir: () => fallbackSharedDataDir,
+		getChannelDevDataDir: () => channelDevDataDir,
+		sendProgress: (progress) => mainWindow?.webContents.send(ipcChannels.dataEnvImportProgress, progress),
+	});
+
+	// 频道切换（跨通道升级，规格 §3）：服务 electron-free，网络/临时目录/启动安装器/退出/推送在此装配。
+	// quitApp 先置 isQuitting，与 dataEnv/托盘「退出」同一写法，防 closeToTray 吞掉退出。
+	const channelSwitchService = new ChannelSwitchService({
+		currentChannel: () => updateChannel,
+		netFetch: (url, init) => net.fetch(url, init),
+		getTempDir: () => app.getPath("temp"),
+		spawnInstaller: (filePath) => {
+			// win：NSIS 安装器 detached 脱离父进程运行，PiDeck 退出后安装流程继续；mac/linux 由系统接管。
+			if (process.platform === "win32") {
+				spawn(filePath, [], { detached: true, stdio: "ignore" }).unref();
+				return;
+			}
+			void shell.openPath(filePath);
+		},
+		quitApp: () => {
+			isQuitting = true;
+			app.quit();
+		},
+		sendToRenderer: (snapshot) => {
+			const win = mainWindow;
+			if (win && !win.isDestroyed()) {
+				win.webContents.send(ipcChannels.channelSwitchStateChanged, snapshot);
+			}
+		},
+		registerQuitCleanup: (name, cleanup) => {
+			quitCleanup.register(name, cleanup);
+		},
+	});
+	// 安装包目录白名单直接用服务的 getInstallerDir()，同源不拼第二份路径。
+	registerChannelSwitchIpc({ service: channelSwitchService, getInstallerDir: () => channelSwitchService.getInstallerDir() });
 
 	if (automationStore && automationScheduler && automationRunCoordinator) {
 		registerAutomationIpc({
@@ -2927,6 +3004,8 @@ function registerIpc() {
 	installAtomgitNoCacheBypass(() => session.fromPartition(UPDATER_PARTITION_NAME, { cache: false }));
 	const updateServiceBase = {
 		settingsStore,
+		// 更新通道（dev/stable，启动时已判定）：dev 强制 GitHub 源 + allowPrerelease（见 UpdateService.applyUpdateSource）。
+		channel: updateChannel,
 		checkPiUpdate: () => extensionManager.checkPiUpdate(),
 		// 模型目录：复用设置页同一检查链路（GitHub main 分支 manifest 比对），结果并入更新快照。
 		checkCatalogUpdate: () => catalogUpdater.checkRemote(),
@@ -2944,7 +3023,7 @@ function registerIpc() {
 	// quitAndInstall 会调用 app.quit；该标记让 closeToTray 放行真正的退出。
 	let updateInstallSetQuitting = false;
 	if (process.platform === "darwin") {
-		const checkMacManualUpdate = createMacManualUpdateChecker();
+		const checkMacManualUpdate = createMacManualUpdateChecker({ channel: updateChannel });
 		updateService = new UpdateService({
 			...updateServiceBase,
 			deliveryMode: "manual",
