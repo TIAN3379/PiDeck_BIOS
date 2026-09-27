@@ -3,6 +3,7 @@ import { memo, useId, useLayoutEffect, useMemo, useState, type ReactNode } from 
 import { getToolName } from "../../../../../shared/fileChanges";
 import { t } from "../../../i18n";
 import { ShimmerText } from "../ShimmerText";
+import { RowText } from "../RowText";
 import type { TurnProcessNode } from "../timeline/groupTurnProcess";
 import { lastToolCategory } from "../timeline/groupTurnProcess";
 import { activityCategoryLabelKey, topActivityKinds, type ActivityCount, type ToolActivityCategory } from "../timeline/toolCategory";
@@ -201,7 +202,9 @@ export const ProcessGroupStep = memo(function ProcessGroupStep(props: ProcessGro
 					<Icon size={14} aria-hidden="true" />
 				</span>
 				{props.running ? (
-					<>
+					/* 文本段：主标签（text-chat-row）与「·」后的 12px 等宽实时详情必须共基线，
+					   否则详情整体高出约 3px、看起来「没纵向居中」（原理解释见 RowText）。 */
+					<RowText>
 						<ShimmerText text={runningLabel} className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" />
 						{detail && (
 							<>
@@ -211,7 +214,7 @@ export const ProcessGroupStep = memo(function ProcessGroupStep(props: ProcessGro
 								<span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-chat-detail font-normal text-text-tertiary">{detail}</span>
 							</>
 						)}
-					</>
+					</RowText>
 				) : (
 					<span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{doneLabel}</span>
 				)}

@@ -15,6 +15,7 @@ import { ReasoningText } from "../agents/loading-states/reasoning-text";
 import { Loader } from "../motion/loader";
 import { useSmoothStream } from "../../utils/useSmoothStream";
 import { SingleLinePreview } from "./SingleLinePreview";
+import { RowText } from "./RowText";
 import { deriveRespondingKind, type RespondingKind } from "./timeline/respondingKind";
 import { getToolPhrase } from "./timeline/toolPhrase";
 import { isRetryStatusMessage } from "./timelineFailureNotice";
@@ -122,29 +123,33 @@ export const ThinkingBlock = memo(
 				    预览嵌在同一行里，不再给 SingleLinePreview 第二道光带，避免叠扫。 */}
 						{props.isStreaming && <span aria-hidden className="pointer-events-none absolute inset-y-0 left-[-300px] w-[300px] animate-thinking-sweep motion-reduce:animate-none bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--color-bg-app)_55%,transparent),transparent)]" />}
 						<Brain size={16} className="thinking-row-icon shrink-0" aria-hidden="true" />
-						{/* GUI 扩展桥：ctx.ui.setHiddenThinkingLabel —— 有值时**替换**折叠行的耗时小字（§8.2 A 组）。
-						    这是 pi 的「折叠思考块标签」语义：扩展想换掉这行提示文案。 */}
-						{props.hiddenLabel ? (
-							<small className="shrink-0 text-chat-row text-text-faint">{props.hiddenLabel}</small>
-						) : (hasEnded || props.isStreaming) && props.startedAt ? (
-							<small className="shrink-0 text-chat-row tabular-nums text-text-faint">
-								{hasEnded ? (
-									t("thinking.duration", { duration: durationText })
-								) : (
-									// 流式中：思考未结束，用同一「思考了 Xs」文案 + LiveDuration 实时跳动，
-									// 思考结束只是数字冻结，不会出现前缀/文案整体蹦出。
-									<>
-										{t("thinking.durationPrefix")}
-										<LiveDuration startedAt={props.startedAt} isStreaming />
-									</>
-								)}
-							</small>
-						) : null}
-						{/* chevron 语言对齐工具行：折叠 ChevronRight，展开 ChevronDown */}
-						{expanded ? <ChevronDown size={14} className="shrink-0 text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 text-text-faint" aria-hidden="true" />}
-						{/* 折叠才挂预览：与工具 displayLabel 一样 truncate 在同一行；
-				    展开后正文在下方，行内预览会抢宽度、和打字机重复。 */}
-						{!expanded && <SingleLinePreview text={displayedContent} running={props.isStreaming} showSweep={false} className="min-w-0 flex-[1_1_auto] font-mono text-chat-detail text-text-faint" />}
+						{/* 文本段：「思考了 Xs」（14px）与折叠预览（12px 等宽）必须共基线，否则预览
+						    比左侧文本高约 3px（原理解释见 RowText）。chevron 是盒子，self-center。 */}
+						<RowText className="flex-[1_1_auto]">
+							{/* GUI 扩展桥：ctx.ui.setHiddenThinkingLabel —— 有值时**替换**折叠行的耗时小字（§8.2 A 组）。
+							    这是 pi 的「折叠思考块标签」语义：扩展想换掉这行提示文案。 */}
+							{props.hiddenLabel ? (
+								<small className="shrink-0 text-chat-row text-text-faint">{props.hiddenLabel}</small>
+							) : (hasEnded || props.isStreaming) && props.startedAt ? (
+								<small className="shrink-0 text-chat-row tabular-nums text-text-faint">
+									{hasEnded ? (
+										t("thinking.duration", { duration: durationText })
+									) : (
+										// 流式中：思考未结束，用同一「思考了 Xs」文案 + LiveDuration 实时跳动，
+										// 思考结束只是数字冻结，不会出现前缀/文案整体蹦出。
+										<>
+											{t("thinking.durationPrefix")}
+											<LiveDuration startedAt={props.startedAt} isStreaming />
+										</>
+									)}
+								</small>
+							) : null}
+							{/* chevron 语言对齐工具行：折叠 ChevronRight，展开 ChevronDown */}
+							{expanded ? <ChevronDown size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" /> : <ChevronRight size={14} className="shrink-0 self-center text-text-faint" aria-hidden="true" />}
+							{/* 折叠才挂预览：与工具 displayLabel 一样 truncate 在同一行；
+							    展开后正文在下方，行内预览会抢宽度、和打字机重复。 */}
+							{!expanded && <SingleLinePreview text={displayedContent} running={props.isStreaming} showSweep={false} className="min-w-0 flex-[1_1_auto] font-mono text-chat-detail text-text-faint" />}
+						</RowText>
 					</button>
 					{expanded && (
 						<div className="relative ml-5 mt-1 mb-2 rounded-b-sm border-l-2 border-border-subtle bg-transparent pl-3 animate-in fade-in duration-100 motion-reduce:animate-none">
