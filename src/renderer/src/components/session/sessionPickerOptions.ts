@@ -1,6 +1,7 @@
 import type { AvailableModel, ModelListReport } from "../../../../shared/types";
 // 下拉列表排序键与配置页 / 落盘顺序共用 shared 比较器（避免两边秩不一致）。
 import { compareModelRows } from "../../../../shared/modelOrder";
+import { resolveModelDisplayName } from "../../../../shared/modelDisplayName";
 import { buildProviderRank } from "../../utils/providerOrder";
 import type { TranslationKey } from "../../i18n";
 
@@ -131,8 +132,7 @@ export function orderProviderGroups(providers: string[], recentProviders?: strin
  * 提供商返回的 id 可能又长又乱，用自定义名称映射更好认；缺失或仅含空白时回退 id。
  */
 export function modelRowName(model: { id: string; name?: string }): string {
-	const name = model.name?.trim();
-	return name ? name : model.id;
+	return resolveModelDisplayName(model.name, model.id);
 }
 
 /**

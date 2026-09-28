@@ -67,8 +67,10 @@ export type ProviderUsageBooster = {
  * - subscription：官方订阅（登录态 OAuth：Codex / xAI，凭据来自 auth.json）；
  * - general：通用 OpenAI 兼容 /usage（端点自定义场景的可选覆盖模板）；
  * - newapi：New API / OneAPI 中转站（需要访问令牌 + 用户 ID）。
+ * - cookie：自研网关网页后台接口（需要登录态 Cookie）。
+ * - volcengine：火山方舟 AK/SK 签名查询（控制面 open.volcengineapi.com）。
  */
-export type UsageProbeTemplateCategory = "balance" | "plan" | "subscription" | "general" | "newapi" | "cookie";
+export type UsageProbeTemplateCategory = "balance" | "plan" | "subscription" | "general" | "newapi" | "cookie" | "volcengine";
 
 /** 声明式模板元数据（渲染层 pills 数据源；纯数据、无密钥）。 */
 export type UsageProbeTemplateMeta = {
@@ -95,7 +97,7 @@ export type UsageProbeProviderConfig = {
 	/** 启动开关。不写 = 自动（内置命中即开、未命中即按未配置处理）。 */
 	enabled?: boolean;
 	/**
-	 * 模板 id："general" | "newapi" | "cookie"（声明式）；内置命中的 provider 可省略
+	 * 模板 id："general" | "newapi" | "cookie" | "volcengine"；内置命中的 provider 可省略
 	 * （自动识别），识别不到时用户必须显式选一个声明式模板。
 	 */
 	template?: string;
@@ -115,6 +117,10 @@ export type UsageProbeProviderConfig = {
 	valuePath?: string;
 	/** Cookie 模板：币种字段路径（可选，如 data.currency）。 */
 	currencyPath?: string;
+	/** 火山方舟模板：Access Key ID（控制台「访问控制 → 密钥管理」的 API Key ID）。 */
+	accessKeyId?: string;
+	/** 火山方舟模板：Secret Access Key；只用于本地派生 HMAC 签名，不写日志与遥测。 */
+	secretAccessKey?: string;
 	/** 超时（秒），默认 10。 */
 	timeoutSecs?: number;
 	/** 自动查询间隔（分钟），默认 5；0 = 不自动。 */
@@ -184,7 +190,7 @@ export type UsageProbeTestInput = {
 	provider: string;
 	/** 配置宿主（缺省 pi）；dsh = 端点走 pi-ai catalog 兜底、凭据从 $DSH_HOME/.credentials.yaml 读。 */
 	backend?: UsageProbeBackend;
-	/** "general" | "newapi" | "cookie" | 内置 templateId（省略 = 自动识别）。 */
+	/** "general" | "newapi" | "cookie" | "volcengine" | 内置 templateId（省略 = 自动识别）。 */
 	template?: string;
 	apiKey?: string;
 	baseUrl?: string;
@@ -194,6 +200,9 @@ export type UsageProbeTestInput = {
 	cookiePath?: string;
 	valuePath?: string;
 	currencyPath?: string;
+	/** 火山方舟模板 AK/SK：与 apiKey 互斥（签名鉴权，不用 Bearer）。 */
+	accessKeyId?: string;
+	secretAccessKey?: string;
 	/** 测试用超时（秒）；缺省 10。 */
 	timeoutSecs?: number;
 };

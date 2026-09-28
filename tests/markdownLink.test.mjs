@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import * as markdownCore from "../src/renderer/src/components/session/MarkdownLinkCore.ts";
 const { remarkLinkifyPaths } = markdownCore;
@@ -163,6 +164,24 @@ test("prose slash lists and bare words stay inert after widening recognition", (
 	assert.equal(isStandaloneFileReference("TCP/IP"), false);
 	assert.equal(isStandaloneFileReference("main"), false);
 	assert.equal(isStandaloneFileReference("xMakefile"), false);
+});
+
+// 线上回归（中文散文被误识别成目录 → 存在性判否 → 灰字）：整段真实回复必须零链接。
+test("Chinese prose paragraphs stay inert end to end", () => {
+	const paragraph = "学术上早就有定论：MSR/Princeton 的 VideoStorm（NSDI'17）就是专门研究这个问题——视频分析算力永远不够，必须靠近似（降分辨率/抽帧）和延迟容忍来在集群上同时服务成千上万条查询。";
+	assert.deepEqual(linkify(paragraph), []);
+	assert.deepEqual(linkify("隐私合规（GDPR/《个保法》，Toronto Sidewalk Labs 就是被社区抵制而夭折）三道墙都过不去。"), []);
+	assert.deepEqual(linkify("1080p @ 4Mbps ≈ 1.3 TB/摄像头/30 天"), []);
+	// 真路径仍然链接化：全 ASCII 多段目录紧贴中文也认
+	assert.deepEqual(linkify("改 src/main/和 utils/ 里的实现"), ["file://src/main/", "file://utils/"]);
+});
+
+// 失效链接的降级形态（组件需要 React 渲染，按仓库既有做法锁源码契约）：
+// file:// 是 remarkLinkifyPaths 自动识别的裸路径，作者从未声明成链接，误识别/幻觉
+// 路径必须按普通正文渲染；无协议 href 才是作者显式写的链接，失效时保留灰字提示。
+test("missing auto-linkified paths degrade to plain text, explicit links keep the gray hint", () => {
+	const source = readFileSync("src/renderer/src/components/session/MarkdownLink.tsx", "utf8");
+	assert.match(source, /pathExists === false[\s\S]{0,200}?isFileLink\s*\?\s*<>\{children\}<\/>\s*:\s*<span[\s\S]{0,40}?className="text-text-tertiary">\{children\}<\/span>/);
 });
 
 test("isLocalPathRef: protocol-less hrefs are local paths, real URLs are not", () => {

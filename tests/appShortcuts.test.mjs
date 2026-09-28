@@ -66,10 +66,15 @@ function input(overrides) {
 	};
 }
 
-test("Windows/Linux 默认：Ctrl+Alt+S 打开设置，F12 开发者工具", () => {
+test("Windows/Linux 默认：Ctrl+Alt+S 打开设置，F12 开发者工具，Ctrl+Shift+M 快捷消息", () => {
 	const { mod } = loadAppShortcuts({ platform: "win32" });
 	assert.equal(mod.isShortcutInput("openSettings", input({ control: true, alt: true })), true);
 	assert.equal(mod.isShortcutInput("toggleDevTools", input({ key: "F12" })), true);
+	// 快捷消息：带 Shift 避开 cycleModel 的 Ctrl+M
+	assert.equal(mod.isShortcutInput("openQuickMessages", input({ key: "m", control: true, shift: true })), true);
+	// 缺 Shift 不算（那是模型循环键）
+	assert.equal(mod.isShortcutInput("openQuickMessages", input({ key: "m", control: true })), false);
+	assert.equal(mod.isShortcutInput("openQuickMessages", input({ key: "m", control: true, shift: true, alt: true })), false);
 	// 缺 Alt / 缺 Ctrl 都不触发
 	assert.equal(mod.isShortcutInput("openSettings", input({ control: true })), false);
 	assert.equal(mod.isShortcutInput("openSettings", input({ alt: true })), false);
@@ -88,6 +93,18 @@ test("macOS 默认：Cmd+, 打开设置，F12 开发者工具", () => {
 	assert.equal(mod.isShortcutInput("openSettings", input({ key: ",", meta: true, shift: true })), false);
 	assert.equal(mod.isShortcutInput("openSettings", input({ key: ".", meta: true })), false);
 	assert.equal(mod.isShortcutInput("toggleDevTools", input({ key: "F12" })), true);
+	// macOS 快捷消息：Cmd+Shift+M（裸 ⌘M 是系统惯例「最小化窗口」，必须带 Shift）
+	assert.equal(mod.isShortcutInput("openQuickMessages", input({ key: "m", meta: true, shift: true })), true);
+	assert.equal(mod.isShortcutInput("openQuickMessages", input({ key: "m", meta: true })), false);
+});
+
+test("主窗口 before-input-event 广播 openQuickMessages（会话定位交给渲染层）", () => {
+	const main = readFileSync("src/main/index.ts", "utf8");
+	// 与 cycleModel/cycleThinking 同模式：主进程只匹配 + 广播，不持有会话上下文
+	assert.match(main, /isShortcutInput\("openQuickMessages", input\)/);
+	assert.match(main, /mainWindow\.webContents\.send\(ipcChannels\.appShortcutTriggered, "openQuickMessages"\)/);
+	// 命中时必须 preventDefault：否则按键会继续落到输入框（Ctrl+Shift+M 在编辑器里的默认行为不可控）
+	assert.match(main, /isShortcutInput\("openQuickMessages", input\)\) \{\s*event\.preventDefault\(\);/);
 });
 
 test("覆盖表生效：自定义 Ctrl+K 后默认键失效，恢复后默认键回来", () => {
@@ -117,6 +134,30 @@ test("开发者工具保持默认 F12 时兼容 Ctrl+Shift+I/J；自定义后兼
 	const mac = loadAppShortcuts({ platform: "darwin" });
 	assert.equal(mac.mod.isShortcutInput("toggleDevTools", input({ key: "F12" })), true);
 	assert.equal(mac.mod.isShortcutInput("toggleDevTools", ctrlShiftI), false);
+});
+
+test("缩放保持默认时兼容 Ctrl++ / 数字键盘；自定义后只认新绑定", () => {
+	const { mod } = loadAppShortcuts({ platform: "win32" });
+	// 默认 Ctrl+= 命中
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "=", control: true })), true);
+	// 等价键：Ctrl+Shift+=（物理键盘上的 Ctrl++）与数字键盘 +（无 Shift）
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "+", control: true, shift: true })), true);
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "+", control: true })), true);
+	assert.equal(mod.isShortcutInput("zoomOut", input({ key: "-", control: true })), true);
+	assert.equal(mod.isShortcutInput("zoomOut", input({ key: "_", control: true, shift: true })), true);
+	// 叠加 Alt / Meta 不算，避免抢 Ctrl+Alt+= 这类组合
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "+", control: true, alt: true })), false);
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "+", control: true, meta: true })), false);
+	// 自定义后等价键与默认键都失效
+	mod.refreshShortcutBindings({ shortcuts: { zoomIn: "Ctrl+9", zoomOut: "Ctrl+0" } });
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "9", control: true })), true);
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "+", control: true, shift: true })), false);
+	assert.equal(mod.isShortcutInput("zoomIn", input({ key: "=", control: true })), false);
+	// macOS 默认 Cmd+= 及其等价键
+	const mac = loadAppShortcuts({ platform: "darwin" });
+	assert.equal(mac.mod.isShortcutInput("zoomIn", input({ key: "=", meta: true })), true);
+	assert.equal(mac.mod.isShortcutInput("zoomIn", input({ key: "+", meta: true, shift: true })), true);
+	assert.equal(mac.mod.isShortcutInput("zoomIn", input({ key: "=", control: true })), false);
 });
 
 test("设置里写入非法覆盖时回退默认；未知快捷键 id 直接忽略", () => {

@@ -90,7 +90,7 @@ export type UsageProbeParse =
 	 * 声明式路径表达不了，注册专用函数解析。目前支持 xai-billing / codex-usage /
 	 * commandcode-credits / kimi-credits。
 	 */
-	| { kind: "custom"; resolver: "xai-billing" | "codex-usage" | "commandcode-credits" | "kimi-credits" };
+	| { kind: "custom"; resolver: "xai-billing" | "codex-usage" | "commandcode-credits" | "kimi-credits" | "volcengine-plan" };
 
 /** 链式预检（如 xAI 需先查 identity 拿 userId 再查 billing）：
  *  先请求预检端点，把响应里 capture.path 的值注入主请求的 capture.header。 */

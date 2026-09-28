@@ -28,7 +28,18 @@ function loadResolver() {
 		{
 			module,
 			exports: module.exports,
-			require: () => ({}),
+			require: (specifier) => {
+				if (specifier === "../../shared/modelDisplayName") {
+					return {
+						createSessionModelPreference: (provider, modelId, modelName) => ({
+							provider,
+							modelId,
+							modelName: typeof modelName === "string" && modelName.trim() ? modelName.trim() : modelId,
+						}),
+					};
+				}
+				return {};
+			},
 		},
 		{ filename: "launchDefaults.ts" },
 	);
@@ -38,7 +49,14 @@ function loadResolver() {
 const resolve = loadResolver();
 
 // vm 独立 realm 里创建的对象原型不同，deepEqual 会误报；JSON 往返归一到宿主 realm。
-const plain = (value) => (value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value);
+const fullPlain = (value) => (value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value);
+// 既有优先级用例只关心 provider/id；显示快照由下方专门用例逐字段断言。
+const plain = (value) => {
+	const normalized = fullPlain(value);
+	if (!normalized || typeof normalized !== "object" || !("modelName" in normalized)) return normalized;
+	const { modelName: _modelName, ...identity } = normalized;
+	return identity;
+};
 
 const OPENAI = { providers: { openai: { models: [{ id: "gpt-5.2" }] } } };
 const MANY = {
@@ -48,6 +66,45 @@ const MANY = {
 		anthropic: { models: [{ id: "claude-opus-4-6" }] },
 	},
 };
+
+test("默认和欢迎页模型都会产出完整名称快照", () => {
+	const models = {
+		providers: {
+			router9: { models: [{ id: "qd/qfmodel", name: " Config alias " }] },
+		},
+	};
+	const configured = resolve({
+		settings: { defaultProvider: "router9", defaultModel: "qd/qfmodel" },
+		models,
+	});
+	assert.deepEqual(fullPlain(configured.model), {
+		provider: "router9",
+		modelId: "qd/qfmodel",
+		modelName: "Config alias",
+	});
+
+	const picked = resolve({
+		settings: {},
+		models,
+		welcomeModel: { provider: "router9", modelId: "qd/qfmodel", modelName: " Selected locally " },
+	});
+	assert.deepEqual(fullPlain(picked.model), {
+		provider: "router9",
+		modelId: "qd/qfmodel",
+		modelName: "Selected locally",
+	});
+
+	const blank = resolve({
+		settings: {},
+		models,
+		welcomeModel: { provider: "router9", modelId: "qd/qfmodel", modelName: "   " },
+	});
+	assert.deepEqual(fullPlain(blank.model), {
+		provider: "router9",
+		modelId: "qd/qfmodel",
+		modelName: "qd/qfmodel",
+	});
+});
 
 test("引导页点选优先于显式默认（用户规则第 1 条），但 configured 标记仍为 true", () => {
 	const result = resolve({

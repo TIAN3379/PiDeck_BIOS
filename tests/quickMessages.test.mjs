@@ -31,9 +31,9 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 
 // ── 出厂清单（resources/quick-messages.default.json） ──────────────────
 
-test("随包出厂清单：含用户点名的四条高频指令，且无重复、不超长、不超上限", () => {
+test("随包出厂清单：含用户点名的高频指令，且无重复、不超长、不超上限", () => {
 	const items = readDefaults().items;
-	for (const item of ["继续", "提交", "推送", "提交推送"]) {
+	for (const item of ["继续", "提交", "推送", "提交推送", "你好，你是什么模型"]) {
 		assert.ok(items.includes(item), `出厂清单缺少「${item}」`);
 	}
 	assert.equal(new Set(items).size, items.length, "出厂清单出现重复条目");
@@ -323,8 +323,10 @@ test("弹框：清单来自配置文件（useQuickMessages），不再订阅 set
 });
 
 test("弹框：每次打开都从磁盘重读（手工编辑配置文件后无需重启应用）", () => {
-	const source = readSource("src/renderer/src/components/session/QuickMessageMenu.tsx");
-	assert.match(source, /onOpenChange=\{[\s\S]{0,200}?if \(next\) void refresh\(\)/, "打开弹框时应重读文件");
+	const menu = readSource("src/renderer/src/components/session/QuickMessageMenu.tsx");
+	// 重读落在 hook 的开合写入口上：点击入口与快捷键入口共用它，两边都会重读
+	assert.match(menu, /useQuickMessagePopover\(\{\s*sessionId: props\.sessionId,\s*refresh:/, "打开时应重读文件");
+	assert.match(readSource("src/renderer/src/hooks/useQuickMessagePopover.ts"), /if \(next\) void refresh\(\)/, "hook 的 setOpen 负责打开时重读");
 	const hook = readSource("src/renderer/src/hooks/useQuickMessages.ts");
 	assert.match(hook, /const refresh = useCallback\(async \(\) => \{/);
 	assert.match(readSource("src/renderer/src/hooks/useQuickMessageEditor.ts"), /await refresh\(\);/, "「重新读取」要真的重读磁盘（同步外部编辑）");
@@ -475,7 +477,73 @@ test("分页：非法页大小收敛为 1 条/页（不会得到 Infinity 页）
 	assert.deepEqual(paginateQuickMessages(["a", "b"], 1, 0).items, ["a"]);
 });
 
-test("分页：页大小与出厂条目数对齐（16 条出厂量正好两页，弹框高度可控）", () => {
+test("分页：页大小固定为 8，出厂清单按实际条数分页", () => {
 	assert.equal(QUICK_MESSAGE_PAGE_SIZE, 8);
-	assert.equal(paginateQuickMessages(readDefaults().items, 1).totalPages, 2);
+	assert.equal(paginateQuickMessages(readDefaults().items, 1).totalPages, Math.ceil(readDefaults().items.length / QUICK_MESSAGE_PAGE_SIZE));
+});
+
+// ── 快捷键呼出（全局 Ctrl/Cmd+Shift+M，键位可在设置页改） ──────────────
+
+const { ownsQuickMessageShortcut } = loadTsCommonJs("src/renderer/src/utils/quickMessageShortcut.ts");
+
+const GUIDE_ID = "renderer:guide-bootstrap";
+
+/** 构造一次快捷键归属判定入参 */
+const owns = (focusedSessionId, sessionId, guideSessionId = GUIDE_ID) => ownsQuickMessageShortcut({ focusedSessionId, sessionId, guideSessionId });
+
+test("快捷键归属：只有聚焦栏响应（分屏时按一次不该弹出多个浮层）", () => {
+	assert.equal(owns("s1", "s1"), true);
+	assert.equal(owns("s1", "s2"), false, "非聚焦栏不得响应，否则分屏会同时弹两个浮层");
+});
+
+test("快捷键归属：无聚焦会话时归引导页（按钮可见却敲不出来的不一致最难排查）", () => {
+	assert.equal(owns(undefined, GUIDE_ID), true);
+	// 无聚焦会话时，非引导页的会话也不响应（例：Tab 全关后布局残留的会话栏）
+	assert.equal(owns(undefined, "s1"), false);
+});
+
+test("快捷键接线：广播 id 从主进程到浮层全程一致（任一处写错就静默失效）", () => {
+	const hook = readSource("src/renderer/src/hooks/useQuickMessagePopover.ts");
+	// 只认自己的 id，且不能误用其它快捷键 id
+	assert.match(hook, /if \(triggered !== "openQuickMessages"\) return;/);
+	assert.match(hook, /desktopApi\.app\.onShortcutTriggered\(\(triggered\) => \{/, "必须订阅主进程广播");
+	assert.match(hook, /ownsQuickMessageShortcut\(/, "必须按聚焦栏去重");
+	// 订阅必须可退订（组件事务要能在卸载时清理，否则向后销毁页面推送会泄漏）
+	assert.match(hook, /return desktopApi\.app\.onShortcutTriggered\(/, "effect 必须返回 unsubscribe");
+});
+
+test("浮层开合：状态与「打开前重读文件」双入口共用同一写入口", () => {
+	const hook = readSource("src/renderer/src/hooks/useQuickMessagePopover.ts");
+	// 打开即重读：快捷键进来与点击进来必须看到同一份磁盘内容
+	assert.match(hook, /if \(next\) void refresh\(\)/);
+	// 切换式开合：呼出类快捷键再按一次应收起
+	assert.match(hook, /setOpen\(!openRef\.current\)/);
+	const menu = readSource("src/renderer/src/components/session/QuickMessageMenu.tsx");
+	assert.match(menu, /useQuickMessagePopover\(\{\s*sessionId: props\.sessionId,\s*refresh:/, "浮层状态由 hook 持有");
+	// 组件里不该再声明开合 state（注释里提 useState 不算，要查真实声明）
+	assert.ok(!/const \[[a-zA-Z]+, set[A-Z]\w*\] = useState/.test(menu), "开合不该再在组件里另起一份 state（会与快捷键状态分叉）");
+});
+
+test("浮层入口：tooltip / aria-keyshortcuts 展示当前生效键位（跟随设置页自定义）", () => {
+	const menu = readSource("src/renderer/src/components/session/QuickMessageMenu.tsx");
+	assert.match(menu, /const \{ bindings, platform \} = useShortcutBindings\(\)/);
+	// 展示用与 ARIA 用必须分开取：直接挂 formatAccelerator 的结果是非法 ARIA 值
+	assert.match(menu, /formatAccelerator\(bindings\.openQuickMessages, platform\)/);
+	assert.match(menu, /toAriaKeyShortcuts\(bindings\.openQuickMessages, platform\)/);
+	assert.match(menu, /aria-keyshortcuts=\{shortcutAria\}/);
+	assert.match(menu, /title=\{triggerTitle\}/);
+});
+
+test("接线：ComposerArea 把本栏 sessionId 传给浮层（快捷键归属判定需要）", () => {
+	assert.match(readSource("src/renderer/src/components/session/ComposerArea.tsx"), /<QuickMessageMenu sessionId=\{props\.sessionId\}/);
+});
+
+test("文案：快捷键设置项中英都有（缺一个设置页就露出 key 名）", () => {
+	for (const locale of ["zh-CN", "en-US"]) {
+		i18n.setI18nLocale(locale);
+		for (const key of ["settings.shortcuts.openQuickMessagesLabel", "settings.shortcuts.openQuickMessagesDesc"]) {
+			const text = i18n.t(key);
+			assert.ok(text && text !== key, `${locale} 缺文案: ${key}`);
+		}
+	}
 });

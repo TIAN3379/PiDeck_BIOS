@@ -44,7 +44,7 @@
   --font-size-caption: 12px;
   --font-size-control: 13px;
   --font-size-body: 14px;
-  --font-size-chat: 15px;
+  --font-size-chat: 16px;
   /*
    * 会话正文行高：无单位倍率，随 --font-size-chat 各档缩放。
    * 旧值散落写成 1.68（15px → 25.2px），段落偏疏、扫描密度低于 Codex/Cursor
@@ -54,6 +54,20 @@
    * 不要对 CJK 正文设负 letter-spacing。
    */
   --line-height-chat: 1.6;
+  /*
+   * 过程层字号：**派生自会话正文**，只分两档（标题 / 详情），不随界面字号变化。
+   * 为什么派生：字号属于「可读性设置」——用户调大正文是因为看不清，那同样看不清的过程行
+   *（组头 / 工具调用 / 思考）也必须跟着变大；过程层的"降权"改由颜色 / 字重承担，不靠缩小字号。
+   * 为什么只有两档：**2px 是能一眼分辨的最小步长**。正文在 14~20 区间里塞不下 3 个互不相同的
+   * 过程档位（正文−2 / −4 就已经触到 12px 下限），所以**徽章并入详情档**，不再设第 4 档——
+   * 旧的四档里有 1px 步长，相邻档位肉眼分不出来，等于给了用户几个"看起来一样"的层级。
+   * max() 是下限保护：小档位下不让标题 / 详情继续缩，任何档位都不低于可读下限。
+   * 行高用无单位倍率，随字号一起缩放（固定 px 行高会在大档位下压扁文字、裁切固定高度的行）。
+   */
+  --font-size-chat-row: max(13px, calc(var(--font-size-chat) - 2px));
+  --font-size-chat-detail: max(12px, calc(var(--font-size-chat) - 4px));
+  --line-height-chat-row: 1.54;
+  --line-height-chat-detail: 1.5;
   --font-size-input: 14px;
   --font-size-title: 16px;
   --font-size-brand: 18px;
@@ -1450,7 +1464,6 @@ select:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg-app);
 }
 /* 三栏面板组：充满标题栏以外的全部空间 */
 .shell-panel-group {
@@ -1564,7 +1577,6 @@ select:focus-visible {
   /* 紧凑靠右上角：每键 36px（原 50px） */
   grid-template-columns: repeat(4, 36px);
   height: var(--window-drag-height);
-  background: var(--color-bg-panel);
   -webkit-app-region: no-drag;
 }
 /* app-region 不继承（见 toaster 注释）：后代必须显式 no-drag，
@@ -2025,12 +2037,6 @@ select:focus-visible {
   font-weight: 500;
 }
 /* 项目行无 .active：选中高亮只挂在会话叶子上。 */
-.project-group > .conversation.project-draggable:first-child {
-  cursor: grab;
-}
-.project-group > .conversation.project-draggable:first-child:active {
-  cursor: grabbing;
-}
 .project-group > .conversation.dragging:first-child {
   opacity: 0.58;
 }
@@ -2650,12 +2656,6 @@ select:focus-visible {
   opacity: 1;
 }
 
-/* 换肤壁纸模式：启用背景图（data-bg-image="on"）时主容器透明，
-   bg 系列 token 的半透明由 App.tsx 注入（覆盖所有面板/输入框，整体协调）；
-   未启用时保持原不透明背景（零回归） */
-:root[data-bg-image="on"] .wechat-shell {
-  background: transparent;
-}
 /* 壁纸模式项目栏文件夹图标底：project-avatar 默认是 muted/panel 混色灰块，
    半透明注入后仍透不干净；透明化后只留 Folder 图标本色。
    选中态（active）的 accent-soft 高亮靠更高特异性保留（不透明化），维持选中区分。
@@ -2788,8 +2788,13 @@ select:focus-visible {
    fill-mode 用 backwards 而非 both：both 会把 to{opacity:1} 永久钉在元素上，
    动画优先级高于普通声明，压掉 disabled 项的 data-[disabled]:opacity-50 置灰（
    表现为右键菜单里的禁用项不显示半透明）；backwards 结束后元素恢复正常声明，
-   由于 to 状态与元素默认值（opacity 1 / transform none）一致，视觉无差异。 */
-.dropdown-stagger > * {
+   由于 to 状态与元素默认值（opacity 1 / transform none）一致，视觉无差异。
+   必须排除 Radix popper 包裹层 [data-radix-popper-content-wrapper]：子菜单
+   （DropdownMenuSubContent 未走 Portal）就挂在菜单内容的 DOM 里，包裹层靠
+   内联 transform: translate3d(x, y, 0) 定位，而动画的 transform 优先级高于内联
+   样式，会被顶成 left:0/top:0 —— 表现为二级菜单先在父菜单左上角闪一下再瞬移
+   到位（父菜单包裹层本身带 transform，正好是它的包含块原点）。 */
+.dropdown-stagger > *:not([data-radix-popper-content-wrapper]) {
   animation: dropdown-stagger-in 180ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 .dropdown-stagger > *:nth-child(1) { animation-delay: 30ms; }
@@ -2819,7 +2824,6 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  background: var(--color-bg-panel);
   overflow: hidden;
 }
 

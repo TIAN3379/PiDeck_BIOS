@@ -79,6 +79,44 @@ test("never linkifies slash lists from prose", () => {
 	}
 });
 
+// 线上回归（2026-09 用户报「斜杠前面的字变灰、像阴影」）：中文散文里的并列斜杠
+// （降分辨率/抽帧、交通流量/车速/违章）与尾斜杠目录局部同形。识别层若放行，
+// 存在性判否后整段会被降级成灰字——这里用真实会话原句锁死「不产生候选」。
+test("never linkifies slash lists from Chinese prose", () => {
+	for (const text of [
+		"必须靠近似（降分辨率/抽帧）和延迟容忍",
+		"2. 事件触发/级联：便宜模型做候选筛选",
+		"（人群/车牌/行为），不是 VLM 逐帧理解",
+		"交通流量/车速/违章、车牌识别",
+		"事后检索（按时间/地点调录像）",
+		"隐私合规（GDPR/《个保法》，Toronto Sidewalk Labs",
+		"你的“主动补证/时间窗/采样帧数/ROI/重复推理”实验",
+		"1080p @ 4Mbps ≈ 1.3 TB/摄像头/30 天",
+		"250+ 路/节点自动分析",
+	]) {
+		assert.deepEqual(matchPlainFilePaths(text), [], text);
+	}
+	// 真路径不受影响：全 ASCII 多段目录可紧贴中文（模型常写 `src/main/和 utils/`），
+	// 单段目录靠空白/句读收尾；带强前缀的中文目录名仍可识别。
+	assert.deepEqual(
+		matchPlainFilePaths("改 src/main/和 utils/ 里的实现").map((m) => m.path),
+		["src/main/", "utils/"],
+	);
+	assert.deepEqual(
+		matchPlainFilePaths("看 docs/，读 Makefile").map((m) => m.path),
+		["docs/", "Makefile"],
+	);
+	assert.deepEqual(
+		matchPlainFilePaths("改 C:\\项目\\源码\\ 里的文件").map((m) => m.path),
+		["C:\\项目\\源码\\"],
+	);
+	// 代码根开头 + 中文目录名仍要识别（收紧不能误伤真路径）；散文并列词首段是中文才排除
+	assert.deepEqual(
+		matchPlainFilePaths("改 src/中文目录/里的文件").map((m) => m.path),
+		["src/中文目录/"],
+	);
+});
+
 // 单段无后缀词与英文单词无法区分 → 一律不识别（`src/main` 只有 1 个斜杠，与 `and/or` 同形）。
 test("never linkifies bare words without extension or path shape", () => {
 	for (const text of ["components 目录", "docs 目录", "改 src/main 目录", "xMakefile 不是", "Makefile.bak 备份", "a.env 不是"]) {

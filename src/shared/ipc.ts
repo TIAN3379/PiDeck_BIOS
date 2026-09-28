@@ -25,6 +25,8 @@ export const ipcChannels = {
 	projectsChooseChatPath: "projects:choose-chat-path",
 	// 设置聊天记录目录并持久化
 	projectsSetChatPath: "projects:set-chat-path",
+	/** 领取 userData 更名（pi-desktop → PiDeck）的一次性迁移提示（消费式：领取后不再返回） */
+	userDataMigrationConsumeNotice: "user-data-migration:consume-notice",
 	editorsList: "editors:list",
 	editorsRedetect: "editors:redetect",
 	editorsUpdate: "editors:update",
@@ -273,6 +275,8 @@ export const ipcChannels = {
 	codexSessionsImport: "codex-sessions:import",
 	claudeSessionsScan: "claude-sessions:scan",
 	claudeSessionsImport: "claude-sessions:import",
+	qoderSessionsScan: "qoder-sessions:scan",
+	qoderSessionsImport: "qoder-sessions:import",
 	openCodeSessionsScan: "opencode-sessions:scan",
 	openCodeSessionsImport: "opencode-sessions:import",
 	zcodeSessionsScan: "zcode-sessions:scan",
@@ -459,6 +463,8 @@ export const ipcChannels = {
 	appNetworkAddresses: "app:network-addresses",
 	appPreferredSystemLanguages: "app:preferred-system-languages",
 	appCheckUpdate: "app:check-update",
+	/** 查询当前构建所属更新通道（stable/dev，编译期判定）。 */
+	appGetChannel: "update:get-channel",
 	/** 手动下载已检测到的新版本（autoDownload 关闭时使用）。 */
 	appDownloadUpdate: "app:download-update",
 	/** 重启并安装已下载的更新（quitAndInstall）。 */
@@ -531,6 +537,9 @@ export const ipcChannels = {
 	appWindowIsMaximized: "app:window-is-maximized",
 	/** 主进程 → 渲染：最大化状态变化（含双击标题栏等非按钮路径） */
 	appWindowMaximizedChanged: "app:window-maximized-changed",
+	/** 主进程 → 渲染：窗口缩放比例变化。缩放快捷键在主进程直接改 zoomFactor
+	 * （见 main/windowZoom.ts），推给渲染层仅为同步设置态（设置页百分比显示）。 */
+	appZoomFactorChanged: "app:zoom-factor-changed",
 	appWindowToggleAlwaysOnTop: "app:window-toggle-always-on-top",
 	/** 读取主窗口当前是否置顶（渲染层初始化置顶按钮态用，避免硬编码 false） */
 	appWindowIsAlwaysOnTop: "app:window-is-always-on-top",
@@ -561,6 +570,25 @@ export const ipcChannels = {
 
 	/** Agent Extension UI 协议：主进程 → 渲染进程，推送扩展的 UI 请求（select/confirm/input/editor） */
 	agentsUiRequest: "agents:ui-request",
+	/**
+	 * GUI 扩展桥：渲染进程 → 主进程，回灌交互事件（select/navigate/input/key/action）。
+	 *
+	 * 命名归 `sessions:*` 而不是 `agents:*`，理由有两条：
+	 * 1. 它与 `sessionsUiResponse` 同族 —— 都是「渲染层把用户对扩展 UI 的操作送回 pi」；
+	 * 2. 入参带 `sessionId + agentId + runtimeGeneration` 三个身份字段，
+	 *    语义上是会话级 runtime 命令（AGENTS.md 硬性要求），不是 agent 直发事件。
+	 * （`agents:*` 在 preload 侧另有「订阅必须进 DIRECT_EMIT_CHANNELS 白名单」的契约，
+	 * 而本通道是 invoke 不是订阅，放错族会误导后来者。）
+	 */
+	sessionsBridgeEvent: "sessions:bridge-event",
+	/**
+	 * GUI 扩展桥：渲染进程 → 主进程，请求桥全量重推一次（规格书 §9.4）。
+	 *
+	 * 与 `sessionsBridgeEvent` 同族：都是「渲染层把需求送回桥」，
+	 * 同样带 `sessionId + agentId + runtimeGeneration` 三个身份字段。
+	 * 主进程只在下一轮桥轮询的响应体里带一个 `resync: true`，不新开路由。
+	 */
+	sessionsBridgeResync: "sessions:bridge-resync",
 	/** 项目信任确认：主进程 → 渲染进程，启动 Agent 前请求用户对含 .pi 资源的项目做信任决策 */
 	projectsTrustRequest: "projects:trust-request",
 	/** 项目信任确认：渲染进程 → 主进程，回传用户的信任选择（trust-remember/trust-session/deny） */
@@ -795,7 +823,32 @@ export const ipcChannels = {
 	voiceTranscriptionGetConfig: "voice-transcription:get-config",
 	voiceTranscriptionSaveConfig: "voice-transcription:save-config",
 	voiceTranscriptionTranscribe: "voice-transcription:transcribe",
+	/** 用一小段静音走一遍当前配置的真实链路，把「凭据/权限/额度」问题在设置页就说清楚。 */
+	voiceTranscriptionTest: "voice-transcription:test",
+	/** 设置页点「显示」时按需取回某一格的明文（入参是密钥字段名，不写日志）。 */
+	voiceTranscriptionRevealSecret: "voice-transcription:reveal-secret",
 	voiceTranscriptionCancel: "voice-transcription:cancel",
+	/**
+	 * 流式识别（豆包流式 2.0）三段式：开流 → 逐帧上推 PCM → 收尾拿终值。
+	 * 帧走 send/on 而非 invoke：200ms 一帧的单向数据不值得每条都等一次 IPC 往返。
+	 */
+	voiceTranscriptionStreamStart: "voice-transcription:stream-start",
+	voiceTranscriptionStreamFrame: "voice-transcription:stream-frame",
+	voiceTranscriptionStreamFinish: "voice-transcription:stream-finish",
+	/** 中间结果推送（订阅式，返回退订）；文本是整段累积值，渲染层整段替换。 */
+	voiceTranscriptionStreamPartial: "voice-transcription:stream-partial",
+	/** 本地 whisper 运行时/模型安装状态（主进程 stat + 哈希锁记录）。 */
+	voiceTranscriptionRuntimeStatus: "voice-transcription:runtime-status",
+	/** 按需下载 whisper-cli 二进制归档（不进安装包）。 */
+	voiceTranscriptionRuntimeInstall: "voice-transcription:runtime-install",
+	/** 按需下载指定 ggml 模型（入参 modelId）。 */
+	voiceTranscriptionModelInstall: "voice-transcription:model-install",
+	/** 删除已下载模型（释放磁盘）。 */
+	voiceTranscriptionModelDelete: "voice-transcription:model-delete",
+	/** 安装进度推送（订阅式，返回退订）。 */
+	voiceTranscriptionRuntimeProgress: "voice-transcription:runtime-progress",
+	/** 取消进行中的运行时/模型下载（同一时刻只有一个安装任务）。 */
+	voiceTranscriptionInstallCancel: "voice-transcription:install-cancel",
 
 	// ===== 应用公告（无服务器拉取） =====
 	/** 渲染层 → 主进程：拉取当前公告快照（主进程返回缓存，不做网络请求） */
@@ -845,4 +898,38 @@ export const ipcChannels = {
 	piAuthLogout: "pi-auth:logout",
 	/** 主进程 → 渲染层：登录流程的事件/提问推送 */
 	piAuthFlowUpdate: "pi-auth:flow-update",
+
+	// ===== 数据环境（stable 共用目录 / dev 独立目录的决策与切换，规格 §6） =====
+	/** 渲染层 → 主进程：查询数据环境状态（决策指针 + 当前生效目录）。 */
+	dataEnvGetInfo: "data-env:get-info",
+	/** 渲染层 → 主进程：写入数据模式决策（只写指针，须重启应用才切换实际数据目录）。 */
+	dataEnvChooseMode: "data-env:choose-mode",
+	/** 渲染层 → 主进程：重启应用（决策生效 / 切换流程收尾）。 */
+	dataEnvRestart: "data-env:restart",
+	/** 渲染层 → 主进程：启动期数据环境不匹配的确认结果（continue / quit）。 */
+	dataEnvConfirmMismatch: "data-env:confirm-mismatch",
+	/** 主进程 → 渲染层：dev 首启未决策，请求数据模式选择。 */
+	dataEnvDecisionRequired: "data-env:decision-required",
+	/** 主进程 → 渲染层：目录标记与当前通道不匹配，请求用户确认。 */
+	dataEnvMismatchDetected: "data-env:mismatch-detected",
+	/** 渲染层 → 主进程：开始从共用目录复制到独立目录（进行中重复调用返回 busy）。 */
+	dataEnvImportStart: "data-env:import-start",
+	/** 渲染层 → 主进程：请求取消进行中的导入（已复制内容保留）。 */
+	dataEnvImportCancel: "data-env:import-cancel",
+	/** 主进程 → 渲染层：导入进度推送（phase: copying/done/cancelled/error）。 */
+	dataEnvImportProgress: "data-env:import-progress",
+	/** 渲染层 → 主进程：读取共用目录的导入预览（迁移清单 + 体积预估）。 */
+	dataEnvGetImportPreview: "data-env:get-import-preview",
+
+	// ===== 通道切换（跨通道查版本 → 下载 → 引导安装，规格 §3） =====
+	/** 渲染层 → 主进程：查询反向通道最新发布（dev↔stable，匿名 GitHub API）。 */
+	channelSwitchQuery: "channel-switch:query",
+	/** 渲染层 → 主进程：下载目标发布安装包到临时目录（进度经 state-changed 推送）。 */
+	channelSwitchDownload: "channel-switch:download",
+	/** 渲染层 → 主进程：启动安装器并退出应用（用户确认后调用；仅限本服务临时目录内路径）。 */
+	channelSwitchLaunch: "channel-switch:launch",
+	/** 渲染层 → 主进程：拉取当前通道切换状态快照（页面挂载/重启用）。 */
+	channelSwitchGetStatus: "channel-switch:get-status",
+	/** 主进程 → 渲染层：通道切换状态机快照推送（querying/available/downloading/ready/error）。 */
+	channelSwitchStateChanged: "channel-switch:state-changed",
 } as const;

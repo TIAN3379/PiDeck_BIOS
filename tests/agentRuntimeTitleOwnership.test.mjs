@@ -45,7 +45,7 @@ test("ordinary pi session_info changes cannot alter a PiDeck runtime title", () 
 test("only a matching auto-title marker for the active runtime updates the title", () => {
 	const { manager, runtime } = createManager();
 	const automaticTitles = [];
-	manager.setAutomaticTitleChangedHandler((agentId, title) => automaticTitles.push({ agentId, title }));
+	manager.setAutomaticTitleChangedHandler((agentId, title, source) => automaticTitles.push({ agentId, title, source }));
 
 	manager.handlePiEvent("agent-live", {
 		type: "extension_ui_request",
@@ -56,7 +56,23 @@ test("only a matching auto-title marker for the active runtime updates the title
 	manager.handlePiEvent("agent-live", { type: "session_info_changed", name: "Generated title" });
 
 	assert.equal(runtime.tab.title, "Generated title");
-	assert.deepEqual(automaticTitles, [{ agentId: "agent-live", title: "Generated title" }]);
+	// 来源必须是 "auto"（终态）：catalog 据此允许它升级首条消息的 fallback（#266）。
+	assert.deepEqual(automaticTitles, [{ agentId: "agent-live", title: "Generated title", source: "auto" }]);
+});
+
+// #266 回归：refreshAutoTitle 的首条消息兜底名来源标记必须是 "fallback"（可被扩展 auto 升级），
+// 而不是终态——否则扩展模型标题会因「先到先锁」被拒，自动命名变成时序抽奖。
+test("a first-message auto title is marked as fallback so the extension can still upgrade it", () => {
+	const { manager, runtime } = createManager();
+	const automaticTitles = [];
+	manager.setAutomaticTitleChangedHandler((agentId, title, source) => automaticTitles.push({ agentId, title, source }));
+	runtime.tab.title = "Untitled session";
+	manager.messages.set("agent-live", [{ id: "m1", agentId: "agent-live", role: "user", text: "帮我看看这个报错", timestamp: 1 }]);
+
+	manager.refreshAutoTitle("agent-live");
+
+	assert.equal(runtime.tab.title, "帮我看看这个报错");
+	assert.deepEqual(automaticTitles, [{ agentId: "agent-live", title: "帮我看看这个报错", source: "fallback" }]);
 });
 
 test("a marker without a complete runtime identity is ignored", () => {

@@ -5,8 +5,27 @@ import { BUILT_IN_EXTENSIONS_OVERLAY_DIR_NAME, readVerifiedArtifact, type BuiltI
 /**
  * PiDeck 内置扩展（随应用 resources 分发，不再复制到 ~/.pi/agent/extensions）。
  * 启动 RPC 时通过可重复的 `--extension/-e` 注入，避免污染用户全局 pi。
+ *
+ * ⚠️ **只列「入口」扩展文件**：被扩展 import 的辅助模块（如 `pi-deck-todo-state.ts`、
+ * `pi-deck-gui-bridge-*.ts`）**不在**本表 —— 它们不通过 `-e` 注入，
+ * 但仍必须进 `extensions-manifest.json`（清单按目录扫描全部 `.ts`），
+ * 否则热更新覆盖层会缺少依赖、pi 报模块找不到。
+ *
+ * ⚠️ 顺序有语义：`pi-deck-gui-bridge` 排在**最前**。
+ * 它负责在 `session_start` 里包装共享的 `ctx.ui`，把 RPC 下被丢弃的声明式
+ * UI 扩展点接回 PiDeck。pi 按 `-e` 顺序加载扩展，桥先加载使**内置批次内部**
+ * 时序无歧义。
+ *
+ * ⚠️ 但这只管内置批次自己：pi 的发现顺序是「项目 → 全局 `~/.pi/agent/extensions`
+ * → `-e` 显式」，全局用户扩展**永远先于**本批次加载/注册，同一次 emit
+ * 的 handler 按注册顺序共享同一个 ctx 执行——所以全局扩展在 `session_start`
+ * 里拿不到 `ctx.gui`，**不能靠调整这里的顺序解决**。
+ * 桥的解法是把 `gui` getter 同时挂上 `ctx.ui` **共享单例**（`ui.gui`）：
+ * 任何加载顺序的扩展，从桥挂载后的任何事件 / 命令 handler 里
+ * `ctx.ui.gui` 都可靠可用（见桥 `docs/extension-points.md` §2.1）。
  */
 export const BUILT_IN_EXTENSIONS = [
+	"pi-deck-gui-bridge.ts",
 	"pi-deck-request-size-recovery.ts",
 	"pi-deck-ask-question.ts",
 	"pi-deck-goal-mode.ts",
@@ -21,7 +40,11 @@ export const BUILT_IN_EXTENSIONS = [
 	"pi-deck-vision.ts",
 ] as const;
 
-export type BuiltInExtensionName = (typeof BUILT_IN_EXTENSIONS)[number];
+/** Internal adapter loaded after user-facing tool policies; not listed in settings UI. */
+export const INTERNAL_BUILT_IN_EXTENSIONS = ["pi-deck-shell-proxy.ts"] as const;
+const ALL_BUILT_IN_EXTENSIONS = [...BUILT_IN_EXTENSIONS, ...INTERNAL_BUILT_IN_EXTENSIONS] as const;
+
+export type BuiltInExtensionName = (typeof BUILT_IN_EXTENSIONS | typeof INTERNAL_BUILT_IN_EXTENSIONS)[number];
 
 export type BuiltInExtensionPathRoots = {
 	/** 开发态 app 根（含 resources/extensions） */
@@ -40,7 +63,7 @@ export type BuiltInExtensionPathRoots = {
 /** 校验 source 是否为允许的内置扩展 basename（防路径穿越）。 */
 export function isBuiltInExtensionName(source: string): source is BuiltInExtensionName {
 	const name = basename(source.trim());
-	return (BUILT_IN_EXTENSIONS as readonly string[]).includes(name) && name === source.trim();
+	return (ALL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name) && name === source.trim();
 }
 
 /**
@@ -116,22 +139,25 @@ export function resolveBuiltInExtensionPath(extensionName: string, roots: BuiltI
 	// 覆盖层优先：热更新写入的版本必须真正参与 -e 注入，否则「更新成功」只是自欺。
 	// 但要整份校验通过才认——半截覆盖层（缺文件/被外部改动）会让 pi 解析不到相对 import。
 	if (roots.overlayDir && overlayArtifact(roots.overlayDir)) {
-		return join(roots.overlayDir, name);
+		const overlayPath = join(roots.overlayDir, name);
+		// 老版本覆盖层可能没有后来新增的内部适配器；回落到随包文件，
+		// 不让一个仍然有效的旧快照把新版本的代理隔离保护静默关掉。
+		if (existsSync(overlayPath)) return overlayPath;
 	}
 	return join(resolveBuiltInExtensionsDir(roots), name);
 }
 
 /**
  * 返回当前应注入到 pi RPC 的内置扩展绝对路径列表。
- * - removedBuiltInExtensions 中的跳过
+ * - removedBuiltInExtensions 中的用户扩展跳过；内部适配器始终保留
  * - 源文件缺失的跳过（打日志由调用方处理）
  * - piRpcNoExtensions 由调用方决定是否整段跳过
  */
 export function listActiveBuiltInExtensionPaths(roots: BuiltInExtensionPathRoots, removedBuiltInExtensions: readonly string[] = []): string[] {
 	const removed = new Set(removedBuiltInExtensions.map((item) => basename(item.trim())).filter(Boolean));
 	const paths: string[] = [];
-	for (const name of BUILT_IN_EXTENSIONS) {
-		if (removed.has(name)) continue;
+	for (const name of ALL_BUILT_IN_EXTENSIONS) {
+		if (name !== "pi-deck-shell-proxy.ts" && removed.has(name)) continue;
 		const fullPath = resolveBuiltInExtensionPath(name, roots);
 		if (!existsSync(fullPath)) continue;
 		paths.push(fullPath);

@@ -77,6 +77,7 @@ function outline(items) {
 			const entry = item.entry;
 			if (entry.kind === "thinking-entry") return `think:${entry.group.text}`;
 			if (entry.kind === "retry-entry") return `retry:${entry.message.meta?.i18nKey}`;
+			if (entry.kind === "error-entry") return `error:${entry.message.meta?.i18nKey}`;
 			return "tool";
 		}
 		if (item.kind === "interim-answer") return `interim:${item.message.text}`;
@@ -609,8 +610,21 @@ test("buildTurnDisplay：retry-group 映射为 retry-entry 过程行，时序原
 	assert.deepEqual(outline(items), ["tool", "retry:diagnostic.retryScheduledAfterDelay", "retry:diagnostic.retryFailed"]);
 	// 重试行是可折叠内容（参与 run 级折叠开关与汇总按钮）
 	assert.equal(hasFoldableContent(items), true);
-	// 汇总统计：工具 1 + 重试 2（思考 0、中间回复 0）
-	assert.deepEqual(buildProcessSummary(items), { toolCount: 1, thinkingCount: 0, interimCount: 0, retryCount: 2 });
+	// 汇总统计：工具 1 + 重试 2（思考 0、中间回复 0、错误 0）
+	assert.deepEqual(buildProcessSummary(items), { toolCount: 1, thinkingCount: 0, interimCount: 0, retryCount: 2, errorCount: 0 });
+});
+
+test("buildTurnDisplay：error-group 映射为 error-entry 过程行，时序原位保持，计入 errorCount", () => {
+	// 429 错误诊断（diagnostic.requestFailed*）与重试行同构：折叠进工具调用，可点开详情。
+	// 场景：工具 → 请求失败诊断 → 最终回答。
+	const errMsg = { id: "e1", agentId: "a", role: "error", text: "请求失败", timestamp: 3, meta: { i18nKey: "diagnostic.requestFailed", errorMessage: "429 Too Many Requests" } };
+	const run = runOf([toolGroup(), { kind: "error-group", id: errMsg.id, message: errMsg }, { kind: "message", message: assistantMessage("最终回答", undefined, "stop") }]);
+	const items = buildTurnDisplay(run, { showThinking: true });
+	assert.deepEqual(outline(items), ["tool", "error:diagnostic.requestFailed", "final:最终回答"]);
+	// 错误行是可折叠内容（参与 run 级折叠开关与汇总按钮）
+	assert.equal(hasFoldableContent(items), true);
+	// 汇总统计：工具 1 + 错误 1，其余为 0
+	assert.deepEqual(buildProcessSummary(items), { toolCount: 1, thinkingCount: 0, interimCount: 0, retryCount: 0, errorCount: 1 });
 });
 
 test("buildTurnDisplay：仅重试行的 run 也有折叠内容；summary retryCount 驱动汇总按钮", () => {

@@ -26,6 +26,8 @@ export type SeedFeishuBot = { id: string; name: string; appId: string };
  *  SessionScanner 扫描后侧栏出现历史会话；打开时不 spawn agent，即「从未启动」状态。 */
 export type SeedSessionFile = {
 	projectPath: string;
+	/** 同一项目多个历史文件时显式区分，默认名称保持 mock-pi 的单文件会话约定。 */
+	fileName?: string;
 	/** JSONL 行（header + message entries），格式与 mock-pi.cjs appendSessionMessages 一致 */
 	entries: unknown[];
 };
@@ -164,7 +166,7 @@ export const test = base.extend<
 				for (const seedFile of sessionFiles) {
 					const sessionsDir = join(seedFile.projectPath, ".pi", "sessions");
 					mkdirSync(sessionsDir, { recursive: true });
-					writeFileSync(join(sessionsDir, encodeSessionDir(seedFile.projectPath) + ".jsonl"), seedFile.entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+					writeFileSync(join(sessionsDir, seedFile.fileName ?? encodeSessionDir(seedFile.projectPath) + ".jsonl"), seedFile.entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 					writeFileSync(join(seedFile.projectPath, ".pi", "settings.json"), JSON.stringify({ sessionDir: ".pi/sessions" }, null, 2));
 				}
 			}

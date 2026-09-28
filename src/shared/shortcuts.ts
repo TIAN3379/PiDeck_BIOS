@@ -18,7 +18,7 @@
  * 见 parseAccelerator。纯函数实现，node --test 可直接单测，不依赖 electron 运行时。
  */
 
-export type ShortcutId = "openSettings" | "toggleDevTools" | "openNewSession" | "openSearch" | "openCommandPalette" | "cycleModel" | "cycleThinking";
+export type ShortcutId = "openSettings" | "toggleDevTools" | "openNewSession" | "openSearch" | "openCommandPalette" | "cycleModel" | "cycleThinking" | "openQuickMessages" | "toggleVoiceRecording" | "zoomIn" | "zoomOut";
 
 /** 设置页分组：general=通用（普通用户常用），dev=开发调试 */
 export type ShortcutGroupId = "general" | "dev";
@@ -90,6 +90,44 @@ export const SHORTCUT_DEFS: readonly ShortcutDef[] = [
 		// （全局拦截会让对话框/设置页失去反向 Tab），因此默认走 Ctrl+T；macOS 避开 Cmd+T
 		// （新标签页惯例）改用 Cmd+Alt+T。
 		defaultAccelerator: { darwin: "Cmd+Alt+T", other: "Ctrl+T" },
+	},
+	{
+		id: "openQuickMessages",
+		group: "general",
+		labelKey: "settings.shortcuts.openQuickMessagesLabel",
+		descriptionKey: "settings.shortcuts.openQuickMessagesDesc",
+		// M = 消息（message），与底栏浮层语义同源。必须带 Shift 避让：Ctrl+M 已被
+		// cycleModel 占用，且 macOS 的裸 ⌘M 是系统惯例（最小化窗口）。
+		// 与其它快捷键的关键差异：本键在输入框聚焦时**仍然生效**——它的用途恰恰是
+		// 「打字打到一半插入口令」，而输入框正是常驻焦点；Ctrl/Cmd+Shift+M 在文本编辑
+		// 与浏览器里都没有既有含义（无「静音标签页」之类冲突），劫持它是安全的。
+		defaultAccelerator: { darwin: "Cmd+Shift+M", other: "Ctrl+Shift+M" },
+	},
+	{
+		id: "toggleVoiceRecording",
+		group: "general",
+		labelKey: "settings.shortcuts.toggleVoiceRecordingLabel",
+		descriptionKey: "settings.shortcuts.toggleVoiceRecordingDesc",
+		// 开始/停止语音录音（需先在设置里开启语音输入）。功能键可裸按且全平台无
+		// 文本编辑/浏览器既有含义，避让已占用区（Ctrl+M/T、Ctrl+Shift+M 等）。
+		defaultAccelerator: { darwin: "F9", other: "F9" },
+	},
+	{
+		id: "zoomIn",
+		group: "general",
+		labelKey: "settings.shortcuts.zoomInLabel",
+		descriptionKey: "settings.shortcuts.zoomInDesc",
+		// 与浏览器/IDE 惯例一致：Cmd/Ctrl+= 放大整个窗口界面（含图标与间距）。
+		// 保持默认时还兼容 Ctrl+Shift+=（即 Ctrl++）与数字键盘 +，见 appShortcuts。
+		defaultAccelerator: { darwin: "Cmd+=", other: "Ctrl+=" },
+	},
+	{
+		id: "zoomOut",
+		group: "general",
+		labelKey: "settings.shortcuts.zoomOutLabel",
+		descriptionKey: "settings.shortcuts.zoomOutDesc",
+		// 与 zoomIn 对称：Cmd/Ctrl+- 缩小；默认时兼容数字键盘 -。
+		defaultAccelerator: { darwin: "Cmd+-", other: "Ctrl+-" },
 	},
 	{
 		id: "toggleDevTools",
@@ -233,6 +271,8 @@ export type ShortcutInput = {
 	alt?: boolean;
 	/** Electron Input.isComposing：输入法组合中的按键不命中，避免 IME 拼音触发快捷键 */
 	isComposing?: boolean;
+	/** Electron Input.isAutoRepeat：长按自动重复。缩放等需要写盘的快捷键据此跳过重复触发 */
+	isAutoRepeat?: boolean;
 };
 
 /** 把 Electron input.key 归一到规范化主键（" "→"space"、"ArrowUp"→"up"、"A"→"a"…）。 */
@@ -370,6 +410,50 @@ export function formatAccelerator(acc: string, platform: string): string {
 	if (parsed.shift) mods.push("Shift");
 	if (parsed.meta) mods.push("Win");
 	return [...mods, key].join("+");
+}
+
+/**
+ * 规范化主键 → aria-keyshortcuts 的主键名（WAI-ARIA 的专用写法）。
+ * 注意不能复用 formatKeyName：它返回给人看的符号（up → "↑"），ARIA 要的是 "ArrowUp"；
+ * 标点则直接用字符本身（"," 就是 ","）。
+ */
+const ARIA_KEY_NAMES: Record<string, string> = {
+	space: " ",
+	tab: "Tab",
+	enter: "Enter",
+	escape: "Escape",
+	backspace: "Backspace",
+	delete: "Delete",
+	insert: "Insert",
+	home: "Home",
+	end: "End",
+	pageup: "PageUp",
+	pagedown: "PageDown",
+	up: "ArrowUp",
+	down: "ArrowDown",
+	left: "ArrowLeft",
+	right: "ArrowRight",
+	plus: "+",
+};
+
+/**
+ * accelerator → aria-keyshortcuts 属性值（读屏软件用）。
+ * 语法必须是「Control/Alt/Shift/Meta 全称 + 主键」：直接拿 formatAccelerator 的结果挂上去
+ * 是无效值（macOS 得到 "⌘⇧M"、Windows 得到 "Ctrl+Shift+M"，两个都不合 ARIA 语法，读屏读不出）。
+ * 无法解析时返回 undefined，调用方应整个省略该属性。
+ */
+export function toAriaKeyShortcuts(acc: string, platform: string): string | undefined {
+	const parsed = parseAccelerator(acc, platform);
+	if (!parsed) return undefined;
+	const parts: string[] = [];
+	// 修饰键顺序不影响含义（ARIA 规范明确说该属性大小写不敏感、未规定修饰键次序），
+	// 这里固定按 DOM Level 3 修饰键枚举顺序（字母序）拼，保证同一组合只有一个确定输出。
+	if (parsed.alt) parts.push("Alt");
+	if (parsed.ctrl) parts.push("Control");
+	if (parsed.meta) parts.push("Meta");
+	if (parsed.shift) parts.push("Shift");
+	parts.push(ARIA_KEY_NAMES[parsed.key] ?? formatKeyName(parsed.key));
+	return parts.join("+");
 }
 
 /**

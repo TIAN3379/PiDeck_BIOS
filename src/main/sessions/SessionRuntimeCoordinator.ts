@@ -20,8 +20,10 @@ import type {
 	SessionCommandErrorCode,
 	SessionCommandResult,
 	SessionRecord,
+	SessionModelPreference,
 	SessionRuntimeEvent,
 	SessionRuntimeInfo,
+	SessionRuntimeModelSelection,
 	SessionRuntimeReplacement,
 	SessionRuntimeTarget,
 	SessionTargetedValue,
@@ -29,7 +31,9 @@ import type {
 	AgentUiBatchQuestion,
 } from "../../shared/types";
 import { buildSessionOriginKey } from "../../shared/sessionIdentity";
+import { createSessionModelPreference } from "../../shared/modelDisplayName";
 import { isRewindCheckpointId, isRewindRestoreScope } from "../../shared/types";
+import type { BridgeEvent } from "../../shared/types/bridge";
 import type { SessionCatalogEntry } from "./SessionCatalog";
 import { sessionFileSizeMb } from "./sessionFileSizeCopy";
 
@@ -40,7 +44,7 @@ export interface SessionCatalogGateway {
 		sessionId: string,
 		patch: {
 			title?: string;
-			model?: { provider: string; modelId: string } | null;
+			model?: SessionModelPreference | null;
 			thinkingLevel?: string | null;
 			permissionPreset?: string | null;
 			backend?: AgentBackend;
@@ -107,6 +111,7 @@ export interface SessionAgentGateway {
 		},
 	): Promise<{ text: string; images?: ImageContent[] } | undefined>;
 	prepareResendFromMessage(agentId: string, messageId: string): Promise<{ text: string; images?: ImageContent[] }>;
+	getRuntimeModelThinkingState?(agentId: string): Promise<SessionRuntimeModelSelection | undefined>;
 	setModel(agentId: string, provider: string, modelId: string): Promise<unknown>;
 	setThinking(agentId: string, level: string): Promise<unknown>;
 	/** 可选能力：DSH 会话权限预设（/permission 命令）；pi 后端不持有。 */
@@ -121,6 +126,16 @@ export interface SessionAgentGateway {
 	getForkMessages(agentId: string): Promise<Array<{ entryId: string; text: string }>>;
 	forkSession(agentId: string, entryId: string): Promise<unknown>;
 	sendUIResponse(agentId: string, requestId: string, response: SessionUiResponseInput["response"]): Promise<unknown> | unknown;
+	/**
+	 * GUI 扩展桥：把渲染层回灌的交互事件排入该 agent 的桥队列（可选能力）。
+	 * 未实现（如 DSH 后端）时返回 false，渲染层静默丢弃。
+	 */
+	pushBridgeEvent?(agentId: string, event: BridgeEvent): boolean;
+	/**
+	 * GUI 扩展桥：请求桥下一次轮询时全量重推一次（§9.4，可选能力）。
+	 * 未实现（如 DSH 后端）时返回 false，渲染层静默忽略。
+	 */
+	requestBridgeResync?(agentId: string): boolean;
 	/** 会话收到 Ask 类 UI 请求时触发桌面通知（由 AgentManager 实现，不再区分会话是否聚焦）
 	 * 参数：agentId（去重/日志）、sessionId（点击跳转目标）、sessionTitle、question（提问内容，可空） */
 	notifyAskPending(agentId: string, sessionId: string, sessionTitle: string, question: string): void;
@@ -208,14 +223,14 @@ function isInteractiveUiMethod(method: unknown): boolean {
 
 /** catalog 里会在激活后被用户改写的偏好；lastApplied 用这份快照判断要不要再 setModel。 */
 type AppliedSessionPreferences = {
-	model?: { provider: string; modelId: string };
+	model?: SessionModelPreference;
 	thinkingLevel?: string;
 	permissionPreset?: string;
 };
 
 function snapshotPreferences(entry: SessionCatalogEntry): AppliedSessionPreferences {
 	return {
-		...(entry.model ? { model: { provider: entry.model.provider, modelId: entry.model.modelId } } : {}),
+		...(entry.model ? { model: createSessionModelPreference(entry.model.provider, entry.model.modelId, entry.model.modelName) } : {}),
 		...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
 		...(entry.permissionPreset ? { permissionPreset: entry.permissionPreset } : {}),
 	};
@@ -262,6 +277,9 @@ export class SessionRuntimeCoordinator {
 			preferences: AppliedSessionPreferences;
 		}
 	>();
+	/** Serializes model/effort changes so a slower earlier get_state cannot overwrite a newer choice. */
+	private readonly preferenceMutationTails = new Map<string, Promise<void>>();
+	private readonly lastRequestedThinkingBySession = new Map<string, { agentId: string; level: string }>();
 
 	constructor(
 		private readonly catalog: SessionCatalogGateway,
@@ -657,59 +675,86 @@ export class SessionRuntimeCoordinator {
 		return this.runTargetCommand(target, (agentId) => this.agents.forkSession(agentId, entryId));
 	}
 
-	setRuntimeModel(target: SessionRuntimeTarget, provider: string, modelId: string): Promise<SessionCommandResult<SessionTargetedValue<AgentRuntimeState>>> {
-		return this.runTargetCommand(target, async (agentId) => {
-			// 先调运行中 Agent；成功后再写 catalog。
-			// 若先写后失败：用户点「取消重启」时 catalog 已是新模型，下次启动会误套上；
-			// 且 ConfirmDialog 点确定也会走 onCancel，回滚与确认会互相踩。
-			// needsRestart 由渲染层在用户确认后再 updateRecord + 重启。
-			await this.agents.setModel(agentId, provider, modelId);
-			const runtimeState = await this.agents.getRuntimeState(agentId);
-			const appliedModel = runtimeState.provider && runtimeState.modelId ? { provider: runtimeState.provider, modelId: runtimeState.modelId } : { provider, modelId };
-			// 模型与思考档位是两项独立的用户选择。DSH/PI 的后端可自行规范化或拒绝
-			// reasoning effort，但中间层不能因目录元数据缺失而改写已保存的思考偏好；
-			// 否则用户切回支持该档位的模型时会丢失原选择。
-			await this.catalog.update(target.sessionId, {
-				model: appliedModel,
-				updatedAt: Date.now(),
-			});
-			void this.logger?.info("session-runtime", "Runtime model changed", {
-				sessionId: target.sessionId,
-				agentId,
-				provider,
-				modelId,
-				requestedProvider: provider,
-				requestedModelId: modelId,
-				appliedProvider: appliedModel.provider,
-				appliedModelId: appliedModel.modelId,
-			});
-			return runtimeState;
-		});
+	setRuntimeModel(target: SessionRuntimeTarget, provider: string, modelId: string, modelName?: string): Promise<SessionCommandResult<SessionTargetedValue<SessionRuntimeModelSelection>>> {
+		return this.runTargetCommand(target, (agentId) =>
+			this.serializePreferenceMutation(target.sessionId, async () => {
+				this.requireBoundTarget(target);
+				const existing = this.catalog.get(target.sessionId);
+				const selectedModel = createSessionModelPreference(provider, modelId, modelName);
+				const last = this.lastAppliedBySession.get(target.sessionId);
+				const alreadyApplied = last?.agentId === agentId && last.preferences.model?.provider === provider && last.preferences.model.modelId === modelId;
+				if (alreadyApplied && existing?.model?.modelName === selectedModel.modelName) return selectedModel;
+
+				// Pi 自己按目标模型默认值、全局默认和当前档位选择实际强度；不要把旧档位再发回去。
+				if (!alreadyApplied) {
+					await this.agents.setModel(agentId, provider, modelId);
+					this.lastRequestedThinkingBySession.delete(target.sessionId);
+				}
+				this.requireBoundTarget(target);
+				const runtimeSelection = await this.agents.getRuntimeModelThinkingState?.(agentId);
+				this.requireBoundTarget(target);
+				const appliedModel = runtimeSelection ? createSessionModelPreference(runtimeSelection.provider, runtimeSelection.modelId, runtimeSelection.modelName) : selectedModel;
+				const effectiveThinkingLevel = runtimeSelection?.thinkingLevel;
+				const result: SessionRuntimeModelSelection = {
+					...appliedModel,
+					...(effectiveThinkingLevel !== undefined ? { thinkingLevel: effectiveThinkingLevel } : {}),
+				};
+				const updated = await this.catalog.update(target.sessionId, {
+					model: appliedModel,
+					...(effectiveThinkingLevel !== undefined ? { thinkingLevel: effectiveThinkingLevel } : {}),
+					updatedAt: Date.now(),
+				});
+				this.lastAppliedBySession.set(target.sessionId, {
+					agentId,
+					preferences: snapshotPreferences(updated),
+				});
+				// 审计契约（tests/sessionLifecycleAudit.test.mjs）要求 provider/modelId 以简写
+				// 字段出现；set_model 精确应用请求的 provider/id，另附 Pi 回报的名称与生效档位。
+				void this.logger?.info("session-runtime", "Runtime model changed", {
+					sessionId: target.sessionId,
+					agentId,
+					provider,
+					modelId,
+					modelName: appliedModel.modelName,
+					thinkingLevel: effectiveThinkingLevel,
+				});
+				return result;
+			}),
+		);
 	}
 
-	setRuntimeThinking(target: SessionRuntimeTarget, level: string): Promise<SessionCommandResult<SessionTargetedValue<AgentRuntimeState>>> {
-		return this.runTargetCommand(target, async (agentId) => {
-			// D13：与 setRuntimeModel 一致——先调运行中 Agent，成功后再写 catalog。
-			// 原先先写 catalog 再调 agent：DSH 无模型选中时 setThinking 只记内存不落 host，
-			// catalog 已更新但 host 未生效，重启/attach 后对账漂移。
-			await this.agents.setThinking(agentId, level);
-			// DSH 的 selectModel 可能规范化或回退 reasoningEffort；runtime state 是
-			// host 接受后的权威值。没有当前模型时 DSH 不会产生 runtime thinking，
-			// 此时保留用户请求值作为下一次启动时应用的 catalog 偏好。
-			const runtimeState = await this.agents.getRuntimeState(agentId);
-			const appliedLevel = runtimeState.thinkingLevel ?? level;
-			await this.catalog.update(target.sessionId, {
-				thinkingLevel: appliedLevel,
-				updatedAt: Date.now(),
-			});
-			void this.logger?.info("session-runtime", "Runtime thinking changed", {
-				sessionId: target.sessionId,
-				agentId,
-				requestedLevel: level,
-				appliedLevel,
-			});
-			return runtimeState;
-		});
+	setRuntimeThinking(target: SessionRuntimeTarget, level: string): Promise<SessionCommandResult<SessionTargetedValue<{ thinkingLevel: string }>>> {
+		return this.runTargetCommand(target, (agentId) =>
+			this.serializePreferenceMutation(target.sessionId, async () => {
+				this.requireBoundTarget(target);
+				const lastRequest = this.lastRequestedThinkingBySession.get(target.sessionId);
+				if (lastRequest?.agentId === agentId && lastRequest.level === level) {
+					return { thinkingLevel: this.catalog.get(target.sessionId)?.thinkingLevel ?? level };
+				}
+
+				await this.agents.setThinking(agentId, level);
+				this.requireBoundTarget(target);
+				const runtimeSelection = await this.agents.getRuntimeModelThinkingState?.(agentId);
+				this.requireBoundTarget(target);
+				const effectiveThinkingLevel = runtimeSelection?.thinkingLevel ?? level;
+				const updated = await this.catalog.update(target.sessionId, {
+					thinkingLevel: effectiveThinkingLevel,
+					updatedAt: Date.now(),
+				});
+				this.lastAppliedBySession.set(target.sessionId, {
+					agentId,
+					preferences: snapshotPreferences(updated),
+				});
+				this.lastRequestedThinkingBySession.set(target.sessionId, { agentId, level });
+				void this.logger?.info("session-runtime", "Runtime thinking changed", {
+					sessionId: target.sessionId,
+					agentId,
+					requestedLevel: level,
+					thinkingLevel: effectiveThinkingLevel,
+				});
+				return { thinkingLevel: effectiveThinkingLevel };
+			}),
+		);
 	}
 
 	/**
@@ -934,6 +979,27 @@ export class SessionRuntimeCoordinator {
 		}
 	}
 
+	/**
+	 * GUI 扩展桥：把渲染层回灌的交互事件排入该 agent 的桥队列。
+	 *
+	 * 与 `respondToUi` 不同，这里**不要求**存在 pending UI 请求 ——
+	 * 桥的交互（点列表项、按按钮）不是 pi 的 ask 请求，而是扩展自己组件的回调。
+	 * 后端未实现该能力（如 DSH）时返回 false。
+	 */
+	pushBridgeEvent(agentId: string, event: BridgeEvent): boolean {
+		return this.agents.pushBridgeEvent?.(agentId, event) ?? false;
+	}
+
+	/**
+	 * GUI 扩展桥：请求桥下一次轮询时全量重推一次（§9.4）。
+	 *
+	 * 渲染层丢过桥状态时调用（换绑定 / 切会话 / 开设置弹窗 / 应用启动）。
+	 * 后端未实现该能力（如 DSH）时返回 false。
+	 */
+	requestBridgeResync(agentId: string): boolean {
+		return this.agents.requestBridgeResync?.(agentId) ?? false;
+	}
+
 	getRuntimeBinding(agentId: string):
 		| {
 				sessionId: string;
@@ -1043,9 +1109,9 @@ export class SessionRuntimeCoordinator {
 			// restart 会先 applyLatestPreferences(新 agent) 再 unbind 旧 agent；
 			// 只清「属于这个旧进程」的记录，别把刚写上的新 agent 快照删掉。
 			const last = this.lastAppliedBySession.get(sessionId);
-			if (last?.agentId === agentId) {
-				this.lastAppliedBySession.delete(sessionId);
-			}
+			if (last?.agentId === agentId) this.lastAppliedBySession.delete(sessionId);
+			const lastRequest = this.lastRequestedThinkingBySession.get(sessionId);
+			if (lastRequest?.agentId === agentId) this.lastRequestedThinkingBySession.delete(sessionId);
 		}
 		this.sessionIdByAgent.delete(agentId);
 	}
@@ -1393,6 +1459,7 @@ export class SessionRuntimeCoordinator {
 		}
 		await this.applyPreferences(latest, agentId);
 		this.lastAppliedBySession.set(sessionId, { agentId, preferences });
+		this.lastRequestedThinkingBySession.delete(sessionId);
 		return true;
 	}
 
@@ -1422,7 +1489,11 @@ export class SessionRuntimeCoordinator {
 					modelId: entry.model.modelId,
 					error: errorMessage(error),
 				});
-				if (modelGoneOnPi) {
+				// 降级路径两侧行为一致：保留 catalog 偏好、沿用当前模型，并**告知用户**。
+				// DSH 不提示的话，引导页点选（已作为显式 model 带入，issue #253）会在 host
+				// 拒绝时静默失效——底栏显示用户选的模型，实际跑的是部署默认。pi 侧本来就有
+				// 会话内系统消息；DSH 的 gateway 实现走 agentsNotice toast。
+				if (modelGoneOnPi || isDsh) {
 					this.agents.notifyModelPreferenceIgnored?.(agentId, entry.model.provider, entry.model.modelId);
 				}
 			}
@@ -1716,6 +1787,20 @@ export class SessionRuntimeCoordinator {
 			throw new SessionRuntimeCommandError("SESSION_RUNTIME_CHANGED", "Session runtime binding changed");
 		}
 		return { ...target };
+	}
+
+	private serializePreferenceMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+		const previous = this.preferenceMutationTails.get(sessionId) ?? Promise.resolve();
+		const current = previous.then(operation, operation);
+		const tail = current.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.preferenceMutationTails.set(sessionId, tail);
+		void tail.then(() => {
+			if (this.preferenceMutationTails.get(sessionId) === tail) this.preferenceMutationTails.delete(sessionId);
+		});
+		return current;
 	}
 
 	private async runTargetCommand<T>(target: SessionRuntimeTarget, operation: (agentId: string) => Promise<T>): Promise<SessionCommandResult<SessionTargetedValue<T>>> {

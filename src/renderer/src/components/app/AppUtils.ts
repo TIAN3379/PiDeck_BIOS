@@ -157,6 +157,19 @@ export type RetryGroupItem = {
 	message: ChatMessage;
 };
 
+/**
+ * 错误诊断过程条目（用户反馈：429 等错误卡并入工具调用，像重试一样）。
+ * agent 忙碌中的 error 诊断消息（请求失败/扩展错误）收进当前 run 的过程序列：
+ * 与工具/思考/重试同层展示，可点开查看 debugDetails 里的具体错误。
+ * run 尚未开始（首轮请求立即失败）时仍保持独立条目（见 groupToolMessages error 分支）。
+ */
+export type ErrorGroupItem = {
+	kind: "error-group";
+	/** 与消息 id 一致，保证 Live upsert（同 id 原地改写）映射稳定 */
+	id: string;
+	message: ChatMessage;
+};
+
 export type ThinkingGroupItem = {
 	kind: "thinking-group";
 	id: string;
@@ -169,7 +182,7 @@ export type ThinkingGroupItem = {
 export type AgentRunItem = {
 	kind: "agent-run";
 	id: string;
-	items: Array<MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem>;
+	items: Array<MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem | ErrorGroupItem>;
 	startedAt: number;
 	endedAt: number;
 	/** 本轮内 ask_question 的用户等待总时长（ms）：由已完成的 ask 工具消息推导，
@@ -181,7 +194,7 @@ export type AgentRunItem = {
 	askPendingAt?: number;
 };
 
-export type RenderMessage = MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem | AgentRunItem;
+export type RenderMessage = MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem | ErrorGroupItem | AgentRunItem;
 
 /**
  * 生图占位消息的渲染身份：generating → error 往往只改 meta.imageGen，
@@ -259,6 +272,10 @@ export function sameAgentRunForRender(previous: AgentRunItem, next: AgentRunItem
 			// 必须按消息本体比较，否则运行中→收敛的状态变化不会触发重绘。
 			return item.id === other.id && sameChatMessageForRender(item.message, other.message);
 		}
+		if (item.kind === "error-group" && other.kind === "error-group") {
+			// 错误诊断条目同样可能同 id 原地 upsert（见重试注释），按消息本体比较。
+			return item.id === other.id && sameChatMessageForRender(item.message, other.message);
+		}
 		if (item.kind === "thinking-group" && other.kind === "thinking-group") {
 			return item.id === other.id && item.text === other.text && item.startedAt === other.startedAt && item.endedAt === other.endedAt;
 		}
@@ -292,7 +309,7 @@ export function groupToolMessages(messages: ChatMessage[], options: { agentBusy?
 	const result: RenderMessage[] = [];
 	let currentTools: ChatMessage[] = [];
 	let currentThinking: ChatMessage[] = [];
-	let currentRun: Array<MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem> = [];
+	let currentRun: Array<MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem | ErrorGroupItem> = [];
 	let runStartedAt = 0;
 	let runEndedAt = 0;
 	/** 当前回合的触发用户消息时间戳，用于替代 assistant/tool 时间戳作为回合起点 */
@@ -431,7 +448,7 @@ export function groupToolMessages(messages: ChatMessage[], options: { agentBusy?
 	// 暂存区：仅用于 ask_question 续答——system 卡片后用户回复时，把卡片前的工具/思考
 	// 暂存起来，等下一条 assistant 到来后合并为同一 agent-run。
 	// 普通「上一轮只有工具/思考、用户又发新问题」场景不得使用此暂存，否则会串轮。
-	let pendingRun: (MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem)[] | null = null;
+	let pendingRun: (MessageItem | ToolGroupItem | ThinkingGroupItem | RetryGroupItem | ErrorGroupItem)[] | null = null;
 
 	for (const message of messages) {
 		if (isThinkingOnly(message)) {
@@ -499,18 +516,22 @@ export function groupToolMessages(messages: ChatMessage[], options: { agentBusy?
 			}
 			result.push({ kind: "message", message });
 		} else if (message.role === "error" && agentBusy) {
-			// agent 忙碌中的 error 诊断卡（如扩展执行错误）：不中断当前 run。
-			// 旧实现把 error 当用户消息处理（flush 当前 run），一段回答会被拆成
-			// 两个 agent-run、错误卡夹在中间——用户体感「错误提示跑上旧卡片」。
-			// 忙碌中的诊断卡作为独立条目先落盘，回答整体保持一个 run（卡在回答上方）。
-			// 注意：空闲态（agentBusy=false）的 error 仍走 else 分支先 flush——
-			// 此时 run 已结束，诊断卡应排在回答之后而不是之前。
-			if (pendingRun) {
+			// agent 忙碌中的 error 诊断消息（请求失败 429 / 扩展执行错误等）：收进当前 run
+			// 的过程序列（与自动重试同策略，用户反馈：429 错误卡应并入工具调用、可点开看详情）。
+			// 旧实现把 error 当独立卡片：位于工具与后续回答之间，与工具时间线割裂且顺序错乱。
+			// 边界：run 尚未开始（如首轮请求立即失败、无任何工具/思考/回答）时保持独立条目
+			// 不硬塞——否则会凭空造出一个只有错误行的空 run；此时后续重试/回答自成新 run。
+			flushTools();
+			if (pendingRun && currentRun.length === 0) {
 				currentRun.push(...pendingRun);
 				pendingRun = null;
-				flushRun();
 			}
-			result.push({ kind: "message", message });
+			if (currentRun.length === 0) {
+				result.push({ kind: "message", message });
+			} else {
+				currentRun.push({ kind: "error-group", id: message.id, message });
+				runEndedAt = message.timestamp;
+			}
 		} else {
 			// 若已有暂存 run（前一次 ask_question 未合并），先 flush 掉
 			if (pendingRun) {

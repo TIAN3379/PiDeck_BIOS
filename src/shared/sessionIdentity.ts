@@ -20,6 +20,19 @@ export function looksLikePiSessionFileStem(title: string): boolean {
 	return /^\d{4}-\d{2}-\d{2}T\d{2}[-:]\d{2}[-:]\d{2}(?:[.,-]\d+)?Z(?:_[A-Za-z0-9-]+)?$/.test(trimmed);
 }
 
+/**
+ * Codex 会话源文件名 stem（rollout-<ISO 时间戳>-<UUID>）。
+ *
+ * Codex jsonl 本身不带会话名，早期导入器拿不到名字时把文件名当标题写进导入产物，
+ * 侧栏显示成 `rollout-2026-07-13T18-44-48-019f5b14-…`（截断后就是一串 ID 样文本）。
+ * 这类标题是占位名：允许后续扫描/重导入用真实标题（Codex 状态库会话名或首条用户消息）覆盖。
+ */
+export function looksLikeCodexSessionFileStem(title: string): boolean {
+	const trimmed = title.replace(/\s+/g, " ").trim();
+	// 完整文件名（含 .jsonl）与 cleanTitle 截断形态（40 字符 + "..."，末段可能被切短）都要命中。
+	return /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{8}(?:-[0-9a-f]+)*(?:\.jsonl)?(?:\.{3})?$/i.test(trimmed);
+}
+
 /** pi-subagents 产物目录名：artifactDir="session"（默认）把子代理输入/输出/转储写进父会话同级目录。 */
 export const SUBAGENT_ARTIFACTS_DIR_NAME = "subagent-artifacts";
 

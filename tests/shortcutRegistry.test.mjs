@@ -189,6 +189,10 @@ test("resolveShortcutBindings：覆盖 ∪ 默认；非法覆盖回退默认；�
 		openCommandPalette: "Ctrl+P",
 		cycleModel: "Ctrl+M",
 		cycleThinking: "Ctrl+T",
+		openQuickMessages: "Ctrl+Shift+M",
+		toggleVoiceRecording: "F9",
+		zoomIn: "Ctrl+=",
+		zoomOut: "Ctrl+-",
 		toggleDevTools: "F12", // 非法裸键回退默认
 	});
 });
@@ -224,6 +228,11 @@ test("平台默认键列表完整（覆盖表之外不丢键）", () => {
 		openCommandPalette: "Ctrl+P",
 		cycleModel: "Ctrl+M",
 		cycleThinking: "Ctrl+T",
+		// 快捷消息：Ctrl+M 已被模型循环占用，必须带 Shift 避让
+		openQuickMessages: "Ctrl+Shift+M",
+		toggleVoiceRecording: "F9",
+		zoomIn: "Ctrl+=",
+		zoomOut: "Ctrl+-",
 		toggleDevTools: "F12",
 	});
 	const mac = loadShortcuts({ platform: "darwin" });
@@ -235,6 +244,37 @@ test("平台默认键列表完整（覆盖表之外不丢键）", () => {
 		// macOS 避开 Cmd+M（最小化窗口）与 Cmd+T（新标签页惯例）
 		cycleModel: "Cmd+Alt+M",
 		cycleThinking: "Cmd+Alt+T",
+		openQuickMessages: "Cmd+Shift+M",
+		toggleVoiceRecording: "F9",
+		zoomIn: "Cmd+=",
+		zoomOut: "Cmd+-",
 		toggleDevTools: "F12",
 	});
+});
+
+test("快捷消息默认键不得与其它快捷键撞键（跨平台逐项对比）", () => {
+	for (const platform of ["win32", "darwin"]) {
+		const s = loadShortcuts({ platform });
+		const bindings = s.resolveShortcutBindings({}, platform);
+		// 撞键会让设置页一打开就报冲突并禁止保存，用户得先手工改键才能用
+		const quick = bindings.openQuickMessages;
+		const collisions = Object.entries(bindings).filter(([id, acc]) => id !== "openQuickMessages" && acc === quick);
+		assert.deepEqual(collisions, [], `${platform} 快捷消息默认键 ${quick} 不应与其它快捷键重复`);
+		// 必须有修饰键（裸 M 会抢正常输入）
+		assert.equal(s.isValidAccelerator(quick, platform), true);
+	}
+});
+
+test("toAriaKeyShortcuts：产出 WAI-ARIA 语法（Control/Meta 全称），非法键返回 undefined", () => {
+	const s = loadShortcuts({ platform: "win32" });
+	assert.equal(s.toAriaKeyShortcuts("Ctrl+Shift+M", "win32"), "Control+Shift+M");
+	assert.equal(s.toAriaKeyShortcuts("Ctrl+Alt+S", "win32"), "Alt+Control+S");
+	assert.equal(s.toAriaKeyShortcuts("Cmd+Shift+M", "darwin"), "Meta+Shift+M");
+	assert.equal(s.toAriaKeyShortcuts("Ctrl+Alt+Shift+K", "win32"), "Alt+Control+Shift+K");
+	// 不能复用展示用的 formatAccelerator：macOS 会得到 "⌘⇧M"，那不是合法 ARIA 值
+	assert.equal(s.toAriaKeyShortcuts("F12", "win32"), "F12");
+	// 命名键要 ARIA 拼写（ArrowUp 而不是展示用的 "↑"）
+	assert.equal(s.toAriaKeyShortcuts("Alt+Up", "win32"), "Alt+ArrowUp");
+	// 无法解析时返回 undefined（调用方整个省略属性，而不是挂非法值）
+	assert.equal(s.toAriaKeyShortcuts("Hyper+S", "win32"), undefined);
 });

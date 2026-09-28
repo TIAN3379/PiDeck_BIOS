@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.7.7--beta-blue)
+![Version](https://img.shields.io/badge/version-0.7.7-blue)
 
 <!-- star-history:start -->
 <picture>
@@ -42,7 +42,7 @@
   - [📑 Table of Contents](#-table-of-contents)
   - [✨ Highlights](#-highlights)
   - [📋 Changelog](#-changelog)
-    - [v0.7.6 Release Highlights](#v076-release-highlights)
+    - [v0.7.7 Release Highlights](#v077-release-highlights)
   - [🧩 Features](#-features)
     - [Workspace & Projects](#workspace--projects)
     - [Sessions & Conversation](#sessions--conversation)
@@ -81,9 +81,9 @@
 
 ## 📋 Changelog
 
-> **Latest: v0.7.7-beta** (2026-09-21)
+> **Latest: v0.7.7** (2026-09-22)
 
-### v0.7.7-beta Release Highlights
+### v0.7.7 Release Highlights
 - 🚀 **Search workspace files by name (#215)**
 - 🚀 **Import sessions from another directory (recover history after a move or rename)**
 - 🚀 **Import external resources (MCP / skills / prompt templates)**

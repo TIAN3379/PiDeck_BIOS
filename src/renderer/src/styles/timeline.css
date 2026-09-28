@@ -157,36 +157,121 @@
   display: flex;
   flex-direction: column;
 }
+/*
+ * beUI AgentActivity 同款信息架构：左侧身份图标，中间「过程」标题 + 统计轨迹，
+ * 右侧是展开态确认标记。比单行长文案更像一个可扫描的 activity ledger，
+ * 统计数量变化时不会让整句中文重新排版。
+ */
 .execution-summary-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 26px;
-  padding: 0 12px;
+  min-height: 32px;
+  max-width: min(100%, 420px);
+  padding: 3px 7px 3px 5px;
   border: 1px solid var(--color-border-subtle);
-  /* 与其他按钮（shadcn rounded-md）同一圆角档位，不再用全圆 pill */
   border-radius: var(--radius-md);
   background: var(--color-chat-card-bg);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-chat-detail);
   font-weight: 500;
-  line-height: var(--line-height-caption);
+  line-height: var(--line-height-chat-detail);
   cursor: pointer;
   text-align: left;
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease,
-    color 0.15s ease;
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease;
   align-self: flex-start;
 }
 .execution-summary-toggle:hover {
   color: var(--color-text-primary);
   border-color: var(--color-border-strong);
   background: var(--color-bg-hover);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+.execution-summary-toggle:active {
+  transform: scale(0.99);
 }
 .execution-summary-toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 2px;
+}
+.execution-summary-leading {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.execution-summary-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg-muted) 72%, transparent);
+  color: var(--color-text-tertiary);
+}
+.execution-summary-chevron {
+  display: inline-flex;
+  color: var(--color-text-faint);
+  transition: color 0.15s ease;
+}
+.execution-summary-toggle:hover .execution-summary-chevron {
+  color: var(--color-text-secondary);
+}
+.execution-summary-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+.execution-summary-title {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.execution-summary-stats {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.execution-summary-stat {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 82%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg-muted) 60%, transparent);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
+}
+.execution-summary-stat.is-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 9%, transparent);
+  color: var(--color-warning);
+}
+.execution-summary-stat.is-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 28%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 9%, transparent);
+  color: var(--color-danger);
+}
+.execution-summary-state {
+  display: inline-flex;
+  width: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-success);
 }
 .execution-summary-details {
   position: relative;
@@ -208,8 +293,8 @@
   border: 0;
   background: transparent;
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
   cursor: pointer;
   align-self: flex-start;
   opacity: 0.55;
@@ -412,14 +497,14 @@
 .tool-activity-copy .tool-activity-name {
   overflow: hidden;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-chat-detail);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tool-activity-copy span {
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-chat-detail);
 }
 .tool-activity-pulse {
   display: inline-flex;
@@ -565,8 +650,8 @@
    与正文的差异主要由 tertiary 浅色承担：颜色浅一档已足够把思考退到回答之后。 */
 [data-marker-kind="thinking"] .markdown-body,
 .thinking-card.markdown-body {
-  font-size: var(--font-size-control);
-  line-height: var(--line-height-control);
+  font-size: var(--font-size-chat-row);
+  line-height: var(--line-height-chat-row);
   font-weight: 350;
 }
 /* 流式思考卡片：实时展示推理过程 */
@@ -591,7 +676,7 @@
   /* 无外框融入消息流：不设 border/背景/padding，仅保留行内间距 */
   margin: 0;
   padding: 0;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-chat-row);
   color: var(--color-text-secondary);
   line-height: 1.2;
 }
@@ -600,7 +685,10 @@
   line-height: 1.2;
 }
 
-/* ── 四种状态变体：只差异颜色，容器尺寸不变，避免布局跳动 ── */
+/* ── 状态变体：只差异颜色，容器尺寸不变，避免布局跳动 ──
+   starting / executing / compacting 用警告色（后台在忙、等待时长不确定）；
+   thinking / responding 不写规则，继承容器基础色（模型正常输出中）；waiting 用最弱三级色。
+   新增 kind（如 thinking）不写规则即继承基础色，这是有意的默认分支。 */
 
 /* 状态色只作用于前置指示器（Loader 用 currentColor）与文字基调；无框后不再有边框/背景色 */
 .responding-indicator[data-kind="starting"],
@@ -769,9 +857,9 @@
   background: color-mix(in srgb, var(--color-tool) 8%, transparent);
   color: var(--color-tool);
   font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-chat-detail);
   font-weight: 600;
-  line-height: var(--line-height-micro);
+  line-height: var(--line-height-chat-detail);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
@@ -843,9 +931,9 @@ body.ask-dialog-open .ask-card-preview {
   border-radius: 999px;
   background: var(--color-chat-control-bg);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-chat-detail);
   font-weight: 500;
-  line-height: var(--line-height-caption);
+  line-height: var(--line-height-chat-detail);
   transition: none;
 }
 .ask-question-card-tool-inner .ask-question-card-option-item.selected {
@@ -863,7 +951,7 @@ body.ask-dialog-open .ask-card-preview {
   border-radius: 0;
   background: transparent;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--font-size-chat-detail);
   font-weight: 700;
   color: var(--color-success);
   transition: none;
@@ -880,15 +968,15 @@ body.ask-dialog-open .ask-card-preview {
   min-width: 0;
 }
 .ask-question-card-tool-inner .ask-question-card-option-label {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
   color: inherit;
   font-family: var(--font-family-base);
   font-weight: 500;
 }
 .ask-question-card-tool-inner .ask-question-card-option-desc {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
   color: var(--color-text-tertiary);
   font-weight: 400;
 }
@@ -901,8 +989,8 @@ body.ask-dialog-open .ask-card-preview {
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
   background: var(--color-chat-card-bg);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
   color: var(--color-chat-link);
   font-weight: 700;
 }
@@ -938,7 +1026,7 @@ body.ask-dialog-open .ask-card-preview {
   border-radius: 50%;
   background: var(--color-bg-muted);
   color: var(--color-text-tertiary);
-  font: 11px/1 var(--font-family-business);
+  font: var(--font-size-chat-detail)/1 var(--font-family-business);
 }
 .ask-question-card-result-copy {
   display: flex;
@@ -954,16 +1042,16 @@ body.ask-dialog-open .ask-card-preview {
 }
 .ask-question-card-result-question {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
 }
 .ask-question-card-result-answer {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
 }
 .ask-question-card-result-answer.answered {
   color: var(--color-accent);
@@ -975,7 +1063,7 @@ body.ask-dialog-open .ask-card-preview {
 .ask-question-card-tool-inner .ask-question-card-title .ask-question-card-status {
   margin-left: auto;
   color: var(--color-accent);
-  font: 11px/1 var(--font-family-business);
+  font: var(--font-size-chat-detail)/1 var(--font-family-business);
   font-weight: 500;
 }
 
@@ -996,7 +1084,7 @@ body.ask-dialog-open .ask-card-preview {
   border-radius: var(--radius-sm);
   background: var(--color-chat-control-bg);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-chat-row);
   font-weight: 500;
   line-height: var(--line-height-body);
   cursor: pointer;
@@ -1139,24 +1227,24 @@ body.ask-dialog-open .ask-card-preview {
 .ask-inline-bar .ask-inline-bar-option {
   min-height: 26px;
   padding: 4px 10px;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
 }
 .ask-inline-bar input {
   height: 32px;
   min-height: 32px;
   padding: 0 8px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-chat-detail);
 }
 .ask-inline-bar textarea {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-chat-detail);
+  line-height: var(--line-height-chat-detail);
 }
 .ask-inline-bar .ask-inline-bar-submit-btn {
   min-height: 32px;
   height: 32px;
   padding: 0 10px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-chat-detail);
 }
 
 /* 收起状态工具组里的 skill chip */

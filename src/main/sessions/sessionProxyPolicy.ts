@@ -26,6 +26,9 @@ export const PROXY_BYPASS_ENV_KEYS = ["NO_PROXY", "no_proxy"] as const;
  * LLM 客户端用 globalThis.fetch，因此不设此开关时，PiDeck 注入的代理 env 对 DSH 完全无效。
  */
 export const NODE_USE_ENV_PROXY = "NODE_USE_ENV_PROXY";
+/** 标记当前 pi 进程的代理 env 由 PiDeck 注入；内置 shell 隔离扩展据此只剥离 agent 命令的代理。 */
+export const PIDECK_PI_PROXY_SCOPE = "PIDECK_PI_PROXY_SCOPE";
+export const PIDECK_PI_PROXY_SCOPE_MODEL_ONLY = "model-only";
 
 /**
  * DSH host fork env patch：set 为注入键值，unset 为从继承环境剥离的键。
@@ -304,5 +307,8 @@ export function buildPiProxyEnvPatch(settings: (PiProxyModeSettings & { piProxyB
 		for (const key of PROXY_BYPASS_ENV_KEYS) patch[key] = bypass;
 	}
 	patch[NODE_USE_ENV_PROXY] = "1";
+	// 代理只为 pi 自身的模型/API 请求服务；内置 shell 隔离扩展用该标记
+	// 在每次 bash/PowerShell 工具执行时剥离代理，避免 agent 命令共用代理出口配额。
+	patch[PIDECK_PI_PROXY_SCOPE] = PIDECK_PI_PROXY_SCOPE_MODEL_ONLY;
 	return patch;
 }

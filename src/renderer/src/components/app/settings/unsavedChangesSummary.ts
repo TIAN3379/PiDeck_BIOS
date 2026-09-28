@@ -60,7 +60,7 @@ const FIELD_CATALOG: readonly FieldCatalogEntry[] = [
 	{ field: "linkOpenMode", tab: "common", itemKey: "settings.linkOpenMode" },
 	{ field: "workspaceContentOpenMode", tab: "common", itemKey: "settings.workspaceContentOpenMode" },
 	{ field: "expandInterimDuringStream", tab: "common", itemKey: "settings.expandInterimDuringStream" },
-	{ field: "collapsePrevRunsOnNewTurn", tab: "common", itemKey: "settings.collapsePrevRunsOnNewTurn" },
+	{ field: "processGroupDisplay", tab: "common", itemKey: "settings.processGroupDisplay" },
 	// 快捷消息不在这里：它存在独立配置文件、改完即时落盘，不属于本弹框的草案（见 QuickMessagesSetting）
 	{ field: "idleAgentAutoRelease", tab: "common", itemKey: "settings.idleAgentAutoRelease" },
 	{ field: "idleAgentKeepCount", tab: "common", itemKey: "settings.idleAgentKeepCount" },
@@ -69,6 +69,7 @@ const FIELD_CATALOG: readonly FieldCatalogEntry[] = [
 	{ field: "askNotificationEnabled", tab: "notification", itemKey: "settings.askNotification" },
 	{ field: "agentCountReminderEnabled", tab: "notification", itemKey: "settings.agentCountReminder" },
 	{ field: "announcementNotificationEnabled", tab: "notification", itemKey: "settings.announcementNotification" },
+	{ field: "toastDurationMs", tab: "notification", itemKey: "settings.toastDuration" },
 	{ field: "startupWindowMode", tab: "common", itemKey: "settings.startupWindowMode" },
 	{ field: "closeToTray", tab: "common", itemKey: "settings.closeToTray" },
 	{ field: "singleInstance", tab: "common", itemKey: "settings.singleInstance" },
@@ -92,9 +93,12 @@ const FIELD_CATALOG: readonly FieldCatalogEntry[] = [
 	{ field: "fontFamilyMonoCustom", tab: "appearance", itemKey: "settings.fontFamilyMonoCustomField" },
 	{ field: "chatContentWidthPct", tab: "appearance", itemKey: "settings.contentWidthPct" },
 	{ field: "contentMaxWidth", tab: "appearance", itemKey: "settings.contentWidthPct" },
+	{ field: "navigationMode", tab: "appearance", itemKey: "settings.navigationMode" },
 	{ field: "sessionTabMaxWidth", tab: "appearance", itemKey: "settings.sessionTabMaxWidth" },
 	{ field: "useNativeTitleBar", tab: "appearance", itemKey: "settings.nativeTitleBar" },
 	{ field: "showNativeMenu", tab: "appearance", itemKey: "settings.nativeMenu" },
+	// 功能模块开关组共用一个数组字段，关闭确认里合成一项
+	{ field: "hiddenModules", tab: "appearance", itemKey: "settings.modules.title" },
 
 	{ field: "piProxyEnabled", tab: "proxy", itemKey: "settings.enablePiProxy" },
 	{ field: "piProxyUrl", tab: "proxy", itemKey: "settings.proxyUrl" },

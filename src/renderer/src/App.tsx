@@ -1,3 +1,8 @@
+import { Button } from "./components/ui-shadcn/button";
+import { NoticeHistoryDialog } from "./components/ui-shadcn/notice-history-dialog";
+import { useSessionNavigation } from "./hooks/useSessionNavigation";
+import { WorkbenchFileTabs } from "./components/workspace/WorkbenchFileTabs";
+import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useAtomValue, useSetAtom, useStore } from "jotai";
 import { applyAppearanceAttributes, toggleThemeMode } from "./themeAppearance";
@@ -22,14 +27,14 @@ import {
 	RefreshCw,
 	Fingerprint,
 } from "lucide-react";
-import { showNotice, type NoticeKind } from "./utils/notice";
+import { configureNoticeDefaults, showNotice, type NoticeKind } from "./utils/notice";
 import { copyTextWithCopiedNotice } from "./utils/clipboardNotice";
 import { sessionHistoryUnavailableState } from "./utils/sessionHistoryAvailability";
 import { buildSettingsCommands, type PaletteCommand } from "./utils/commandPaletteCommands";
 import { CommandPalette } from "./components/overlays/CommandPalette";
 import { CommandPaletteOnboarding, markCommandPaletteOnboardingSeen } from "./components/overlays/CommandPaletteOnboarding";
 import { desktopApi as api, isLanWeb, missingElectronPreload } from "./desktopApi";
-import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, imageGenConfigAtom, dshRuntimeStatusAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom } from "./atoms";
+import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, hiddenModulesAtom, imageGenConfigAtom, dshRuntimeStatusAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom } from "./atoms";
 import { resolveBusySendDelivery } from "../../shared/busySendDelivery";
 import { SESSION_TAB_MAX_WIDTH_DEFAULT } from "../../shared/sessionTabWidth";
 import { FILE_TREE_ABSOLUTE_MAX_DEPTH } from "../../shared/fileTree";
@@ -66,7 +71,7 @@ import { useSessionHistoryMutations } from "./hooks/useSessionHistoryMutations";
 import { useUserMessageEditReplay } from "./hooks/useUserMessageEditReplay";
 import { PromptDeliveryUnknownError } from "./utils/promptErrors";
 import { isLiveRuntimeStatus, requireSessionCommand, resolveSessionRunState, sessionRunCapabilities, SessionCommandFailure, sessionCommandFailureToast, toSessionRuntimeTarget, type SessionRunCapabilities, type SessionRunAction } from "./utils/sessionCommands";
-import { GUIDE_BOOTSTRAP_SESSION_ID, readWelcomeBackendPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, resolveChatSessionBootstrap } from "./utils/chatSessionBootstrap";
+import { GUIDE_BOOTSTRAP_SESSION_ID, readWelcomeBackendPreference, readWelcomeDshModelPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, resolveChatSessionBootstrap, resolveGuidePageBackend } from "./utils/chatSessionBootstrap";
 import { detectRendererPlatform } from "./lib/detectRendererPlatform";
 import { msUntilNextThemeBoundary } from "../../shared/themeSchedule";
 
@@ -74,6 +79,10 @@ import { usePiUpdate } from "./hooks/usePiUpdate";
 import { useProviderUsageStartupWarmup } from "./hooks/useProviderUsage";
 
 import { useBackgroundUpdateWatch } from "./hooks/useBackgroundUpdateWatch";
+import { useChannelSwitchWatch } from "./hooks/useChannelSwitchWatch";
+import { useDataEnvWatch } from "./hooks/useDataEnvWatch";
+import { DataModeChoiceDialog } from "./components/app/DataModeChoiceDialog";
+import { DataEnvMismatchDialog } from "./components/app/DataEnvMismatchDialog";
 import { useProjectSync } from "./hooks/useProjectSync";
 import {
 	agentInventoryAtom,
@@ -98,6 +107,7 @@ import {
 	sessionSummariesByProjectIdAtomFamily,
 	sessionDraftByIdAtom,
 	promoteSessionComposerStateAtom,
+	promoteSessionMessagesCacheAtom,
 	setSessionAttachmentsAtom,
 	setSessionCatalogLoadStateAtom,
 	setSessionMessageLoadStateAtom,
@@ -156,6 +166,7 @@ const ProjectResourcesModal = lazy(() => import("./components/app/ProjectResourc
 import { createDefaultExternalEditorSettings, createDefaultSoundAlertSettings, DEFAULT_PET_SCALE } from "../../shared/types";
 import { hydrateImageContents } from "../../shared/imageContentSrc";
 import type { AgentRuntimeState, AgentTab, SessionRuntimeTarget, AppInfo, AppSettings, ChatMessage, FileTreeNode, ImageContent, PiCommand, Project, AgentBackend, SessionLaunchPreferences, SessionRecord, SessionSummary, ComposerAgentMode, TerminalTarget, GitBranchInfo, FocusTargetPayload } from "../../shared/types";
+import { DEFAULT_TOAST_DURATION_MS } from "../../shared/types";
 
 export function App() {
 	if (missingElectronPreload) {
@@ -203,6 +214,7 @@ export function App() {
 	const setSessionDraft = useSetAtom(setSessionDraftAtom);
 	const setSessionAttachments = useSetAtom(setSessionAttachmentsAtom);
 	const promoteSessionComposerState = useSetAtom(promoteSessionComposerStateAtom);
+	const promoteSessionMessagesCache = useSetAtom(promoteSessionMessagesCacheAtom);
 	const setSessionCatalogLoadState = useSetAtom(setSessionCatalogLoadStateAtom);
 	const setSessionMessageLoadState = useSetAtom(setSessionMessageLoadStateAtom);
 	// 会话消息区域遮罩（SessionSurfaceStage）：重启/停止/重载等运行时操作据此显示「正在…」加载动画
@@ -300,6 +312,16 @@ export function App() {
 	const showToast = useCallback((message: string, duration?: number, kind?: NoticeKind) => {
 		showNotice(message, duration, kind);
 	}, []);
+	// userData 更名（pi-desktop → PiDeck）一次性提示：主进程在 setPath 前已完成迁移，
+	// 这里首挂载消费式领取结果 toast——领过一次即清空，之后启动永不再弹。
+	useEffect(() => {
+		void api.projects
+			.consumeMigrationNotice()
+			.then((notice) => {
+				if (notice) showToast(t("app.userDataMigrationNotice", { newPath: notice.newPath }), 8000);
+			})
+			.catch(() => undefined);
+	}, [showToast]);
 	// 历史命令：按 agent 隔离，agent 关闭即清除（不持久化）
 	const promptHistoryRef = useRef<Record<string, string[]>>({});
 
@@ -517,6 +539,8 @@ export function App() {
 		setCodexImportProject,
 		claudeImportProject,
 		setClaudeImportProject,
+		qoderImportProject,
+		setQoderImportProject,
 		openCodeImportProject,
 		setOpenCodeImportProject,
 		zcodeImportProject,
@@ -527,12 +551,14 @@ export function App() {
 		setCursorImportProject,
 		codexImportController,
 		claudeImportController,
+		qoderImportController,
 		openCodeImportController,
 		zcodeImportController,
 		workbuddyImportController,
 		cursorImportController,
 		openCodexImport,
 		openClaudeImport,
+		openQoderImport,
 		openOpenCodeImport,
 		openZCodeImport,
 		openWorkBuddyImport,
@@ -545,6 +571,8 @@ export function App() {
 		importCodexSessionsApi: api.codexSessions.import,
 		scanClaudeSessions: api.claudeSessions.scan,
 		importClaudeSessionsApi: api.claudeSessions.import,
+		scanQoderSessions: api.qoderSessions.scan,
+		importQoderSessionsApi: api.qoderSessions.import,
 		scanOpenCodeSessions: api.openCodeSessions.scan,
 		importOpenCodeSessionsApi: api.openCodeSessions.import,
 		scanZCodeSessions: api.zcodeSessions.scan,
@@ -607,6 +635,12 @@ export function App() {
 		openSettings: () => store.set(openSettingsAtom, { tab: "dev" }),
 	});
 
+	// 通道切换状态订阅：初拉当前通道 + 切换快照，AppUpdateCard 徽章/切换向导消费。
+	useChannelSwitchWatch({ api });
+
+	// 数据环境事件订阅：dev 首启模式选择 / 目录标记警告 / 导入进度（弹窗由 dataEnvAtoms 驱动）。
+	useDataEnvWatch({ api });
+
 	const PROJECT_EXPANDED_DIRS_KEY_PREFIX = "pid:project-expanded-dirs:";
 
 	// localStorage 只负责首屏；展开项目的权威设置必须等首次 settings.get 返回后才参与迁移。
@@ -636,8 +670,8 @@ export function App() {
 		/** 提示词模板禁用列表：与 SettingsStore 默认一致，空数组 = 不启用模板白名单 */
 		disabledPrompts: [],
 		sessionTabOpenMode: "preview",
-		// 与 main SettingsStore 默认一致：标题生成默认关闭，避免首轮结束后无感知消耗 token
-		autoSessionTitle: false,
+		// 与 main SettingsStore 默认一致：标题生成默认开启，侧栏不再全是「新会话」
+		autoSessionTitle: true,
 		// 与 main SettingsStore 默认一致：忙碌时发送默认「插入当前回合」
 		busySendDelivery: "steer",
 		// 遗留字段：快捷消息已改存独立配置文件 userData/quick-messages.json（见 useQuickMessages），
@@ -658,11 +692,14 @@ export function App() {
 		agentCountReminderEnabled: true,
 		// 公告通知默认开启：与主进程 SettingsStore 默认一致，首屏未拉到真实设置前不误关提醒
 		announcementNotificationEnabled: true,
+		// toast 展示时长：与主进程 defaultSettings 同源（全局统一口径）
+		toastDurationMs: DEFAULT_TOAST_DURATION_MS,
 		// showThinking 由 pi agent 的 hideThinkingBlock 控制，启动后从主进程加载的真实值会覆盖此处
 		showThinking: true,
-		// 流式对话行为：默认自动展开中间过程；新一轮默认收起非最新轮（与 SettingsStore 一致）
+		// 流式对话行为：默认自动展开中间过程（与 SettingsStore 一致）
 		expandInterimDuringStream: true,
-		collapsePrevRunsOnNewTurn: true,
+		// 过程组显示默认开启：与主进程 SettingsStore 默认一致，首屏即按过程组渲染
+		processGroupDisplay: true,
 		showDevTools: false,
 		developerDiagnostics: false,
 		// Electron Chromium 沙箱默认关，与主进程历史兼容策略一致
@@ -688,6 +725,7 @@ export function App() {
 		workspaceContentOpenMode: "split",
 		contentMaxWidth: 1800,
 		chatContentWidthPct: 80,
+		navigationMode: "tabs",
 		sessionTabMaxWidth: SESSION_TAB_MAX_WIDTH_DEFAULT,
 		maxEditorFileSizeMB: 5,
 		externalEditors: createDefaultExternalEditorSettings(),
@@ -706,7 +744,7 @@ export function App() {
 		favoriteModels: [],
 
 		// 字体配置：与 main SettingsStore 默认值保持一致，避免启动时闪烁
-		fontSize: "default",
+		fontSize: "medium",
 		uiFontSize: null,
 		chatFontSize: null,
 		inputFontSize: null,
@@ -737,9 +775,9 @@ export function App() {
 	useEffect(() => {
 		setTurnFlowSettings({
 			expandInterimDuringStream: settings.expandInterimDuringStream,
-			collapsePrevRunsOnNewTurn: settings.collapsePrevRunsOnNewTurn,
+			processGroupDisplay: settings.processGroupDisplay,
 		});
-	}, [settings.expandInterimDuringStream, settings.collapsePrevRunsOnNewTurn, setTurnFlowSettings]);
+	}, [settings.expandInterimDuringStream, settings.processGroupDisplay, setTurnFlowSettings]);
 
 	// 新建会话默认后端同步给根级组件（并行问询 AskPanel 等不持有 settings props）。
 	const setDefaultAgentBackend = useSetAtom(defaultAgentBackendAtom);
@@ -756,6 +794,13 @@ export function App() {
 	useEffect(() => {
 		setBusySendDelivery(settings.busySendDelivery);
 	}, [settings.busySendDelivery, setBusySendDelivery]);
+
+	// 隐藏的功能模块同步给不持有 settings props 的消费方（ConfigModal Pi/DSH 分页、composer 后端下拉），
+	// 与 defaultAgentBackend 同一模式。
+	const setHiddenModules = useSetAtom(hiddenModulesAtom);
+	useEffect(() => {
+		setHiddenModules(settings.hiddenModules ?? []);
+	}, [settings.hiddenModules, setHiddenModules]);
 
 	// 启动预热：应用起来后把「已开启用量查询」的供应商各查一次（串行错峰），
 	// 打开模型/认证页即可直接看到徽章数值，不必先手动刷新。
@@ -994,6 +1039,10 @@ export function App() {
 
 	// 公告通知调度（读镜像 atom）：输入/Agent 运行中/模态打开/窗口不活跃时自动延后弹出（不打扰操作，见 hook 注释）
 	useAnnouncementNotifier();
+	// toast 展示时长同步给 notice helper（全局统一口径；保存设置即时生效）
+	useEffect(() => {
+		configureNoticeDefaults({ toastDurationMs: settings.toastDurationMs });
+	}, [settings.toastDurationMs]);
 	// 模型保存后台验证结果（fork 真实 pi ~17s）失败时全局 toast；成功静默，见 hook 注释
 	useModelsVerifyNotifier();
 	const activeQueuedPrompts = currentSessionId ? (queue.queuedPrompts[currentSessionId] ?? []) : [];
@@ -1296,7 +1345,8 @@ export function App() {
 		modifiedFiles,
 		setDrawer,
 		setDrawerCollapsed,
-		contentOpenMode: settings.workspaceContentOpenMode ?? "split",
+		preserveTabsForGit: settings.navigationMode === "simple",
+		contentOpenMode: settings.navigationMode === "simple" ? "split" : (settings.workspaceContentOpenMode ?? "split"),
 		showToast,
 		readFileContent: api.files.readContent,
 		readGitOriginalContent: api.git.originalContent,
@@ -1559,37 +1609,39 @@ export function App() {
 				// 引导页 picker 无 record 分支把显式选择存进 localStorage；创建时将模型交给
 				// 主进程校验、将思考档位作为启动偏好带入。底栏展示和真实会话创建读取同一份值，
 				// 避免出现「菜单看似切换，首次发送后又回到默认档位」。
-				const welcomeModel = readWelcomeModelPreference()?.model;
-				const welcomeThinking = readWelcomeThinkingPreference()?.thinkingLevel;
 				// 引导页底栏显式切换的后端（localStorage 偏好）优先于设置项默认；
 				// 选了 dsh 但 DSH runtime 不可用时按 effectiveAgentBackendAtom 同一条
 				// 钳制规则回落 pi，避免首次发送才在 createDraft 门控上抛错。
-				const welcomeBackend = readWelcomeBackendPreference();
-				const draftBackend = welcomeBackend === "dsh" && effectiveAgentBackend !== "dsh" ? "pi" : (welcomeBackend ?? effectiveAgentBackend);
+				// 与 ComposerArea 的展示用同一纯函数：展示的后端和创建的后端必须一致。
+				const draftBackend = resolveGuidePageBackend({ override: readWelcomeBackendPreference(), effectiveDefault: effectiveAgentBackend });
+				// 模型偏好按后端分开取（issue #253）：DSH 的模型是 host route 名，不在 models.json，
+				// 必须作为显式 model 直接带给 host；pi 的偏好走 welcomeModel（launchDefaults 会按
+				// models.json 校验存在性）。历史上 DSH 侧不读偏好，点选因此永远不生效。
+				const welcomeModel = draftBackend === "dsh" ? readWelcomeDshModelPreference()?.model : readWelcomeModelPreference()?.model;
+				const welcomeThinking = readWelcomeThinkingPreference()?.thinkingLevel;
 				// 统一创建 draft 会话（Chat 项目也走普通会话、可保存）：创建不拉 pi，
 				// selectSessionCommand 同步切页、立即进入会话页；匿名会话仅保留给侧栏
 				// 「新建临时对话」入口（createAnonymousSessionWithTab）。
 				// 默认后端跟随设置项（settings.defaultAgentBackend，默认 pi），
 				// 且经 DSH runtime 安装态钳制——runtime 不可用时不会尝试建 dsh 会话。
+				// 激活时 SessionRuntimeCoordinator.applyPreferences → DshAgentManager.setModel
+				// 会把这条显式 model 落到 host（host 拒绝时降级并告警，不让创建失败）。
 				const session = await api.sessions.createDraft({
 					projectId: project.id,
 					title: draftBackend === "dsh" ? `${project.name} DSH` : `${project.name} agent`,
 					backend: draftBackend,
-					...(welcomeModel ? { welcomeModel } : {}),
+					...(welcomeModel ? (draftBackend === "dsh" ? { model: welcomeModel } : { welcomeModel }) : {}),
 					...(welcomeThinking ? { thinkingLevel: welcomeThinking } : {}),
 				});
 				upsertSession(session);
 				// 引导页发送时 useSessionSend 已把 user 消息乐观写入虚拟会话 cache；
 				// 提升时搬到真实会话——否则切页后新会话空态与引导页视觉相同，
 				// 要等 agent 启动、回复流入后页面才「动」，用户误以为发送没生效。
-				const bootstrapMessages = store.get(sessionMessagesCacheAtom)[GUIDE_BOOTSTRAP_SESSION_ID]?.messages;
-				if (bootstrapMessages?.length) {
-					setCacheMessages({
-						sessionId: session.id,
-						messages: bootstrapMessages,
-						source: "runtime",
-					});
-				}
+				// 虚拟会话的 cache 随之清空（见 promoteSessionMessagesCacheAtom）。
+				promoteSessionMessagesCache({
+					fromSessionId: GUIDE_BOOTSTRAP_SESSION_ID,
+					toSessionId: session.id,
+				});
 				promoteSessionComposerState({
 					fromSessionId: GUIDE_BOOTSTRAP_SESSION_ID,
 					toSessionId: session.id,
@@ -1605,7 +1657,7 @@ export function App() {
 				guideBootstrapPromotionRef.current = undefined;
 			}
 		},
-		[activeProjectId, projects, promoteSessionComposerState, selectSessionCommand, upsertSession, workspaceChrome, effectiveAgentBackend],
+		[activeProjectId, projects, promoteSessionComposerState, promoteSessionMessagesCache, selectSessionCommand, upsertSession, workspaceChrome, effectiveAgentBackend],
 	);
 
 	/** 有效命令名白名单：仅已知命令渲染为 chip */
@@ -2506,7 +2558,7 @@ export function App() {
 			throw new Error(localizedError);
 		}
 		// 排队投递（steer「插入当前回合」/ followUp 排队）同样构成「新一轮」：
-		// bump 会话 tick，timeline 侧非最新轮据此收起（设置② collapsePrevRunsOnNewTurn）。
+		// bump 会话 tick，timeline 侧非最新轮据此收起。
 		// 普通发送由 useSessionSend 的 sendPrompt 返回值自己 bump；这里是队列 drain 的
 		// 唯一出口，漏掉会导致中断轮（无最终回答）在新一轮开始后仍保持展开。
 		store.set(bumpNewTurnCollapseTickAtom, sessionId);
@@ -2834,7 +2886,8 @@ export function App() {
 		// 先关 Tab 再清状态，并带走 sibling-dir / parentSessionPath 子会话，避免空态 Composer 残留。
 		dismissSessionTree(session, projectId);
 		showToast(t("app.sessionDeleted"), 2200);
-		await refreshProjectSessions(projectId);
+		// 已按删除结果摘除子树；对账不能重新插入项目级 loading 行，挤动其它会话。
+		await refreshProjectSessions(projectId, true);
 	}
 
 	/** 归档会话：从列表移除但不销毁文件；toast 按后端告知恢复入口（pi 走会话管理，DSH 走配置页归档区） */
@@ -2991,6 +3044,7 @@ export function App() {
 			importSessions: (project, source) => {
 				if (source === "codex") return openCodexImport(project);
 				if (source === "claude") return openClaudeImport(project);
+				if (source === "qoder") return openQoderImport(project);
 				if (source === "zcode") return openZCodeImport(project);
 				if (source === "workbuddy") return openWorkBuddyImport(project);
 				if (source === "cursor") return openCursorImport(project);
@@ -3009,9 +3063,9 @@ export function App() {
 			changeChatPath,
 		},
 		sessions: {
-			// 侧栏单击模式由设置 sessionTabOpenMode 控制（默认 preview=临时预览，发消息自动晋升常驻）；
-			// 双击仍是显式常驻。tabMode 为 undefined 时用当前设置值。
-			open: (projectId, sessionId, tabMode) => openSidebarSessionByIdWithTab(projectId, sessionId, tabMode ?? settings.sessionTabOpenMode),
+			// 简洁模式没有临时预览；标签模式保留原设置及双击晋升。
+			simpleNavigation: settings.navigationMode === "simple",
+			open: (projectId, sessionId, tabMode) => openSidebarSessionByIdWithTab(projectId, sessionId, settings.navigationMode === "simple" ? "permanent" : (tabMode ?? settings.sessionTabOpenMode)),
 			// 活动页「最近会话」跨项目展示：后台静默预热尚未扫描的项目 catalog。
 			ensureCatalogsLoaded: (projectIds) => {
 				for (const projectId of projectIds) ensureProjectCatalogLoaded(projectId, true);
@@ -3118,6 +3172,7 @@ export function App() {
 
 	const sidebarContentNode = (
 		<AppSidebar
+			simple={settings.navigationMode === "simple"}
 			listCollapsed={listCollapsed}
 			toggleListCollapsed={toggleListCollapsed}
 			actions={sidebarActions}
@@ -3166,6 +3221,11 @@ export function App() {
 		[selectSessionCommand, store],
 	);
 
+	const navigation = useSessionNavigation(currentSessionId, (id) => {
+		workspaceChrome.registerOpenSession(id, "permanent");
+		focusSessionPane(id);
+	});
+
 	// 后台 Ask 通知「前往会话」：跳转的同时登记常驻 Tab——agent 开多时被询问的会话
 	// 可能根本没开 Tab（后台并行 ask 等），只切焦点的话回答完切换出去就找不到了。
 	const jumpToAskSession = useCallback(
@@ -3191,6 +3251,8 @@ export function App() {
 		if (!el || prevSessionIdRef.current === currentSessionId) return;
 		const prev = prevSessionIdRef.current;
 		prevSessionIdRef.current = currentSessionId;
+		// 简洁模式直接切内容：整区位移会越过面板边界，制造额外滚动条。
+		if (settings.navigationMode === "simple") return;
 		// 分屏内面板间聚焦切换：各栏都已渲染、内容未变，只有聚焦边框亮起；
 		// 整区重播淡入微位移会造成「抖/闪」，静默跳过（边框高亮由
 		// .session-split-pane-focused 类切换承担，无动画）。
@@ -3208,7 +3270,7 @@ export function App() {
 			{ duration: 160, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
 		);
 		return () => anim.cancel();
-	}, [currentSessionId, workspaceChrome.splitLayout]);
+	}, [currentSessionId, workspaceChrome.splitLayout, settings.navigationMode]);
 
 	// —— Tab 栏 ⋯ 菜单「当前会话操作」：重命名 / 复制会话 / 导出 HTML / 复制路径 / 打开文件 ——
 	// 与侧栏会话右键菜单同源同语义：搜索定位的会话可能不在侧栏可见（侧栏只渲染部分行），
@@ -3274,27 +3336,36 @@ export function App() {
 							.then((result) => showToast(t("app.exportedPath", { path: result.path }), 3500))
 							.catch((error) => showToast(error instanceof Error ? error.message : String(error), 5000));
 					},
-					onRenameSession: () => {
-						if (!currentSessionRecord) return;
-						// live 会话用 agent 重命名（与侧栏 AgentContextMenu 同源，改名同步运行时标题）；
-						// 历史/未启动会话用 record 拼侧栏同构的 SessionSummary 走统一重命名弹框。
-						if (currentSessionIsLive && activeAgent) {
-							rename.openAgentRename(activeAgent);
-							return;
-						}
-						rename.openSessionRename(currentSessionRecord.projectId, {
-							id: currentSessionRecord.id,
-							filePath: currentSessionRecord.filePath ?? "",
-							name: currentSessionRecord.title,
-							preview: currentSessionRecord.preview,
-							updatedAt: currentSessionRecord.updatedAt,
-							messageCount: currentSessionRecord.messageCount,
-							backend: currentSessionRecord.backend,
-							forked: currentSessionRecord.forked,
-						});
-					},
+					// 草稿期不提供重命名入口（与 canCopySession/canExportHtml 同款草稿闸门）：此时
+					// 自动命名还没跑，先钉一个名字会让条目进 manual 终态，扩展规划的会话名再也写不进来。
+					onRenameSession:
+						currentSessionRecord.status === "draft"
+							? undefined
+							: () => {
+									if (!currentSessionRecord) return;
+									// live 会话用 agent 重命名（与侧栏 AgentContextMenu 同源，改名同步运行时标题）；
+									// 历史/未启动会话用 record 拼侧栏同构的 SessionSummary 走统一重命名弹框。
+									if (currentSessionIsLive && activeAgent) {
+										rename.openAgentRename(activeAgent);
+										return;
+									}
+									rename.openSessionRename(currentSessionRecord.projectId, {
+										id: currentSessionRecord.id,
+										filePath: currentSessionRecord.filePath ?? "",
+										name: currentSessionRecord.title,
+										preview: currentSessionRecord.preview,
+										updatedAt: currentSessionRecord.updatedAt,
+										messageCount: currentSessionRecord.messageCount,
+										backend: currentSessionRecord.backend,
+										forked: currentSessionRecord.forked,
+									});
+								},
 				}
 			: undefined;
+
+	useEffect(() => {
+		if (settings.navigationMode === "simple" && workspaceChrome.previewSessionTabId) workspaceChrome.promotePreview(workspaceChrome.previewSessionTabId);
+	}, [settings.navigationMode, workspaceChrome.previewSessionTabId, workspaceChrome.promotePreview]);
 
 	const sessionTabsProps = {
 		tabs: workspaceChrome.sessionTabIds,
@@ -3386,6 +3457,7 @@ export function App() {
 
 	const sessionPaneServices = useMemo(
 		() => ({
+			simpleNavigation: settings.navigationMode === "simple",
 			isLanWeb,
 			promoteSessionToPermanent: workspaceChrome.promotePreview,
 			showToast,
@@ -3469,6 +3541,7 @@ export function App() {
 			resendUserMessage,
 			sessionDurationByAgent,
 			settings.showThinking,
+			settings.navigationMode,
 			setPreviewImage,
 			setTerminalCollapsedByOwnerKey,
 			setTerminalHeight,
@@ -3548,28 +3621,20 @@ export function App() {
 			current === width ? current : width,
 		);
 	}, []);
-	const workbenchLayout = workbenchHasGitDiff ? gitDiffDisplayMode : editorMode;
+	const simpleMode = settings.navigationMode === "simple";
+	const [simpleContentExpanded, setSimpleContentExpanded] = useState(false);
+	useEffect(() => setSimpleContentExpanded(false), [activeTabId, gitDrawerDiff?.filePath, simpleMode]);
+	const workbenchLayout = simpleMode ? (simpleContentExpanded ? "maximize" : "split") : workbenchHasGitDiff ? gitDiffDisplayMode : editorMode;
 
 	// 文件/Diff Tab 挂进总 SessionTabsBar：与会话共用一条栏，内容区不再另起绿条 Tab
-	const workbenchEditorTabs =
-		workbenchHasGitDiff && gitDrawerDiff
-			? [
-					{
-						id: gitDrawerDiff.filePath,
-						label: gitDrawerDiff.label,
-						title: gitDrawerDiff.filePath,
-						active: true,
-					},
-				]
-			: workbenchHasEditor
-				? editorTabs.map((tab) => ({
-						id: tab.id,
-						label: tab.label ?? tab.filePath.split(/[/\\]/).pop() ?? tab.filePath,
-						title: tab.filePath,
-						preview: tab.id === previewEditorTabId,
-						active: tab.id === activeTabId,
-					}))
-				: [];
+	const fileTabs = editorTabs.map((tab) => ({
+		id: tab.id,
+		label: tab.label ?? tab.filePath.split(/[/\\]/).pop() ?? tab.filePath,
+		title: tab.filePath,
+		preview: tab.id === previewEditorTabId,
+		active: !workbenchHasGitDiff && tab.id === activeTabId,
+	}));
+	const workbenchEditorTabs = [...(simpleMode || !workbenchHasGitDiff ? fileTabs : []), ...(workbenchHasGitDiff && gitDrawerDiff ? [{ id: `git-diff:${gitDrawerDiff.filePath}`, label: gitDrawerDiff.label, title: gitDrawerDiff.filePath, active: true }] : [])];
 
 	// 工具开关上收会话 Tab 栏（原右侧悬浮工具条入口的唯一挂载点）：
 	// 草稿纸 / 终端 / 外部编辑器，与抽屉开关同排。
@@ -3638,6 +3703,15 @@ export function App() {
 			openCommandPalette();
 		});
 	}, [openCommandPalette]);
+
+	// 窗口缩放快捷键（Ctrl/Cmd+= / Ctrl/Cmd+-）由主进程直接改 zoomFactor 并落盘
+	// （见 main/windowZoom.ts），渲染层只订阅新比例同步设置态——否则设置页
+	// 「外观 → 窗口缩放」会一直显示快捷键改动前的旧百分比。
+	useEffect(() => {
+		return api.app.onZoomFactorChange((zoomFactor) => {
+			setSettings((prev) => (prev.zoomFactor === zoomFactor ? prev : { ...prev, zoomFactor }));
+		});
+	}, []);
 
 	// 列表刻意不 memo：条目数在百级以内，构建成本远低于一次 React 渲染；而 t() 是
 	// 模块级函数，memo 依赖里没法可靠表达「语言变了」，漏掉就会出现
@@ -3717,16 +3791,29 @@ export function App() {
 			});
 		}
 
-		commands.push(...buildSettingsCommands((target) => store.set(openSettingsAtom, target)));
+		commands.push(...buildSettingsCommands((target) => store.set(openSettingsAtom, target), settings.hiddenModules));
 		return commands;
 	})();
 
+	const selectWorkbenchTab = (id: string) => {
+		if (id.startsWith("git-diff:")) return;
+		if (workbenchHasGitDiff) dismissGitDiff();
+		selectEditorTab(id);
+	};
+	const closeWorkbenchTab = (id: string) => {
+		if (id.startsWith("git-diff:")) {
+			if (simpleMode) dismissGitDiff();
+			else closeGitDiff();
+		} else closeEditorTab(id);
+	};
+	const toggleSimpleContent = () => setSimpleContentExpanded((value) => !value);
 	const sessionTabsBarNode = (
 		<SessionTabsBar
 			{...sessionTabsProps}
+			simple={simpleMode}
 			sessionActions={tabsSessionActions}
 			toolActions={sessionToolActions}
-			editorTabs={workbenchEditorTabs}
+			editorTabs={simpleMode ? [] : workbenchEditorTabs}
 			onSelectEditorTab={(tabId) => {
 				if (workbenchHasGitDiff) return;
 				selectEditorTab(tabId);
@@ -3746,15 +3833,18 @@ export function App() {
 		<WorkbenchContent
 			theme={workbenchTheme}
 			maxFileSizeMB={settings.maxEditorFileSizeMB}
+			editorTabs={editorTabs}
+			onDirty={promotePreviewEditorTab}
 			gitDiff={workbenchHasGitDiff && gitDrawerDiff ? gitDrawerDiff : null}
-			gitDiffDisplayMode={gitDiffDisplayMode}
-			onToggleGitDiffMode={toggleGitDiffDisplayMode}
-			onCloseGitDiff={closeGitDiff}
-			activeTab={workbenchHasEditor && activeTab ? activeTab : null}
-			editorMode={editorMode}
-			onToggleEditorMode={activeTab?.preserveDrawer ? undefined : toggleEditorMode}
+			gitDiffDisplayMode={simpleMode ? workbenchLayout : gitDiffDisplayMode}
+			onToggleGitDiffMode={simpleMode ? toggleSimpleContent : toggleGitDiffDisplayMode}
+			onCloseGitDiff={simpleMode ? dismissGitDiff : closeGitDiff}
+			activeTab={activeTab}
+			editorMode={simpleMode ? workbenchLayout : editorMode}
+			onToggleEditorMode={simpleMode ? toggleSimpleContent : activeTab?.preserveDrawer ? undefined : toggleEditorMode}
 			onCloseEditor={() => {
-				closeEditor();
+				if (simpleMode && activeTab) closeEditorTab(activeTab.id);
+				else closeEditor();
 			}}
 			readContent={readEditorFileContent}
 			readOriginalContent={readEditorOriginalContent}
@@ -3762,7 +3852,18 @@ export function App() {
 		/>
 	) : null;
 
-	const chatPaneContentNode = <WorkbenchStage chrome={sessionTabsBarNode} layout={workbenchLayout} hasContent={workbenchHasContent} session={chatPaneSessionNode} content={workbenchContentNode} onContentWidthChange={handleWorkbenchContentWidth} />;
+	const chatPaneContentNode = (
+		<WorkbenchStage
+			simple={simpleMode}
+			contentChrome={<WorkbenchFileTabs tabs={workbenchEditorTabs} onSelect={selectWorkbenchTab} onClose={closeWorkbenchTab} onPromote={promotePreviewEditorTab} />}
+			chrome={sessionTabsBarNode}
+			layout={workbenchLayout}
+			hasContent={workbenchHasContent}
+			session={chatPaneSessionNode}
+			content={workbenchContentNode}
+			onContentWidthChange={handleWorkbenchContentWidth}
+		/>
+	);
 
 	// ── DrawerSurface port objects (stable via useMemo) ──
 	const drawerPorts = useDrawerPorts({
@@ -3883,6 +3984,21 @@ export function App() {
 			<>
 				<AppBootstrap {...bootstrapProps} />
 				<AppShell
+					navigationChrome={
+						simpleMode ? (
+							<div className="simple-navigation-bar flex h-8 shrink-0 items-center gap-0.5 bg-(--simple-shell-surface) px-2 [&_button]:[-webkit-app-region:no-drag]">
+								<Button variant="ghost" size="icon-sm" className="size-6.5" type="button" aria-label={listCollapsed ? t("app.expandList") : t("app.collapseList")} title={listCollapsed ? t("app.expandList") : t("app.collapseList")} onClick={toggleListCollapsed}>
+									<PanelLeft size={14} />
+								</Button>
+								<Button variant="ghost" size="icon-sm" className="size-6.5" type="button" aria-label={t("navigation.back")} title={t("navigation.back")} disabled={!navigation.canBack} onClick={navigation.back}>
+									<ArrowLeft size={14} />
+								</Button>
+								<Button variant="ghost" size="icon-sm" className="size-6.5" type="button" aria-label={t("navigation.forward")} title={t("navigation.forward")} disabled={!navigation.canForward} onClick={navigation.forward}>
+									<ArrowRight size={14} />
+								</Button>
+							</div>
+						) : undefined
+					}
 					compactContent={
 						quickTask.active ? (
 							<QuickTaskSurface task={quickTask}>
@@ -4197,6 +4313,7 @@ export function App() {
 					{proxyDialogSessionId && <SessionProxyDialog sessionId={proxyDialogSessionId} onClose={() => setProxyDialogSessionId(null)} />}
 					{codexImportProject && <ImportOverlayHost kind="codex" project={codexImportProject} controller={codexImportController} onClose={() => setCodexImportProject(null)} />}
 					{claudeImportProject && <ImportOverlayHost kind="claude" project={claudeImportProject} controller={claudeImportController} onClose={() => setClaudeImportProject(null)} />}
+					{qoderImportProject && <ImportOverlayHost kind="qoder" project={qoderImportProject} controller={qoderImportController} onClose={() => setQoderImportProject(null)} />}
 					{openCodeImportProject && <ImportOverlayHost kind="opencode" project={openCodeImportProject} controller={openCodeImportController} onClose={() => setOpenCodeImportProject(null)} />}
 					{zcodeImportProject && <ImportOverlayHost kind="zcode" project={zcodeImportProject} controller={zcodeImportController} onClose={() => setZcodeImportProject(null)} />}
 					{workbuddyImportProject && <ImportOverlayHost kind="workbuddy" project={workbuddyImportProject} controller={workbuddyImportController} onClose={() => setWorkbuddyImportProject(null)} />}
@@ -4215,6 +4332,10 @@ export function App() {
 
 					{/* 并行问询结果弹框（AskPanel）：独立匿名会话的结果展示，根级渲染 */}
 					<AskPanelOverlay />
+
+					{/* toast 通知历史：全渲染层唯一一份（设置页/详情弹窗两个入口共用，
+					    模块级 opener 注册式打开，见 utils/noticeHistory + ui-shadcn/notice-history-dialog） */}
+					<NoticeHistoryDialog />
 
 					{/* 外部编辑器选择气泡 */}
 					<ExternalEditorOverlay
@@ -4235,6 +4356,10 @@ export function App() {
         不主动提示就等于不存在。看完即写 localStorage，只弹一次。
         空状态（没项目）不弹——那时面板本身也没什么可搜的。 */}
 				{!quickTask.active && <CommandPaletteOnboarding enabled={Boolean(activeProjectId) && !commandPaletteOpen} onTryNow={openCommandPalette} />}
+
+				{/* 数据环境弹窗族：首启数据模式选择（内含导入向导）与目录标记警告，事件/atom 驱动 */}
+				<DataModeChoiceDialog />
+				<DataEnvMismatchDialog />
 			</>
 		</FileLinkBaseProvider>
 	);

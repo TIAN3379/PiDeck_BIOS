@@ -34,43 +34,51 @@ test("computeModelDisplay: 有待生效时展示 from→to", () => {
 	);
 });
 
-test("resolveComposerLiveModel: live 时优先 runtime state", () => {
+test("resolveComposerLiveModel: Agent 启动前后都保持会话保存的名称快照", () => {
+	const record = { provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" };
+	const beforeRuntimeStarts = resolveComposerLiveModel({
+		record,
+		fallback: { provider: "welcome", modelId: "welcome-model", modelName: "Welcome" },
+	});
+	const afterRuntimeStarts = resolveComposerLiveModel({
+		// JS 调用仍可携带历史 runtime 参数；纯函数必须忽略它们。
+		state: { provider: "router9", modelId: "qd/qfmodel", modelName: "runtime-raw-name" },
+		record,
+		fallback: { provider: "welcome", modelId: "welcome-model", modelName: "Welcome" },
+		isLive: true,
+	});
+	assertDisplay(beforeRuntimeStarts, { provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" });
+	assertDisplay(afterRuntimeStarts, beforeRuntimeStarts);
+});
+
+test("resolveComposerLiveModel: 缺失名称时只回退保存的 ID，不借 runtime 名称", () => {
 	assertDisplay(
 		resolveComposerLiveModel({
-			state: { provider: "openai", modelId: "old-model", modelName: "Old" },
-			record: { provider: "anthropic", modelId: "new-model" },
-			fallback: { provider: "welcome", modelId: "welcome-model" },
+			state: { provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" },
+			record: { provider: "router9", modelId: "qd/qfmodel", modelName: "  " },
 			isLive: true,
 		}),
-		{ provider: "openai", modelId: "old-model", modelName: "Old" },
+		{ provider: "router9", modelId: "qd/qfmodel", modelName: "qd/qfmodel" },
 	);
 });
 
-test("resolveComposerLiveModel: 非 live 时忽略残留 state，展示 catalog", () => {
+test("resolveComposerLiveModel: 引导页没有会话记录时只使用引导页偏好", () => {
 	assertDisplay(
 		resolveComposerLiveModel({
-			state: { provider: "openai", modelId: "old-model", modelName: "Old" },
-			record: { provider: "anthropic", modelId: "new-model" },
-			fallback: { provider: "welcome", modelId: "welcome-model" },
-			isLive: false,
+			state: { provider: "openai", modelId: "gpt-5", modelName: "GPT-5" },
+			fallback: { provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" },
+			isLive: true,
 		}),
-		{ provider: "anthropic", modelId: "new-model", modelName: "new-model" },
-	);
-});
-
-test("resolveComposerLiveModel: 非 live 且无 record 时走 fallback", () => {
-	assertDisplay(
-		resolveComposerLiveModel({
-			state: { provider: "openai", modelId: "old-model" },
-			fallback: { provider: "welcome", modelId: "welcome-model", modelName: "Welcome" },
-			isLive: false,
-		}),
-		{ provider: "welcome", modelId: "welcome-model", modelName: "Welcome" },
+		{ provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" },
 	);
 });
 
 test("formatModelRef 带 provider", () => {
 	assert.equal(formatModelRef({ provider: "grok.weishiair.de copy", modelId: "grok-4.6" }), "grok.weishiair.de copy/grok-4.6");
+});
+
+test("formatModelRef: 自定义名称用于底栏 provider/名称", () => {
+	assert.equal(formatModelRef({ provider: "router9", modelId: "qd/qfmodel", modelName: "qwen-3.8-flash" }), "router9/qwen-3.8-flash");
 });
 
 test("契约: 运行中优先直接切换模型，后端 busy 时才排到下一轮", () => {
@@ -85,7 +93,7 @@ test("契约: 运行中优先直接切换模型，后端 busy 时才排到下一
 
 	assert.match(area, /modelDisabled=\{composer\.isStarting\}/);
 	assert.match(area, /modelPending=\{modelPendingMap\[props\.sessionId\]\}/);
-	assert.match(area, /runtimeLive=\{isLiveRuntimeStatus\(composer\.runtime\?\.status\)\}/);
+	assert.doesNotMatch(area, /runtimeLive=/);
 	assert.match(components, /disabled=\{props\.modelDisabled \?\? props\.disabled\}/);
 	assert.match(components, /app\.modelPendingTitle/);
 	assert.match(components, /resolveComposerLiveModel/);
@@ -100,6 +108,8 @@ test("契约: 运行中优先直接切换模型，后端 busy 时才排到下一
 	assert.match(picker, /isLiveRuntimeStatus\(runtime\?\.status\)/);
 
 	assert.match(picker, /setRuntimeModel/);
+	assert.match(picker, /writeSelectedModelToState\(applied\.value\)/);
+	assert.match(hook, /applySelectedModel\(applied\.value\)/);
 	assert.match(picker, /error\.code === "SESSION_RUNTIME_BUSY"/);
 	assert.match(picker, /pickModelWhileBusy/);
 	assert.match(picker, /listRuntimeModels\(handle\)/);
@@ -144,11 +154,26 @@ test("resolveGuideDisplayModel: 无点选时用预选默认（显式默认/切�
 	);
 });
 
-test("resolveGuideDisplayModel: DSH 忽略 pi 点选偏好（模型路由归 host settings）", () => {
+test("resolveGuideDisplayModel: DSH 点选优先于部署默认（issue #253）", () => {
+	// 旧行为：dsh 分支直接返回 defaultModel，理由是「模型路由归 host settings」。
+	// 该理由已被证伪：host 提供 sessions.selectModel（DshAgentManager.setModel 在用），
+	// 运行中也能换模型；引导页点选因此同样有意义。需要隔离的只是「pi 偏好不得泄漏
+	// 到 DSH」，那由 WELCOME_DSH_MODEL_KEY 与 WELCOME_MODEL_KEY 分开存储保证——
+	// 调用方在 DSH 态传进来的已是 DSH 目录里的模型，不是 pi 的欢迎页偏好。
 	assertDisplay(
 		resolveGuideDisplayModel({
 			isDsh: true,
-			welcomeModel: { provider: "anthropic", modelId: "claude-opus-4-6" },
+			welcomeModel: { provider: "jiyuan", modelId: "deepseek-flash" },
+			defaultModel: { provider: "deepseek-official", modelId: "deepseek-flash" },
+		}),
+		{ provider: "jiyuan", modelId: "deepseek-flash" },
+	);
+});
+
+test("resolveGuideDisplayModel: DSH 无点选时回退部署默认", () => {
+	assertDisplay(
+		resolveGuideDisplayModel({
+			isDsh: true,
 			defaultModel: { provider: "dsh-host", modelId: "agent-default" },
 		}),
 		{ provider: "dsh-host", modelId: "agent-default" },

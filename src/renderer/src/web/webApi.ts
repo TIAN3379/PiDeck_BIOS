@@ -116,8 +116,8 @@ async function callRuntimeCommand<T>(sessionId: string, target: SessionRuntimeTa
 }
 
 /** 运行中的模型切换会立即发送给 pi，并由主进程同步会话记录。 */
-export function setRuntimeModel(target: SessionRuntimeTarget, provider: string, modelId: string): Promise<unknown> {
-	return callRuntimeCommand(target.sessionId, target, "model", { provider, modelId });
+export function setRuntimeModel(target: SessionRuntimeTarget, provider: string, modelId: string, modelName?: string): Promise<unknown> {
+	return callRuntimeCommand(target.sessionId, target, "model", { provider, modelId, modelName });
 }
 
 /** 运行中的思考级别切换会立即发送给 pi，并由主进程同步会话记录。 */

@@ -30,6 +30,13 @@ export type SettingsFieldAnchor = {
 };
 
 export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
+	{ tab: "appearance", slug: "appearance-navigation-mode", labelKey: "settings.navigationMode", keywords: ["简洁模式", "标签模式", "simple", "navigation"] },
+	{
+		tab: "notification",
+		slug: "notification-toast-duration",
+		labelKey: "settings.toastDuration",
+		keywords: ["toast", "通知时长", "提示消失", "弹出太快", "notification duration"],
+	},
 	// ── 开发设置 ──────────────────────────────────────────────────────
 	{
 		tab: "dev",
@@ -167,9 +174,9 @@ export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
 	},
 	{
 		tab: "common",
-		slug: "common-collapse-prev-runs",
-		labelKey: "settings.collapsePrevRunsOnNewTurn",
-		keywords: ["折叠历史轮次", "折叠", "collapse", "上一轮", "收起"],
+		slug: "common-process-group-display",
+		labelKey: "settings.processGroupDisplay",
+		keywords: ["过程组", "分组显示", "process group", "平铺", "实验特性"],
 	},
 	{
 		tab: "common",
@@ -238,6 +245,12 @@ export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
 		slug: "appearance-native-menu",
 		labelKey: "settings.nativeMenu",
 		keywords: ["原生菜单", "菜单栏", "native menu", "窗口菜单"],
+	},
+	{
+		tab: "appearance",
+		slug: "appearance-modules",
+		labelKey: "settings.modules.title",
+		keywords: ["隐藏模块", "功能模块", "隐藏", "显示模块", "hide", "modules", "收起", "dsh", "飞书", "桌宠", "生图"],
 	},
 
 	// ── Git ──────────────────────────────────────────────────────────

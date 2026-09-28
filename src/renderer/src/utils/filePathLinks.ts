@@ -11,7 +11,8 @@
  * 识别边界（issue #229）：目录与无扩展名文件（`src/main/ipc`、`Makefile`、`.gitignore`）
  * 也参与识别——识别只是「候选」，存在性由 verdict store 静默校验，误报会降级成纯文本。
  * 刻意不识别：单段无扩展名普通词（`components`）、1 层相对路径（`src/main`，与 `and/or`、
- * `N/A` 无法区分）、斜杠列表（`A/B/C/`、`他/她/`）。
+ * `N/A` 无法区分）、斜杠列表（`A/B/C/`、`他/她/`、中文散文里的 `降分辨率/抽帧`，
+ * 判据见 isTrailingSlashDirCandidate）。
  */
 
 /** 裸文件路径识别正则：
@@ -54,10 +55,10 @@ const PATH_HEAD_BOUNDARY = "(?<![\\p{L}\\p{N}_.\\-\\\\/])";
 
 /**
  * 尾斜杠目录：`src/main/`、`docs/`、`C:\proj\`、`~/dev/`。
- * 尾斜杠本身是强信号，因此单段也认（`docs/`）；尾随边界只排除 ASCII 字母数字
- * ——英文散文里的 `and/or`、`TCP/IP`、`he/she`（`and/` 后面还有字母）因此不命中，
- * 而 `src/main/和 utils/` 这种中文紧贴斜杠的写法仍成立。
- * 纯文本里的多段斜杠列表（`A/B/C/`、`他/她/`、`24/7/`）由 hasPlausibleSegment 兜底。
+ * 正则里的 `(?![A-Za-z0-9])` 只排除「斜杠后还有 ASCII 字母数字」的英文散文
+ * （`and/or`、`TCP/IP`、`he/she`）——这种位置不可能是路径收尾。
+ * 中文散文（`降分辨率/抽帧`）与目录引用局部同形，正则无法区分，
+ * 候选统一再过 isTrailingSlashDirCandidate 的收尾字符 + 段构成判据。
  */
 const TRAILING_SLASH_DIR_RE = new RegExp(PATH_HEAD_BOUNDARY + "(?:" + DIR_STRONG_START + "|(?:" + DIR_SEGMENT + "[\\\\/])+)(?![A-Za-z0-9])", "gu");
 
@@ -134,6 +135,46 @@ function hasPlausibleSegment(match: string): boolean {
 	return withoutDrive.split(/[\\/]+/).some((segment) => segment.length >= 2);
 }
 
+/** 强前缀形态判定（与 DIR_STRONG_PREFIX 同一组：盘符 / 家目录 / 绝对 / `./`、`../`）。 */
+const DIR_STRONG_PREFIX_RE = new RegExp("^(?:" + DIR_STRONG_PREFIX + ")");
+/** 目录引用正常收尾的字符：空白 + 分隔/收尾标点。开启式标点（`（【《「`）不算——
+ *  路径后面不会紧跟一个「新短语的开头」，`GDPR/《个保法》` 的斜杠是并列分隔符。 */
+const DIR_TRAILING_BOUNDARY_RE = /[\s，。；：！？、）》】」』”’…,.;:!?)\]}]/;
+/** 中文/日文/韩文字母：斜杠后紧跟这些字符 = 候选被粘在中文正文里（模型常写 `src/main/和 utils/`）。 */
+const CJK_LETTER_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+/** 纯 ASCII 路径段：字母/数字/下划线/点/连字符。 */
+const ASCII_PATH_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * 尾斜杠候选验收（线上回归：中文散文被误识别 → 存在性判否 → 正文中间变灰字）。
+ *
+ * 尾斜杠是「目录」的强信号，但中文里 `降分辨率/抽帧`、`交通流量/车速/违章` 与目录引用
+ * 局部同形，正则无法区分，只能按「收尾字符 + 段构成」补判据：
+ * - 强前缀（`C:\`、`~/`、`/`、`./`）：形态已唯一，直接认；
+ * - 相对候选至少含一个 ASCII 段：纯中文段 + 斜杠几乎全是 `A/B` 式并列
+ *   （`降分辨率/抽帧`、`人群/车牌/`），宁可漏掉裸相对的中文目录名；
+ * - 尾斜杠后紧跟中文正文：只有「≥2 段且首段是 ASCII」才认——代码根开头的
+ *   `src/main/和 utils/`、`src/中文目录/里的文件` 成立；散文并列词的首段是中文
+ *   （`主动补证/时间窗/采样帧数/ROI/重复推理`、`降分辨率/抽帧`）不成立；
+ *   代价：ASCII 开头的混合列表（`ROI/时间窗/抽样/`）仍会误报，但降级层已保证
+ *   它不再变灰字，最多一次链接闪现。
+ * - 尾斜杠后是开启式标点或其他字符：不认（`GDPR/《个保法》`、`TB/摄像头`）。
+ */
+function isTrailingSlashDirCandidate(candidate: string, following: string | undefined): boolean {
+	if (!hasPlausibleSegment(candidate)) return false;
+	if (DIR_STRONG_PREFIX_RE.test(candidate)) return true;
+	const segments = candidate
+		.replace(/[\\/]+$/, "")
+		.split(/[\\/]+/)
+		.filter((segment) => segment.length > 0);
+	if (!segments.some((segment) => /[A-Za-z0-9]/.test(segment))) return false;
+	if (following === undefined || DIR_TRAILING_BOUNDARY_RE.test(following)) return true;
+	if (CJK_LETTER_RE.test(following)) {
+		return segments.length >= 2 && ASCII_PATH_SEGMENT_RE.test(segments[0]);
+	}
+	return false;
+}
+
 /**
  * 提取文本中的裸文件路径候选。
  * 完整 URL 先整体替换成等长空格再匹配：URL 尾巴（example.com/docs/a.md）长得
@@ -147,16 +188,18 @@ function hasPlausibleSegment(match: string): boolean {
 export function matchPlainFilePaths(text: string): PlainFilePathMatch[] {
 	const masked = text.replace(URL_RE, (matched) => " ".repeat(matched.length));
 	const candidates: PlainFilePathMatch[] = [];
-	const collect = (regex: RegExp, accept?: (value: string) => boolean) => {
+	const collect = (regex: RegExp, accept?: (value: string, following: string | undefined) => boolean) => {
 		regex.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		while ((match = regex.exec(masked)) !== null) {
-			if (accept && !accept(match[0])) continue;
+			// following = 命中区间之后紧邻的一个字符（文本末尾为 undefined），
+			// 供尾斜杠候选判断「这个斜杠是不是真的在收尾」。
+			if (accept && !accept(match[0], masked[match.index + match[0].length])) continue;
 			candidates.push({ path: text.slice(match.index, match.index + match[0].length), start: match.index, end: match.index + match[0].length });
 		}
 	};
 	collect(FILE_PATH_RE);
-	collect(TRAILING_SLASH_DIR_RE, hasPlausibleSegment);
+	collect(TRAILING_SLASH_DIR_RE, isTrailingSlashDirCandidate);
 	collect(BARE_DIR_RE);
 	collect(NAMELESS_FILE_RE);
 	candidates.sort((a, b) => a.start - b.start || b.end - a.end);

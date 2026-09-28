@@ -31,6 +31,7 @@ import { applyDshControlEvent, beginDshCancel, type DshControlState } from "./ds
 import { toDshAvailableModels } from "./dshModels";
 import { approvalUiRequest, buildDshRejectValue, buildDshRespondValue, parseDshApprovalFrame, parseDshQuestionFrame, questionUiRequest, type DshApprovalFrame, type DshQuestionFrame } from "./dshApprovalBridge";
 import { assembleDshHistoryEntries, countDshUserMessages, DSH_HISTORY_DEFAULT_TURN_PAGE_SIZE, normalizeDshTurnPageSize, planDshHistoryRounds, trimToOldestTurnStart } from "./dshHistoryPagePlan";
+import { isContextOverflowError } from "../../shared/contextOverflow";
 
 const DSH_PROJECTION_KEYS = ["contextPressure", "contextBreakdown", "tokenUsage", "sessionStats", "todos"];
 
@@ -878,6 +879,7 @@ export class DshAgentManager implements SessionAgentGateway {
 			contextTokens: typeof contextTokens === "number" ? contextTokens : undefined,
 			contextWindow: typeof contextWindow === "number" ? contextWindow : undefined,
 			contextPercent: contextPercent,
+			contextOverflow: runtime.contextOverflow === true,
 			contextMessageTokens: typeof contextMessageTokens === "number" ? contextMessageTokens : undefined,
 			// host contextBreakdown 的系统/工具两段（dsh-web ContextMeter 三段图例同源；
 			// 0 是有效值，undefined 表示无投影）
@@ -1337,14 +1339,14 @@ export class DshAgentManager implements SessionAgentGateway {
 		});
 	}
 
-	async setThinking(agentId: string, level: string): Promise<unknown> {
+	async setThinking(agentId: string, level: string): Promise<void> {
 		// DSH 的思考档走 selectModel.reasoningEffort，没有独立 RPC。
 		const runtime = this.runtime(agentId);
 		const selected = runtime.model;
 		if (!selected) {
 			// 没有当前模型时 DSH 无法把档位落到 host；只作为草稿偏好由 catalog 保存，
 			// 不写入 runtime.thinkingLevel，否则后续换模型会误把它带过去。
-			return { accepted: true, thinkingLevel: level };
+			return;
 		}
 		// 不在 PiDeck 侧预先拒绝运行中的回合：如果 host 支持动态切换，
 		// 当前回合可以直接使用；如果 host 不支持，由 selectModel 返回 busy/error。
@@ -1369,11 +1371,36 @@ export class DshAgentManager implements SessionAgentGateway {
 				runtime.thinkingLevel = previous;
 				throw this.selectModelError(updated.result.error, selected.provider, selected.model);
 			}
-			return this.getRuntimeState(agentId);
 		} catch (error) {
 			runtime.thinkingLevel = previous;
 			throw error;
 		}
+	}
+
+	/**
+	 * 会话保存的模型偏好被 host 拒绝时的用户提示（issue #253 的「选了但没生效」）。
+	 *
+	 * 引导页/草稿期的 DSH 点选已作为显式 model 传给 host（sessions.selectModel）；
+	 * host 是模型与档位能力的最终裁决者，拒绝时 applyPreferences 会降级到部署默认并
+	 * 保留 catalog 偏好——但不告知的话，用户会看到底栏显示自己选的模型，实际跑的却是
+	 * 另一个模型（比修复前的「选不动」更难排查）。
+	 *
+	 * 为什么用 toast（agentsNotice）而不是像 pi 那样插会话内系统消息：DSH 的
+	 * runtime.messages 是 host projection 的整段替换（history/回填等多处
+	 * `runtime.messages = projection.messages`），本地插入的消息在下一次投影时会被冲掉；
+	 * toast 通道（useSessionRuntimeBridge → showNotice）不依赖消息列表，可靠可见。
+	 */
+	notifyModelPreferenceIgnored(agentId: string, provider: string, modelId: string): void {
+		if (!this.runtimes.has(agentId)) return;
+		this.emit(ipcChannels.agentsNotice, {
+			agentId,
+			i18nKey: "notice.modelPreferenceIgnored",
+			kind: "warning",
+			duration: 8000,
+			// 渲染层 t() 支持 i18nParams？——不支持（bridge 只传 key），所以主文案里不放占位符，
+			// 模型身份放进 message 供 i18n 未命中时的兜底显示。
+			message: `模型偏好 ${provider}/${modelId} 未能应用（DSH host 未接受），已沿用当前模型。请重新选择。`,
+		});
 	}
 
 	async setPermission(agentId: string, preset: string): Promise<unknown> {
@@ -2238,6 +2265,15 @@ export class DshAgentManager implements SessionAgentGateway {
 			this.emitRuntimeState(runtime.tab.id);
 		}
 		if (p.turnEnded) {
+			const wasCompacting = runtime.isCompacting === true;
+			const turnEndReason = event?.data && typeof event.data === "object" && (event.data as { reason?: unknown }).reason;
+			const reasonMessage = turnEndReason && typeof turnEndReason === "object" && "error" in turnEndReason && typeof (turnEndReason as { error?: { message?: unknown } }).error?.message === "string" ? (turnEndReason as { error: { message: string } }).error.message : "";
+			if (reasonMessage) {
+				runtime.contextOverflow = isContextOverflowError(reasonMessage);
+			} else if (wasCompacting) {
+				// /compact 回合正常收口后，清掉之前的超限恢复态；普通回答收口不改写该标记。
+				runtime.contextOverflow = false;
+			}
 			this.emit(ipcChannels.agentsTextStream, {
 				agentId: runtime.tab.id,
 				text: lastAssistantText(runtime.messages),
@@ -2371,6 +2407,8 @@ type DshAgentRuntime = {
 	planModeActive?: boolean;
 	/** /compact 命令回合进行中（命令已发出、turn/end 未到）；UI 压缩按钮显示进行态。 */
 	isCompacting?: boolean;
+	/** 最近一次请求因上下文超限失败；保留压缩恢复入口，即使 host 没有 pressure 投影。 */
+	contextOverflow?: boolean;
 	/** 已投影的最大事件 seq（D6：mux 重连补帧时跳过已投影事件，避免重复）。 */
 	lastProjectedSeq?: number;
 	/** 每个 host projection key 的水位线，按 DSH web 的 higher-seq-wins 规则维护。 */

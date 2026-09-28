@@ -290,7 +290,8 @@ export class AutomationRunCoordinator {
 				title,
 				environment,
 				source: "pi",
-				titleLocked: true,
+				// 自动化任务的标题由用户配置直接给出，是终态名而非占位。
+				titleOrigin: "manual",
 				backend: task.backend ?? "pi",
 				model: task.model,
 				thinkingLevel: task.thinkingLevel,

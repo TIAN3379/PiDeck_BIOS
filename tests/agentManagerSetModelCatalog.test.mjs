@@ -120,3 +120,38 @@ test("setModel: catalog callback absent and model not in models.json → plain e
 	assert.ok(error && typeof error === "object", "setModel 应抛出错误");
 	assert.equal(error.needsRestart, undefined);
 });
+
+test("setModel and setThinking send only selection commands, never get_state", async () => {
+	const requests = [];
+	const manager = new AgentManager(
+		() => ({ id: "project-1", name: "Project", path: "C:/project" }),
+		() => null,
+		{ get: () => ({}) },
+		configWithoutModels(),
+	);
+	manager.agents.set("agent-1", {
+		tab: {
+			id: "agent-1",
+			projectId: "project-1",
+			cwd: "C:/project",
+			title: "Session",
+			status: "idle",
+			sessionEnvironment: "native",
+			sessionSource: "pi",
+			createdAt: 1,
+		},
+		process: {
+			client: {
+				request: async (request) => {
+					requests.push(request.type);
+					return { success: true, data: {} };
+				},
+			},
+		},
+	});
+
+	await manager.setModel("agent-1", "router9", "qd/qfmodel");
+	await manager.setThinking("agent-1", "max");
+
+	assert.deepEqual(requests, ["set_model", "set_thinking_level"]);
+});

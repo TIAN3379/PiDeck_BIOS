@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_IMAGE_GEN_OUTPUT_FORMAT, DEFAULT_IMAGE_GEN_SIZE, DEFAULT_IMAGE_GEN_WATERMARK, parseImageGenOutputFormat, parseImageGenSize, parseImageGenWatermark } from "../../shared/imageGenParams";
-import { createDefaultExternalEditorSettings, createDefaultSoundAlertSettings, DEFAULT_PET_SCALE, normalizeSoundAlertSettings, type AppSettings } from "../../shared/types";
+import { createDefaultExternalEditorSettings, createDefaultSoundAlertSettings, DEFAULT_PET_SCALE, DEFAULT_TOAST_DURATION_MS, TOAST_DURATION_STICKY_MS, normalizeSoundAlertSettings, type AppSettings } from "../../shared/types";
 import { normalizePinnedSessionIds } from "../../shared/pinnedSessions";
+import { normalizeHiddenModules } from "../../shared/hiddenModules";
 import { parseBusySendDelivery } from "../../shared/busySendDelivery";
 import { sanitizeShortcutOverrides } from "../../shared/shortcuts";
 import { normalizeThemeSchedule } from "../../shared/themeSchedule";
 import { normalizeQuickMessages } from "../../shared/quickMessages";
+import { normalizeFontSizeMode, normalizeOptionalFontSizeMode } from "../../shared/fontSize";
 import { clampSessionTabMaxWidth, SESSION_TAB_MAX_WIDTH_DEFAULT } from "../../shared/sessionTabWidth";
 import { getAppLogger } from "../logging/sharedLogger";
 import { setConfiguredGitPath } from "../git/gitExecutable";
@@ -104,8 +106,9 @@ const defaultSettings: AppSettings = {
 	startupWindowMode: "last",
 	piEnvironmentChecked: false,
 	sessionTabOpenMode: "preview",
-	// 默认关闭：标题请求会额外调用当前 pi 模型并消耗 token，避免用户无感知地产生用量。
-	autoSessionTitle: false,
+	// 默认开启：标题由当前 pi 模型异步生成，侧栏不再全是「新会话」；
+	// 会额外消耗一次模型调用和少量 token，设置说明已写明，用户可随时关闭。
+	autoSessionTitle: true,
 	// 忙碌时发送默认「插入当前回合」（对齐 pi 历史行为）；dsh 会话此前默认排队，
 	// 统一后由本设置项决定，用户可在常用设置→会话中改回。
 	busySendDelivery: "steer",
@@ -151,11 +154,13 @@ Gitmoji 对应关系：
 	agentCountReminderEnabled: true,
 	// 公告通知默认开启：新公告弹 toast 提醒（弹出时机另有忙碌延迟控制）
 	announcementNotificationEnabled: true,
+	// toast 展示时长：全局统一时长（见 AppSettings.toastDurationMs）
+	toastDurationMs: DEFAULT_TOAST_DURATION_MS,
 	showThinking: readPiAgentShowThinking() ?? true,
-	// 流式对话设置：默认自动展开中间过程（思考/工具详情随最新轮流式展开）；
-	// 新一轮开始默认收起非最新轮（含手动展开的），用户可在设置中关闭。
+	// 流式对话设置：默认自动展开中间过程（思考/工具详情随最新轮流式展开）。
 	expandInterimDuringStream: true,
-	collapsePrevRunsOnNewTurn: true,
+	// 过程组显示默认开启：连续思考/工具调用合并成过程组，设置里可随时关回平铺显示。
+	processGroupDisplay: true,
 	showDevTools: false,
 	developerDiagnostics: false,
 	// 默认关闭 Chromium 沙箱：与历史 Windows no-sandbox 兼容策略一致
@@ -184,6 +189,7 @@ Gitmoji 对应关系：
 	// 分屏窄栏时由容器查询自动收敛，详见 foundation.css --chat-content-pct。
 	chatContentWidthPct: 80,
 	// 会话 Tab 最大宽度默认 104px：与旧硬编码 max-w-[104px] 一致，迁移零回归。
+	navigationMode: "tabs",
 	sessionTabMaxWidth: SESSION_TAB_MAX_WIDTH_DEFAULT,
 	maxEditorFileSizeMB: 5,
 	externalEditors: createDefaultExternalEditorSettings(),
@@ -209,6 +215,8 @@ Gitmoji 对应关系：
 	hiddenProviders: [],
 	hiddenModels: [],
 	hiddenAuthProviders: [],
+	// 功能模块默认全显示：隐藏列表为空 = 不隐藏任何模块（对现有用户零行为变化）
+	hiddenModules: [],
 	// 供应商卡片自定义顺序：空数组 = 未自定义，按配置原序展示
 	providerOrder: [],
 	dshProviderOrder: [],
@@ -260,7 +268,7 @@ Gitmoji 对应关系：
 	// 字体配置：默认使用系统字体；用户可通过自定义字体设置修改。
 	// 出厂默认取 "default" 档：与 CSS token 基线（:root 无覆盖时）一致，
 	// 避免「默认」档位名与实际出厂外观错位（旧默认 medium 比 default 大一档）。
-	fontSize: "default",
+	fontSize: "medium",
 	uiFontSize: null,
 	chatFontSize: null,
 	inputFontSize: null,
@@ -297,6 +305,17 @@ export function migrateUpdateSourceToAtomgit(settings: { updateSource?: unknown;
 /** 供应商卡片自定义顺序的落盘上限：只防脏数组无限膨胀，正常配置远低于此值 */
 const MAX_PROVIDER_ORDER_ENTRIES = 200;
 
+/**
+ * toast 展示时长的读取钳制：-1（常驻哨兵，见 TOAST_DURATION_STICKY_MS）与 [1000, 60000]
+ * 的有限正数放行，其余（脏数据/越界/负数）回落默认值。
+ * 磁盘 JSON 无类型，手工改坏不能让 toast 永不再消失；Infinity 不进这里（JSON 存不了）。
+ */
+function clampToastDurationMs(value: unknown): number {
+	if (value === TOAST_DURATION_STICKY_MS) return TOAST_DURATION_STICKY_MS;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 1000 || value > 60000) return DEFAULT_TOAST_DURATION_MS;
+	return value;
+}
+
 export class SettingsStore {
 	private readonly filePath = desktopSettingsPath();
 	private settings: AppSettings = { ...defaultSettings };
@@ -329,6 +348,9 @@ export class SettingsStore {
 			if (typeof this.settings.announcementNotificationEnabled !== "boolean") {
 				this.settings.announcementNotificationEnabled = defaultSettings.announcementNotificationEnabled;
 			}
+			// toast 展示时长：旧 settings.json 缺字段或脏值（0/负数/超大/字符串）钳回默认，
+			// 避免升级后 toast 永不再消失或瞬间消失。
+			this.settings.toastDurationMs = clampToastDurationMs(this.settings.toastDurationMs);
 			// 兼容迁移：内置 CommitMono 字体已移除（打包瘦身），旧设置里的 "commit-mono"
 			// 不再存在于 AppFontMonoMode 枚举，统一回退到系统等宽字体，避免类型漂移。
 			// 注意：磁盘 JSON 是无类型的，旧值可能是已删除的枚举项，先拓宽为 string 再比较。
@@ -348,9 +370,12 @@ export class SettingsStore {
 			// 用线性映射保留旧值感觉：800→60%、1400→84%、1800(不限)→100%。
 			this.migrateContentWidth();
 			// 会话 Tab 最大宽度：磁盘 JSON 无类型，手工改坏（非数字/超界）时钳回合法区间。
+			this.settings.navigationMode = this.settings.navigationMode === "simple" ? "simple" : "tabs";
 			this.settings.sessionTabMaxWidth = clampSessionTabMaxWidth(this.settings.sessionTabMaxWidth);
 			// 兼容迁移：全局用量自动查询开关已删除（改为每个 provider 徽章/弹窗里的开关）。
 			this.migrateRemovedUsageAutoQuerySwitch();
+			// 兼容迁移：「新一轮开始时收起上一轮」开关已删除，改为恒定行为（见 useTurnExecution）。
+			this.migrateRemovedCollapsePrevRunsSwitch();
 			// 兼容迁移：按供应商/模型过滤的代理白名单，旧数据缺省为 []（不按名单过滤，保持全局行为）。
 			this.normalizePiProxyProviders();
 			this.normalizePiProxyModels();
@@ -367,6 +392,13 @@ export class SettingsStore {
 			this.settings.themeScheduleDarkStart = schedule.darkStart;
 			// 置顶状态只接受稳定、非空的 SessionRecord id；旧设置缺省时自然回落为空。
 			this.settings.pinnedSessionIds = normalizePinnedSessionIds(parsed.pinnedSessionIds);
+			// 字号档位：旧版本有 5 档（多一个已删除的 "default"），现在是 4 档（紧凑/中/大/特大）。
+			// 刻意不做迁移框架——任何不在档位表里的历史值一律落到「中」，旧用户升级后自动等于中；
+			// 同时避免 UI 下拉读到未知值时变成空白。null（跟随全局）必须保持 null。
+			this.settings.fontSize = normalizeFontSizeMode(this.settings.fontSize);
+			this.settings.uiFontSize = normalizeOptionalFontSizeMode(this.settings.uiFontSize);
+			this.settings.chatFontSize = normalizeOptionalFontSizeMode(this.settings.chatFontSize);
+			this.settings.inputFontSize = normalizeOptionalFontSizeMode(this.settings.inputFontSize);
 			// 声音提醒来自旧 JSON 时可能缺字段/非法；统一归一化（旧数据自动获得默认配置）。
 			this.settings.soundAlert = normalizeSoundAlertSettings(parsed.soundAlert);
 			// git 可执行文件路径来自旧 JSON 时可能是脏值（非字符串）；回落空串（自动解析），
@@ -385,6 +417,8 @@ export class SettingsStore {
 			// 避免把脏值当成迁移种子写进配置文件；缺字段回落空数组（“没有旧数据”），
 			// 不要在这里注入出厂清单——出厂清单改由随包资源文件提供。
 			this.settings.quickMessages = normalizeQuickMessages(parsed.quickMessages);
+			// 隐藏模块来自旧 JSON 时可能是脏值（非数组/含空串与重复项）；统一清洗，缺字段回落空数组（全显示）。
+			this.settings.hiddenModules = normalizeHiddenModules(parsed.hiddenModules);
 		}
 		// showThinking 不再作为可持久化的独立配置项，完全跟随 pi agent 的 hideThinkingBlock。
 		// 启动时重新读取以确保每次启动都使用最新值，而非缓存的 defaultSettings。
@@ -450,6 +484,19 @@ export class SettingsStore {
 		void this.save().catch(() => undefined);
 	}
 
+	/**
+	 * 兼容迁移：「新一轮开始时收起上一轮」开关已删除，行为恒定开启。
+	 *
+	 * 与用量开关同因：设置对象整体持久化，旧字段留在内存里会被下一次任意保存写回磁盘，
+	 * 而它已不再被任何代码读取。删除后立即落盘一次；磁盘 JSON 无类型，先按 unknown 收窄再删。
+	 */
+	private migrateRemovedCollapsePrevRunsSwitch() {
+		const legacy = this.settings as unknown as Record<string, unknown>;
+		if (!("collapsePrevRunsOnNewTurn" in legacy)) return;
+		delete legacy.collapsePrevRunsOnNewTurn;
+		void this.save().catch(() => undefined);
+	}
+
 	get() {
 		// showThinking 由 pi agent 的 hideThinkingBlock 动态决定，每次 get() 都重新读取
 		const computed = readPiAgentShowThinking();
@@ -472,6 +519,9 @@ export class SettingsStore {
 		// IPC 入参不可信：自动标题开关只接受布尔值，非法值保持原有设置。
 		if ("autoSessionTitle" in safePatch && typeof safePatch.autoSessionTitle !== "boolean") {
 			delete safePatch.autoSessionTitle;
+		}
+		if ("navigationMode" in safePatch && safePatch.navigationMode !== "tabs" && safePatch.navigationMode !== "simple") {
+			delete safePatch.navigationMode;
 		}
 		// 会话 Tab 最大宽度：非有限数值直接丢弃（保持原设置），合法值钳到 80–400。
 		if ("sessionTabMaxWidth" in safePatch) {
@@ -571,9 +621,17 @@ export class SettingsStore {
 		if ("pinnedSessionIds" in safePatch) {
 			safePatch.pinnedSessionIds = normalizePinnedSessionIds(safePatch.pinnedSessionIds);
 		}
+		// 隐藏模块清单来自渲染层开关，入参不可信：只收字符串、去重去空。
+		if ("hiddenModules" in safePatch) {
+			safePatch.hiddenModules = normalizeHiddenModules(safePatch.hiddenModules);
+		}
 		// 声音提醒来自渲染层，入参不可信：缺字段/非法引用/越界音量一律回落默认。
 		if ("soundAlert" in safePatch) {
 			safePatch.soundAlert = normalizeSoundAlertSettings(safePatch.soundAlert);
+		}
+		// toast 展示时长来自渲染层，入参不可信：非法值钳回默认（-1=常驻哨兵放行）。
+		if ("toastDurationMs" in safePatch) {
+			safePatch.toastDurationMs = clampToastDurationMs(safePatch.toastDurationMs);
 		}
 		// 闲置 agent 释放参数来自渲染层，钳制到合理范围避免非法值（0/负数/超大）写入磁盘
 		if ("idleAgentKeepCount" in safePatch) {

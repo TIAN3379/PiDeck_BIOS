@@ -3,7 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui-shadcn
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "./components/ui-shadcn/dialog";
 import { ConfirmDialog } from "./components/ui-shadcn/ConfirmDialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui-shadcn/alert-dialog";
-import { X, Cpu, FileCode2, FileText, KeyRound, Puzzle, Settings2, Shield, ShieldCheck, Sparkles, PlugZap, FolderOpen } from "lucide-react";
+import { X, Blocks, Cpu, FileCode2, FileText, KeyRound, Puzzle, Settings2, Shield, ShieldCheck, Sparkles, PlugZap, FolderOpen } from "lucide-react";
 import { cn } from "./lib/utils";
 import { deepClone } from "./utils/deepEqual";
 import { showNotice } from "./utils/notice";
@@ -25,6 +25,10 @@ import { SettingsTab } from "./config/SettingsTab";
 import { PromptsTab } from "./config/PromptsTab";
 import { SkillsTab } from "./config/SkillsTab";
 import { ExtensionsTab } from "./config/ExtensionsTab";
+// 桥贡献的「独立配置页」落点：每个 gui:config.page:* 贡献在「Agent 能力」组里占一个导航页。
+// 会话取值 / 落点 id 映射 / 「页消失就回退」都收在 hook 里（PR 评审 §3）。
+import { BridgeGuiSingleSlot } from "./components/bridge/BridgeSlot";
+import { guiPageSectionId, useBridgeConfigPages } from "./hooks/useBridgeConfigPages";
 import { type ResourceScope } from "./config/ResourceScopeSelector";
 import { SecuritySection, type SecuritySectionHandle } from "./components/config/SecuritySection";
 import { DshLogo, PiLogo } from "./components/session/SessionSourceBadge";
@@ -44,7 +48,7 @@ import { DirtyMarker } from "./components/app/settings/SettingRows";
 import { isValidProviderName } from "../../shared/providerName";
 import { mergeProviderDraft, type AddProviderDraft } from "./config/addProviderDraft";
 import { useAtomValue } from "jotai";
-import { dshRuntimeStatusAtom } from "./atoms";
+import { dshModuleHiddenAtom, dshRuntimeStatusAtom } from "./atoms";
 import { dshUiVisibilityFor } from "../../shared/types/dshRuntime";
 
 const api: PiDesktopApi = (window as unknown as { piDesktop: PiDesktopApi }).piDesktop;
@@ -53,9 +57,12 @@ const api: PiDesktopApi = (window as unknown as { piDesktop: PiDesktopApi }).piD
 // config 组子页（模型/认证/设置/信任/MCP/原始文件）用 "config:<tab>" 复合值，
 // 其余组直接以 section 名作 value；Tabs 受控 value 由此编码，业务仍走 section/tab 双 state，
 // loadConfig 等既有依赖零改动。
-type ConfigSection = "config" | "security" | "skills" | "prompts" | "extensions";
+// `page.*` 是桥贡献的独立配置页（落点 `config.page`）—— 数量由扩展决定，不是静态枚举。
+type ConfigSection = "config" | "security" | "skills" | "prompts" | "extensions" | `page.${string}`;
 
 // 注意：修改 ConfigSection/ConfigTab 枚举时需同步更新 CONFIG_SECTIONS/CONFIG_TABS 校验数组
+
+// 注意：`guiPageSectionId` 的实现与单测在 hooks/useBridgeConfigPages.ts（这里直接复用，避免漂移）
 
 /** section+tab → Tabs value（config 组子页编码为 "config:<tab>"）。 */
 function sectionTabValue(section: ConfigSection, tab: ConfigTab): string {
@@ -89,7 +96,9 @@ function loadLastConfigTab(): { section: ConfigSection; tab?: ConfigTab } | null
 		const raw = localStorage.getItem(CONFIG_LAST_TAB_KEY);
 		if (!raw) return null;
 		const parsed = parseSectionTabValue(raw);
-		if (!CONFIG_SECTIONS.includes(parsed.section)) return null;
+		// `page.*` 的合法性没法在这里判（贡献列表要等 pi 起来才有）—— 先放行，
+		// 由 ConfigModalContent 里的 effect 在贡献确实不存在时拉回 config。
+		if (!CONFIG_SECTIONS.includes(parsed.section) && !parsed.section.startsWith("page.")) return null;
 		if (parsed.section === "config" && (!parsed.tab || !CONFIG_TABS.includes(parsed.tab))) return null;
 		return parsed;
 	} catch {
@@ -374,6 +383,12 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	const [section, setSection] = useState<ConfigSection>(resourceOnly ? "skills" : focusConfigTab || focusProvider ? "config" : (lastTab?.section ?? "config"));
 	// 深链（如圆球面板「去配置用量」）优先于上次记住的配置分页。
 	const [tab, setTab] = useState<ConfigTab>(focusConfigTab ?? lastTab?.tab ?? "models");
+	// 桥贡献的配置页：会话取值 / 落点 id 映射 / 「页消失就回退」都由该 hook 拥有
+	// （PR 评审 §3：这段业务逻辑不留在 3000 行的装配组件里）。
+	const { sessionId: bridgeSessionId, pages: configPages } = useBridgeConfigPages({
+		activeSection: section,
+		onPageMissing: () => setSection("config"),
+	});
 	// 深链 provider：models 页展开该供应商卡片并滚动高亮（ModelsTab 消费）。
 	const [focusedProvider, setFocusedProvider] = useState<string | undefined>(focusProvider);
 	// 用量探针配置弹窗：由模型/认证/DSH 卡片触发（provider + backend 决定配置落盘位置）。
@@ -405,6 +420,17 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	 *  新建会话默认后端跟随设置项 defaultAgentBackend（默认 pi），与此处配置管理入口相互独立。
 	 *  弹窗每次打开都会重建 state，这里从 localStorage 恢复上次选定的后端分页。 */
 	const [backendPane, setBackendPane] = useState<"dsh" | "pi">(resourceOnly ? "pi" : (focusBackendPane ?? loadLastConfigBackendPane));
+	/**
+	 * 用户隐藏了 DSH 模块（设置 → 外观 → 功能模块）：不渲染 Pi/DSH 分页头，弹窗固定在 Pi 页。
+	 * 深链点名 DSH 页（runtime 提示「去安装」等）时例外：用户是主动要去，此时保留分页头供切回 Pi。
+	 */
+	const dshModuleHidden = useAtomValue(dshModuleHiddenAtom);
+	const dshPaneHidden = dshModuleHidden && focusBackendPane !== "dsh";
+	useEffect(() => {
+		// 上次停在 DSH 页、或弹窗开着时在设置里隐藏了 DSH：回到 Pi 页，避免停在一个没有入口的页面。
+		// 只改本次弹窗的 state，不覆写 localStorage 记忆——恢复显示后仍回到用户上次的选择。
+		if (dshPaneHidden) setBackendPane("pi");
+	}, [dshPaneHidden]);
 	/** 切换后端分页并持久化：退出配置管理再进入时停留在上次选定的后端。 */
 	const selectBackendPane = useCallback((value: string) => {
 		const next = value === "pi" ? "pi" : "dsh";
@@ -738,6 +764,39 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		onConfirm: () => void;
 	} | null>(null);
 
+	/**
+	 * 检测成功且实际走通 /v1（或 /v1beta）时，把表单里的 baseUrl 自动改成带版本路径。
+	 * 原因：检测侧会兼容补路径，但 pi 会话会原样读 models.json；不改写则「测试正常、会话 404」。
+	 * 仅改内存表单，需用户点保存后才写入磁盘。
+	 * 后端仅在确实需要改写时返回 suggestedBaseUrl，前端直接应用即可。
+	 * 声明在 loadConfig 之前：后台自动发现分支要在闭包里引用它（TDZ）。
+	 */
+	const applySuggestedBaseUrl = useCallback(
+		(providerName: string, suggestedBaseUrl?: string) => {
+			if (!suggestedBaseUrl) return false;
+			const next = suggestedBaseUrl.replace(/\/+$/, "");
+			if (!next) return false;
+			// 函数式更新，避免 async 返回时闭包拿到旧 modelsData。
+			setModelsData((prev) => {
+				const provider = prev.providers[providerName];
+				if (!provider) return prev;
+				const current = (provider.baseUrl ?? "").replace(/\/+$/, "");
+				if (current === next) return prev;
+				return {
+					...prev,
+					providers: {
+						...prev.providers,
+						[providerName]: { ...provider, baseUrl: next },
+					},
+				};
+			});
+			// 检测/测试自动改写 baseUrl 同样属于表单修改，标记未保存
+			markDirty("config:models");
+			return true;
+		},
+		[markDirty],
+	);
+
 	const loadConfig = useCallback(
 		async (target: ConfigTab, options?: { force?: boolean; silent?: boolean }) => {
 			// silent：测试连接成功后回读磁盘用——不置 loading，避免 ModelsTab 在
@@ -830,6 +889,11 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 								.then((result) => {
 									if (result.success && result.models) {
 										discovered[providerName] = result.models;
+										// 后台发现与手动「获取模型」同源：检测走通了 /v1 而 models.json 仍是根路径时
+										// 同步改写表单 baseUrl（仅内存 + markDirty，用户保存才落盘），
+										// 避免「列表拉到了、会话仍 404」。KNOWN_PROVIDER_ENDPOINTS 的
+										// provider 不在 modelsData 里时该调用是 no-op。
+										applySuggestedBaseUrl(providerName, result.suggestedBaseUrl);
 									}
 								})
 								.catch(() => {
@@ -898,7 +962,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 				setLoading(false);
 			}
 		},
-		[tab, clearDirty],
+		[tab, clearDirty, applySuggestedBaseUrl],
 	);
 
 	useEffect(() => {
@@ -1109,38 +1173,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		// 展开新复制的 provider
 		setExpandedProvider(newName);
 	};
-
-	/**
-	 * 检测成功且实际走通 /v1（或 /v1beta）时，把表单里的 baseUrl 自动改成带版本路径。
-	 * 原因：检测侧会兼容补路径，但 pi 会话会原样读 models.json；不改写则「测试正常、会话 404」。
-	 * 仅改内存表单，需用户点保存后才写入磁盘。
-	 * 后端仅在确实需要改写时返回 suggestedBaseUrl，前端直接应用即可。
-	 */
-	const applySuggestedBaseUrl = useCallback(
-		(providerName: string, suggestedBaseUrl?: string) => {
-			if (!suggestedBaseUrl) return false;
-			const next = suggestedBaseUrl.replace(/\/+$/, "");
-			if (!next) return false;
-			// 函数式更新，避免 async 返回时闭包拿到旧 modelsData。
-			setModelsData((prev) => {
-				const provider = prev.providers[providerName];
-				if (!provider) return prev;
-				const current = (provider.baseUrl ?? "").replace(/\/+$/, "");
-				if (current === next) return prev;
-				return {
-					...prev,
-					providers: {
-						...prev.providers,
-						[providerName]: { ...provider, baseUrl: next },
-					},
-				};
-			});
-			// 检测/测试自动改写 baseUrl 同样属于表单修改，标记未保存
-			markDirty("config:models");
-			return true;
-		},
-		[markDirty],
-	);
 
 	// 从 provider 的 baseUrl + apiKey 拉取可用模型列表
 	const handleFetchModels = async (providerName: string) => {
@@ -1550,6 +1582,12 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		});
 		markDirty("config:auth");
 		setExpandedAuth(newName);
+	};
+
+	// 导入面板把合并结果写入未保存草稿；用户在配置页检查后点「保存」才落盘（设计决策 #7）
+	const handleApplyModelsTransfer = (next: ModelsFile) => {
+		setModelsData(next);
+		markDirty("config:models");
 	};
 
 	const handleDeleteProviders = (names: string[]) => {
@@ -2406,7 +2444,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		<>
 			{/* 顶层后端分页：Pi 配置管理（默认，在左）/ DSH 配置管理（在右） */}
 			<Tabs value={backendPane} onValueChange={selectBackendPane} className="flex min-h-0 min-w-0 flex-1 flex-col">
-				{!resourceOnly && (
+				{!resourceOnly && !dshPaneHidden && (
 					<TabsList
 						// 嵌入设置窗口时 Pi/DSH 用 shadcn line variant（下划线式）：与顶层「系统设置/配置管理」
 						// 的分段条（default variant）区分层级——上层页面级、下层内容级，避免两条同款 tab 冲突。
@@ -2456,7 +2494,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 								/* localStorage 不可用（隐私模式等）时静默失败，仅本次会话内不记忆 */
 							}
 						}}
-						className="config-layout flex min-h-0 flex-1 flex-row gap-0 bg-transparent max-[820px]:flex-col"
+						className="config-layout grid min-h-0 flex-1 gap-0 bg-transparent"
 					>
 						<TabsList
 							className="config-sidebar flex min-h-0 shrink-0 flex-col items-stretch gap-2.5 overflow-auto border-0 border-r border-border rounded-none bg-transparent p-2.5 data-[orientation=vertical]:w-[160px] max-[820px]:flex-row max-[820px]:gap-3 max-[820px]:overflow-x-auto max-[820px]:overflow-y-hidden max-[820px]:border-r-0 max-[820px]:border-b"
@@ -2503,9 +2541,30 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 									</span>
 									{t("config.nav.prompts")}
 								</TabsTrigger>
+								{/* 桥贡献的独立配置页（落点 `config.page`）：标题取贡献自己的 slot.title，
+								    缺省用 key；排序已在 useGuiContributions 里按 order + key 做好。 */}
+								{configPages.map((page) => (
+									<TabsTrigger key={page.targetId} value={guiPageSectionId(page.targetId)} className="config-nav-btn h-8 justify-start gap-1.5 px-2.5 text-control font-medium">
+										<span className="config-nav-icon">
+											<Blocks size={14} aria-hidden="true" />
+										</span>
+										{page.node.slot?.title ?? page.key}
+									</TabsTrigger>
+								))}
 							</div>
 						</TabsList>
 
+						{/* 桥贡献的独立配置页内容：一项一个 Tab，按完整落点 id 精确取项。 */}
+						{configPages.map((page) => (
+							<TabsContent key={page.targetId} value={guiPageSectionId(page.targetId)} className="config-main min-w-0">
+								{/* 与原生 tab 同构：TabsContent > .config-content（滚动容器）> 内容。
+								    少了 .config-content 这层，页面内容既不滚、也会被 .config-main 裁掉；
+								    页面内的 sticky/absolute 还会挂到弹窗的滚动视口上（页脚悬到列表中间）。 */}
+								<div className="config-content">
+									<BridgeGuiSingleSlot sessionId={bridgeSessionId} slot="config.page" targetId={page.targetId} />
+								</div>
+							</TabsContent>
+						))}
 						<TabsContent value="config:models" className="config-main min-w-0">
 							<div className="config-content">
 								{statusBlock}
@@ -2550,6 +2609,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 											onDeleteProvider={handleDeleteProvider}
 											onDuplicateProvider={handleDuplicateProvider}
 											onDeleteProviders={handleDeleteProviders}
+											onApplyModelsTransfer={handleApplyModelsTransfer}
 											onAddModel={handleAddModel}
 											onUpdateModel={handleUpdateModel}
 											onUpdateModelThinkingLevel={handleUpdateModelThinkingLevel}

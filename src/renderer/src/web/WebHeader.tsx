@@ -6,7 +6,8 @@
  */
 import { useState } from "react";
 import { Check, ChevronsUpDown, Menu, RefreshCw, Target } from "lucide-react";
-import type { AvailableModel } from "../../../shared/types";
+import type { AgentBackend, AvailableModel, SessionModelPreference } from "../../../shared/types";
+import { resolveModelDisplayName } from "../../../shared/modelDisplayName";
 import { Button } from "@/components/ui-shadcn/button";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui-shadcn/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui-shadcn/popover";
@@ -14,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { SessionBackendMark } from "@/components/session/SessionSourceBadge";
-import type { AgentBackend } from "../../../shared/types";
 
 export type WebHeaderStatus = "idle" | "starting" | "running" | "error";
 
@@ -22,7 +22,7 @@ export function WebHeader(props: {
 	title: string;
 	status: WebHeaderStatus;
 	onOpenSidebar: () => void;
-	model?: { provider: string; modelId: string };
+	model?: SessionModelPreference;
 	thinkingLevel?: string;
 	models: AvailableModel[];
 	backend?: AgentBackend;
@@ -76,16 +76,19 @@ export function WebHeader(props: {
 	);
 }
 
-function ModelPicker(props: { model?: { provider: string; modelId: string }; models: AvailableModel[]; refreshing?: boolean; onRefresh?: () => void; onChange: (model: AvailableModel) => void }) {
+function ModelPicker(props: { model?: SessionModelPreference; models: AvailableModel[]; refreshing?: boolean; onRefresh?: () => void; onChange: (model: AvailableModel) => void }) {
 	const [open, setOpen] = useState(false);
 	const { model, models, onChange } = props;
 	const currentValue = model ? `${model.provider}::${model.modelId}` : "";
+	const selectedName = model ? resolveModelDisplayName(model.modelName, model.modelId) : undefined;
+	const selectedLabel = model && selectedName ? `${model.provider}/${selectedName}` : t("web.model");
+	const selectedTooltip = model && selectedName ? `${selectedName} · ${model.provider}/${model.modelId}` : t("web.model");
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
-				<Button type="button" variant="ghost" size="sm" className="h-8 max-w-52 min-w-0 justify-between gap-1 px-2 text-caption text-muted-foreground hover:bg-muted/60 hover:text-foreground" aria-label={t("web.model")} title={model ? `${model.provider}/${model.modelId}` : t("web.model")}>
-					<span className="min-w-0 truncate">{model ? `${model.provider}/${model.modelId}` : t("web.model")}</span>
+				<Button type="button" variant="ghost" size="sm" className="h-8 max-w-52 min-w-0 justify-between gap-1 px-2 text-caption text-muted-foreground hover:bg-muted/60 hover:text-foreground" aria-label={t("web.model")} title={selectedTooltip}>
+					<span className="min-w-0 truncate">{selectedLabel}</span>
 					<ChevronsUpDown className="size-3.5 shrink-0" aria-hidden="true" />
 				</Button>
 			</PopoverTrigger>
@@ -113,18 +116,20 @@ function ModelPicker(props: { model?: { provider: string; modelId: string }; mod
 						<CommandEmpty>{t("web.modelEmpty")}</CommandEmpty>
 						{models.map((item) => {
 							const value = `${item.provider}::${item.id}`;
+							const name = resolveModelDisplayName(item.name, item.id);
+							const label = `${item.provider}/${name}`;
 							return (
 								<CommandItem
 									key={value}
-									value={`${item.provider} ${item.name || item.id} ${item.id}`}
+									value={`${item.provider} ${name} ${item.id}`}
+									title={`${name} · ${item.provider}/${item.id}`}
 									onSelect={() => {
 										onChange(item);
 										setOpen(false);
 									}}
 								>
 									<Check className={cn("mr-2 size-4", currentValue === value ? "opacity-100" : "opacity-0")} aria-hidden="true" />
-									<span className="min-w-0 flex-1 truncate">{item.name || item.id}</span>
-									<span className="shrink-0 text-caption text-muted-foreground">{item.provider}</span>
+									<span className="min-w-0 flex-1 truncate">{label}</span>
 								</CommandItem>
 							);
 						})}

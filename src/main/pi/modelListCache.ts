@@ -152,7 +152,7 @@ export function parsePiListModels(stdout: string): AvailableModel[] {
 			models.push({
 				provider,
 				id: modelId,
-				name: `${provider}/${modelId}`,
+				name: modelId,
 				contextWindow: parseTokenSize(tail[0] ?? ""),
 				maxTokens: parseTokenSize(tail[1] ?? ""),
 				reasoning: tail[2]?.toLowerCase() === "yes",
@@ -170,7 +170,7 @@ export function parsePiListModels(stdout: string): AvailableModel[] {
 			models.push({
 				provider,
 				id: modelId,
-				name: `${provider}/${modelId}`,
+				name: modelId,
 				contextWindow: parseTokenSize(prev),
 				maxTokens: parseTokenSize(last),
 			});
@@ -184,7 +184,7 @@ export function parsePiListModels(stdout: string): AvailableModel[] {
 			models.push({
 				provider,
 				id: modelId,
-				name: `${provider}/${modelId}`,
+				name: modelId,
 				reasoning: last.toLowerCase() === "yes",
 			});
 			continue;
@@ -196,7 +196,7 @@ export function parsePiListModels(stdout: string): AvailableModel[] {
 		models.push({
 			provider,
 			id: modelId,
-			name: `${provider}/${modelId}`,
+			name: modelId,
 		});
 	}
 	return models;
@@ -242,7 +242,7 @@ export function modelsFromPiConfig(modelsFile: unknown): AvailableModel[] {
 			models.push({
 				provider,
 				id: record.id,
-				name: typeof record.name === "string" && record.name ? record.name : `${provider}/${record.id}`,
+				name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : record.id,
 				reasoning: record.reasoning === true,
 				contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : undefined,
 				maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : undefined,

@@ -9,8 +9,8 @@ import { PiLogoCanvas } from "./PiLogoCanvas";
 import { Button } from "../ui-shadcn/button";
 import { ChangelogDialog } from "./settings/ChangelogDialog";
 
-/** 官网主页：品牌常量入口，与 launchRoutes 保持一致，强制系统浏览器打开。 */
-const WEBSITE_URL = "https://ayuayue.github.io/PiDeck/";
+/** 官网入口：站点自己的自定义域名（CNAME 即是它），不随仓库 owner / 改名漂移；点击强制系统浏览器打开。 */
+const WEBSITE_URL = "https://pideck.caoayu.top/";
 
 interface AboutPopoverProps {
 	/** 应用/pi/DSH/pi-ai 版本与时间信息，由 App 从主进程 AppInfo IPC 拉取后传入。 */

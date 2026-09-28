@@ -1,57 +1,69 @@
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect } from "./fixtures";
 
 /**
- * 窗口大小记忆回归（startupWindowMode="last"）：
- * 主进程 close 接线——正常退出应用时把当前窗口尺寸写入
- * userData/last-window-bounds.json；读取/顺延逻辑由 windowState 单测覆盖。
+ * 窗口几何记忆回归（startupWindowMode="last"）：
+ * 1) 主进程 close 接线——正常退出应用时把当前窗口位置 + 尺寸写入 userData/last-window-bounds.json；
+ * 2) 启动接线——带位置的记录按原位置还原（不再居中）。
+ * 读取/钳位/顺延的纯逻辑由 tests/windowState.test.mjs 覆盖；maximized 恢复走 applyStartupWindowMode，
+ * 该函数在 E2E 下刻意静默（不铺满屏遮挡用户），故不在此断言。
+ *
+ * last 是默认模式，直接用 seedSettings 落盘即可，不走设置页 UI（UI 路径由 settings 系列 E2E 覆盖）。
  */
-test("window size memory: close writes last bounds to userData", async ({ app, window }) => {
-	let userDataPath = "";
-	// 阶段 1：设置 last 模式（默认已是「上次窗口大小」）+ 调整窗口大小 + 正常退出
-	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
-	await window.locator(".settings-icon").click();
-	const modal = window.locator(".settings-modal");
-	await expect(modal).toBeVisible();
-	await modal.getByText("外观设置").click();
-	// 启动窗口预设下拉：先切到「窗口 · 大」再切回「上次窗口大小」制造脏字段，
-	// 保存后确认 last 模式生效（默认即 last，直接保存无脏字段不会出现保存按钮）
-	const combo = modal.getByRole("combobox").filter({ hasText: /上次窗口大小|窗口 · 大|Window · Large/ });
-	await combo.click();
-	await window
-		.getByRole("option", { name: /窗口 · 大|Window · Large/ })
-		.first()
-		.click();
-	await combo.click();
-	await window.getByRole("option", { name: "上次窗口大小" }).click();
-	await modal.getByRole("button", { name: "保存" }).click();
-	// 保存不自动关闭：显式关闭弹窗（无未保存变更时不弹确认）
-	await modal.getByRole("button", { name: "关闭" }).first().click();
-	await expect(modal).toHaveCount(0);
+test.use({ seedSettings: { startupWindowMode: "last" } });
 
-	// 调整窗口大小（主进程侧），等待落定后关闭应用（触发 close 记录）
-	userDataPath = await app.evaluate(({ app: e }) => e.getPath("userData"));
+test("window memory: close writes position + size to userData", async ({ app, window }) => {
+	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+	const userDataPath = await app.evaluate(({ app: e }) => e.getPath("userData"));
 	await app.evaluate(({ BrowserWindow }) => {
 		const w = BrowserWindow.getAllWindows()[0];
-		// 首启无 last 记录会顺延最大化：先还原再设尺寸，否则 setBounds 不生效
+		// 首启无 last 记录会顺延最大化：先还原再设几何，否则 setBounds 不生效
 		w?.unmaximize();
-		w?.setBounds({ width: 1200, height: 760 });
+		w?.setBounds({ x: 120, y: 90, width: 1200, height: 760 });
 	});
+	// 非 100% DPI 下 Windows 会把尺寸取整到物理像素再换算回来（1200 → 1201），
+	// 位置精确、尺寸取 Electron 实际落定值作为基准，避免测试绑死显示缩放。
 	await expect
 		.poll(() =>
 			app.evaluate(({ BrowserWindow }) => {
 				const w = BrowserWindow.getAllWindows()[0];
-				return w ? [w.getBounds().width, w.getBounds().height] : null;
+				return w ? [w.getBounds().x, w.getBounds().y] : null;
 			}),
 		)
-		.toEqual([1200, 760]);
+		.toEqual([120, 90]);
+	const settled = await app.evaluate(({ BrowserWindow }) => {
+		const b = BrowserWindow.getAllWindows()[0].getBounds();
+		return { x: b.x, y: b.y, width: b.width, height: b.height };
+	});
+	expect(Math.abs(settled.width - 1200)).toBeLessThanOrEqual(4);
+	expect(Math.abs(settled.height - 760)).toBeLessThanOrEqual(4);
 	await app.close();
 
-	// 记录文件已写入且尺寸正确（close 接线：关闭前保存 normal bounds）
+	// close 接线：关闭前保存 normal bounds 含位置；非最大化不写 maximized
 	const file = join(userDataPath, "last-window-bounds.json");
 	expect(existsSync(file)).toBe(true);
-	const saved = JSON.parse(readFileSync(file, "utf8"));
-	expect(saved.width).toBe(1200);
-	expect(saved.height).toBe(760);
+	expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(settled);
+});
+
+test.describe("window memory: startup restores recorded geometry", () => {
+	test.beforeEach(({ userDataRoot }) => {
+		// 模拟上一次退出留下的记录：位置在 workArea 内、非最大化
+		const profile = join(userDataRoot, "profile");
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(join(profile, "last-window-bounds.json"), JSON.stringify({ x: 140, y: 70, width: 1180, height: 740 }), "utf8");
+	});
+
+	test("recorded position is restored instead of centering", async ({ app, window }) => {
+		await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+		const state = await app.evaluate(({ BrowserWindow }) => {
+			const w = BrowserWindow.getAllWindows()[0];
+			const b = w.getBounds();
+			return { x: b.x, y: b.y, width: b.width, height: b.height, maximized: w.isMaximized() };
+		});
+		// 位置是本回归的核心断言（此前一律居中）；尺寸容忍 DPI 取整误差
+		expect([state.x, state.y, state.maximized]).toEqual([140, 70, false]);
+		expect(Math.abs(state.width - 1180)).toBeLessThanOrEqual(4);
+		expect(Math.abs(state.height - 740)).toBeLessThanOrEqual(4);
+	});
 });

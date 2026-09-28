@@ -5,7 +5,7 @@ import { makeSeedProject } from "./open-session";
 /**
  * 「最新轮结束后把最终回答开头放到视口 30%」的行为级回归（2026-09 状态驱动重构）：
  * - 触发只由状态决定：最新轮 busy→idle 且仍跟随 → 1.5s 阅读停顿 → 定位；
- *   打开/切回仍跟随的已结束会话同样补齐定位。
+ *   打开/切回仍有 Agent 实例且跟随的已结束会话同样补齐定位；只浏览历史不触发。
  * - 输入不参与取消：1.5s 窗口内移动鼠标、在输入框打字都不取消；
  * - 真实上滚读历史是唯一跳过路径：上滚后位置保持，不被拉回 30%。
  *
@@ -207,14 +207,10 @@ test("real up-scroll before settle keeps the manual history position", async ({ 
 	expect(after.scrollHeight).toBe(before.scrollHeight);
 });
 
-test("opening a settled session while following still repositions without input", async ({ app, window }) => {
-	test.setTimeout(180_000);
+async function openSeedHistory(app: ElectronApplication, window: Page) {
 	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
 	await ensureWindowVisible(app);
-
-	// 侧栏分段后默认停在「聊天」分段，项目行在「项目」分段下（见 file-viewer.spec.ts）
-	await window.getByRole("tab", { name: "项目" }).click();
-	// 项目行显示项目 name（makeSeedProject 传入的 name），非目录前缀
+	await window.getByRole("tab", { name: "项目", exact: true }).click();
 	const projectRow = window.locator(".conversation", { hasText: "settle-reposition-seed" }).first();
 	await expect(projectRow).toBeVisible({ timeout: 30_000 });
 	await projectRow.click();
@@ -222,24 +218,52 @@ test("opening a settled session while following still repositions without input"
 	await expect(historyRow).toBeVisible({ timeout: 15_000 });
 	await historyRow.click();
 	await expect(window.locator(".message-timeline")).toContainText(LONG_REPLY.slice(0, 24), { timeout: 20_000 });
-	// 打开瞬间跟随尾部（无保存锚点）：挂载补齐流水线生效，无需任何输入。
-	// seed 会话内容较短时定位目标会被 clamp 到顶部（anchor 未必精确在 30%），
-	// 因此这里只轮询「最终回答进入视口上半部且视口离开底部」的稳定终态，
-	// 而不是死磕 30% 像素——30% 的精确锚定由场景 1（长内容）覆盖。
+}
+
+test("opening history without a started Agent stays at the bottom", async ({ app, window }) => {
+	await openSeedHistory(app, window);
+	await expect.poll(async () => (await geometry(window)).dist).toBeLessThan(90);
+	const before = await geometry(window);
+	await window.waitForTimeout(3300);
+	const after = await geometry(window);
+	expect(after.dist, `unstarted history must not reposition: ${JSON.stringify(after)}`).toBeLessThan(90);
+	// Markdown/窗口布局完成后内容高度仍可变化；应保持贴底，而不是锁死绝对 scrollTop。
+	expect(Math.abs(after.dist - before.dist)).toBeLessThan(5);
+});
+
+test("stopping an Agent during the settle delay cancels its pending history reposition", async ({ app, window }) => {
+	await openSeedHistory(app, window);
+	await window.evaluate(async (projectId) => {
+		const record = (await window.piDesktop.sessions.listCatalog(projectId, { scan: false })).find((item) => item.title === "已结束的最新轮会话");
+		if (!record) throw new Error("seed session not found");
+		const activated = await window.piDesktop.sessions.activateRuntime(record.id);
+		if (!activated.ok) throw new Error(JSON.stringify(activated));
+		// activation event 先到 renderer，让 1.5s settle timer 真实进入等待。
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const stopped = await window.piDesktop.sessions.stopRuntime(activated.value);
+		if (!stopped.ok) throw new Error(JSON.stringify(stopped));
+	}, settleSeedProject.id);
+	await window.waitForTimeout(3300);
+	expect((await geometry(window)).dist).toBeLessThan(90);
+});
+
+test("starting an Agent for existing history enables settled repositioning without a new prompt", async ({ app, window }) => {
+	await openSeedHistory(app, window);
+	await window.evaluate(async (projectId) => {
+		const records = await window.piDesktop.sessions.listCatalog(projectId, { scan: false });
+		const record = records.find((item) => item.title === "已结束的最新轮会话");
+		if (!record) throw new Error("seed session not found");
+		const result = await window.piDesktop.sessions.activateRuntime(record.id);
+		if (!result.ok) throw new Error(JSON.stringify(result));
+	}, settleSeedProject.id);
 	await expect
 		.poll(
 			async () => {
 				await ensureWindowVisible(app);
 				const f = await anchorFingerprint(window);
-				if (!f) return Number.POSITIVE_INFINITY;
-				if (f.dist <= 300) return Number.POSITIVE_INFINITY;
-				// 最终回答顶部应在视口内（上方 10% 到 60% 高度区间）
-				return f.anchorTopInViewport > -f.clientHeight * 0.1 && f.anchorTopInViewport < f.clientHeight * 0.6 ? 0 : Number.POSITIVE_INFINITY;
+				return Boolean(f && f.dist > 300 && f.anchorTopInViewport > -f.clientHeight * 0.1 && f.anchorTopInViewport < f.clientHeight * 0.6);
 			},
-			{ timeout: 8_000 },
+			{ timeout: 10_000 },
 		)
-		.toBeLessThan(90);
-	const fingerprint = await anchorFingerprint(window);
-	expect(fingerprint).not.toBeNull();
-	expect(fingerprint.dist, `settled session reopen should leave the bottom: ${JSON.stringify(fingerprint)}`).toBeGreaterThan(300);
+		.toBe(true);
 });

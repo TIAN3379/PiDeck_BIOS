@@ -13,6 +13,7 @@ import { formatDuration, stripAnsi, stripThinkingTags } from "../TimelineFormat"
 import { LiveDuration } from "../LiveDuration";
 import { CopyMenu, stripMarkdown } from "../SurfaceComponents";
 import { buildTurnDisplay, hasFoldableContent } from "../timeline/buildTurnDisplay";
+import { groupTurnProcess, lastProcessGroup } from "../timeline/groupTurnProcess";
 import { boundMountedSteps, TIMELINE_MOUNTED_STEP_LIMIT } from "../timeline/turnMountBudget";
 import { resolveLiveInterimId } from "../timeline/liveMount";
 import { buildProcessSummary } from "../timeline/segmentSummary";
@@ -20,12 +21,16 @@ import type { AgentRunItem, MessageItem } from "../timeline/types";
 import { sameAgentRunForRender } from "../../app/AppUtils";
 import { FinalAnswer } from "./FinalAnswer";
 import { InterimAnswer } from "./InterimAnswer";
+import { ProcessFold } from "./ProcessFold";
 import { ProcessSummaryToggle } from "./ProcessSummaryToggle";
+import { useProcessGroupOpenState } from "./useProcessGroupState";
 import { TurnAuthorHeader } from "./TurnAuthorHeader";
 import { ThinkingStep } from "./ThinkingStep";
 import { RetryStep } from "./RetryStep";
+import { ErrorStep } from "./ErrorStep";
 import { ToolStep } from "./ToolStep";
 import { useTurnExecution } from "./useTurnExecution";
+import { BridgeGuiSlot, useBridgeThinkingLabel } from "../../bridge/BridgeSlot";
 import type { DiffFileHandler } from "../ToolCallComponents";
 
 /** sessionId 为空时的占位 atom：恒 false（无会话不挂 live）。 */
@@ -178,6 +183,9 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 	// 流式对话行为设置（App 同步写入）+ 新一轮信号（composer 发送成功后 bump）。
 	// 设置变化低频；tick 经 atomFamily selectAtom 隔离，跨会话 bump 不触发本行重渲染。
 	const flowSettings = useAtomValue(turnFlowSettingsAtom);
+	// GUI 扩展桥：扩展设的折叠思考块标签（ctx.ui.setHiddenThinkingLabel）。
+	// 无贡献时为 undefined，ThinkingBlock 保持原生耗时小字（§7.4 只追加）。
+	const bridgeThinkingLabel = useBridgeThinkingLabel(props.sessionId);
 	const newTurnCollapseTick = useAtomValue(props.sessionId ? newTurnCollapseTickBySessionIdAtomFamily(props.sessionId) : NO_TURN_TICK_ATOM);
 	// 执行过程展开状态跨挂载记忆（run 级）：切会话再切回时恢复手动/流式展开的
 	// 轮次；selectAtom 按 run.id 取值，同会话其它 run 变化不重渲染本行。
@@ -204,7 +212,6 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 		hasFinalAnswer,
 		isLatestRun: props.isLatestRun,
 		expandInterimDuringStream: flowSettings.expandInterimDuringStream,
-		collapsePrevRunsOnNewTurn: flowSettings.collapsePrevRunsOnNewTurn,
 		newTurnCollapseTick,
 		autoCollapseTick: props.autoCollapseTick,
 		onAutoCollapsed: props.onAutoCollapsed,
@@ -223,6 +230,27 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 	const [expandedStepsRunId, setExpandedStepsRunId] = useState<string | undefined>(undefined);
 	const stepsFullyExpanded = expandedStepsRunId === run.id;
 	const mountedSteps = useMemo(() => boundMountedSteps(foldableItems, TIMELINE_MOUNTED_STEP_LIMIT, stepsFullyExpanded), [foldableItems, stepsFullyExpanded]);
+
+	/* ── 过程组模式（实验开关 processGroupDisplay；关闭时走下面原有的扁平渲染） ──
+	 * 纯函数把扁平序列切成「中间回复 / 过程组 / 一级行」交替序列（见 timeline/groupTurnProcess.ts）。
+	 * 手风琴语义（与用户确认）：
+	 * - 大折叠栏展开时，自动槽指向**最新**的那个过程组；
+	 * - 出现新组 → 槽位推进 → 上一个自动组随之关闭；用户手动打开的组不受影响；
+	 * - 大折叠栏关闭 → 两通道一起清空。组内卡片的展开态不需要额外代码：Radix 折叠时
+	 *   子树整体卸载（children: isOpen && children），组件内部 state 随之销毁。
+	 */
+	const processNodes = useMemo(() => groupTurnProcess(displayItems), [displayItems]);
+	const latestProcessGroupId = useMemo(() => lastProcessGroup(processNodes)?.id, [processNodes]);
+	const { groupState: processGroupState, toggleGroup: toggleProcessGroup, syncLatestGroup: syncLatestProcessGroup, reset: resetProcessGroups } = useProcessGroupOpenState(props.sessionId, run.id);
+	useEffect(() => {
+		if (!flowSettings.processGroupDisplay) return;
+		if (!stepsVisible) {
+			resetProcessGroups();
+			return;
+		}
+		syncLatestProcessGroup(latestProcessGroupId);
+	}, [flowSettings.processGroupDisplay, stepsVisible, latestProcessGroupId, resetProcessGroups, syncLatestProcessGroup]);
+
 	// 收集本轮所有 assistant 消息（按 run.items 的时序保持原始顺序）
 	const assistantMessages = run.items.filter((item): item is MessageItem => item.kind === "message" && item.message.role === "assistant");
 	const allImages: ImageContent[] = [];
@@ -276,70 +304,93 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 					>
 						<ProcessSummaryToggle summary={processSummary} expanded={stepsVisible} onToggle={toggleSteps} />
 						<CollapsibleContent className="execution-summary-details">
-							{/* 折叠挂载策略（2026-09 主流实践，按轮状态分场景）：
+							{flowSettings.processGroupDisplay ? (
+								<ProcessFold
+									nodes={processNodes}
+									stepsVisible={stepsVisible}
+									agentRunning={props.agentRunning}
+									showThinking={props.showThinking}
+									sessionId={props.sessionId}
+									liveInterimId={liveInterimId}
+									groupState={processGroupState}
+									onToggleGroup={toggleProcessGroup}
+									onOpenFile={props.onOpenFile}
+									onOpenExternal={props.onOpenExternal}
+									onCollapse={toggleSteps}
+								/>
+							) : (
+								<>
+									{/* 折叠挂载策略（2026-09 主流实践，按轮状态分场景）：
 							    1. 非流式轮（agentRunning=false，含历史已结束轮）折叠时**完全卸载**内容——
 							       历史默认折叠，滚动经过几十轮只携带折叠头 + 最终回答，
 							       单轮 500 条工具调用时省下海量 DOM；展开时全量挂载。
 							    2. live 流式轮（agentRunning=true）折叠时仍保持挂载（display:none）——
 							       卸载会重置打字机动画状态，恢复展开时思考/工具重播。
 							    代价：Radix 高度渐变动画在历史轮退化为瞬时展开/收起。 */}
-							{(stepsVisible || props.agentRunning === true) && mountedSteps.hiddenCount > 0 && (
-								// 超出挂载预算的早期步骤入口：与 execution-summary-toggle 同款观感，
-								// 用 Tailwind utility 对齐旧 CSS 的 token（不新增手写 class）。
-								<button
-									type="button"
-									className="mt-1 inline-flex h-[26px] items-center gap-2 self-start rounded-[var(--radius-md)] border border-border-subtle bg-[var(--color-chat-card-bg)] px-3 text-[length:var(--font-size-caption)] font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-bg-hover hover:text-text-primary"
-									onClick={() => setExpandedStepsRunId(run.id)}
-									title={t("timeline.showEarlierSteps", { count: mountedSteps.hiddenCount })}
-								>
-									<ChevronUp size={12} aria-hidden="true" />
-									<span>{t("timeline.showEarlierSteps", { count: mountedSteps.hiddenCount })}</span>
-								</button>
-							)}
-							{(stepsVisible || props.agentRunning === true) &&
-								mountedSteps.items.map((item) => {
-									let content: ReactNode;
-									let itemKey: string;
-									if (item.kind === "process-entry") {
-										itemKey = item.entry.id;
-										if (item.entry.kind === "thinking-entry") {
-											content = <ThinkingStep group={item.entry.group} hidden={!stepsVisible} showThinking={props.showThinking} onOpenExternal={props.onOpenExternal} onOpenFile={props.onOpenFile} />;
-										} else if (item.entry.kind === "retry-entry") {
-											// 自动重试过程行：与工具/思考同层，失败红、运行中旋转（见 RetryStep 注释）
-											content = <RetryStep group={{ kind: "retry-group", id: item.entry.id, message: item.entry.message }} hidden={!stepsVisible} />;
-										} else {
-											content = <ToolStep group={item.entry.group} hidden={!stepsVisible} stopped={props.agentRunning !== true} sessionId={props.sessionId} onOpenFile={props.onOpenFile} />;
-										}
-									} else if (item.kind === "interim-answer") {
-										itemKey = item.id;
-										// Live 末条在折叠容器外渲染，此处跳过以免双份。
-										if (item.id === liveInterimId) return null;
-										content = (
-											<InterimAnswer
-												mode="settled"
-												text={item.message.text}
-												hidden={!stepsVisible}
-												isStreaming={false}
-												settle={settleId === item.id}
-												// 折叠区内一律 process：正文已与最终回答同尺寸，process 只负责 my-3 间距。
-												// 无最终回答的末段也要这段间距，否则会贴着上方工具行。
-												variant="process"
-												onOpenExternal={props.onOpenExternal}
-												onOpenFile={props.onOpenFile}
-											/>
-										);
-									} else {
-										// final-answer 不在此容器内（见下方常驻区），此处仅兜底跳过
-										return null;
-									}
-									return <Fragment key={itemKey}>{content}</Fragment>;
-								})}
-							{/* 收起按钮：固定在折叠容器末尾（不再是动态跟随） */}
-							{stepsVisible && (
-								<button type="button" className="execution-summary-collapse" onClick={toggleSteps} title={t("common.collapse")}>
-									<ChevronUp size={12} aria-hidden="true" />
-									<span>{t("common.collapse")}</span>
-								</button>
+									{(stepsVisible || props.agentRunning === true) && mountedSteps.hiddenCount > 0 && (
+										// 超出挂载预算的早期步骤入口：与 execution-summary-toggle 同款观感，
+										// 用 Tailwind utility 对齐旧 CSS 的 token（不新增手写 class）。
+										<button
+											type="button"
+											className="mt-1 inline-flex h-[26px] items-center gap-2 self-start rounded-[var(--radius-md)] border border-border-subtle bg-[var(--color-chat-card-bg)] px-3 text-chat-detail font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-bg-hover hover:text-text-primary"
+											onClick={() => setExpandedStepsRunId(run.id)}
+											title={t("timeline.showEarlierSteps", { count: mountedSteps.hiddenCount })}
+										>
+											<ChevronUp size={12} aria-hidden="true" />
+											<span>{t("timeline.showEarlierSteps", { count: mountedSteps.hiddenCount })}</span>
+										</button>
+									)}
+									{(stepsVisible || props.agentRunning === true) &&
+										mountedSteps.items.map((item) => {
+											let content: ReactNode;
+											let itemKey: string;
+											if (item.kind === "process-entry") {
+												itemKey = item.entry.id;
+												if (item.entry.kind === "thinking-entry") {
+													content = <ThinkingStep group={item.entry.group} hidden={!stepsVisible} showThinking={props.showThinking} onOpenExternal={props.onOpenExternal} onOpenFile={props.onOpenFile} sessionId={props.sessionId} hiddenLabel={bridgeThinkingLabel} />;
+												} else if (item.entry.kind === "retry-entry") {
+													// 自动重试过程行：与工具/思考同层，失败红、运行中旋转（见 RetryStep 注释）
+													content = <RetryStep group={{ kind: "retry-group", id: item.entry.id, message: item.entry.message }} hidden={!stepsVisible} />;
+												} else if (item.entry.kind === "error-entry") {
+													// 错误诊断过程行：429 等错误并入工具调用，可点开看具体错误（见 ErrorStep 注释）
+													content = <ErrorStep group={{ kind: "error-group", id: item.entry.id, message: item.entry.message }} hidden={!stepsVisible} />;
+												} else {
+													content = <ToolStep group={item.entry.group} hidden={!stepsVisible} stopped={props.agentRunning !== true} sessionId={props.sessionId} onOpenFile={props.onOpenFile} />;
+												}
+											} else if (item.kind === "interim-answer") {
+												itemKey = item.id;
+												// Live 末条在折叠容器外渲染，此处跳过以免双份。
+												if (item.id === liveInterimId) return null;
+												content = (
+													<InterimAnswer
+														mode="settled"
+														text={item.message.text}
+														hidden={!stepsVisible}
+														isStreaming={false}
+														settle={settleId === item.id}
+														// 折叠区内一律 process：正文已与最终回答同尺寸，process 只负责 my-3 间距。
+														// 无最终回答的末段也要这段间距，否则会贴着上方工具行。
+														variant="process"
+														// 中间回复引用锚点：settled 正文根节点带 data-message-id，划选可解析来源消息。
+														messageId={item.id}
+														onOpenExternal={props.onOpenExternal}
+														onOpenFile={props.onOpenFile}
+													/>
+												);
+											} else {
+												// final-answer 不在此容器内（见下方常驻区），此处仅兜底跳过
+												return null;
+											}
+											return <Fragment key={itemKey}>{content}</Fragment>;
+										})}
+									{/* 收起按钮：固定在折叠容器末尾（不再是动态跟随） */}
+									{stepsVisible && (
+										<button type="button" className="execution-summary-collapse" onClick={toggleSteps} title={t("common.collapse")}>
+											<ChevronUp size={12} aria-hidden="true" />
+											<span>{t("common.collapse")}</span>
+										</button>
+									)}
+								</>
 							)}
 						</CollapsibleContent>
 					</Collapsible>
@@ -414,6 +465,10 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 					</div>
 				)}
 			</div>
+			{/* GUI 扩展桥：消息气泡附加落点（ctx.gui.setMessageExtra，key = role）。
+			    TurnRow 渲染的是助手回合，故按 role="assistant" 匹配。
+			    **追加在默认内容下方**，不顶替气泡（§7.1-B / §7.4）。无贡献时不占位。 */}
+			<BridgeGuiSlot sessionId={props.sessionId} slot="message.extra" matchKey="assistant" className="mt-1 flex flex-col gap-1" />
 		</article>
 	);
 }, turnRowPropsEqual);

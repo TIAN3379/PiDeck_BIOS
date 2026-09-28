@@ -48,6 +48,13 @@ test("project row text yields to the hover action buttons at any width", () => {
 	assert.doesNotMatch(src, /conversation-body[^\n]*opacity-0/);
 });
 
+test("project menu pins text clearance with the same state that keeps its actions visible", () => {
+	const src = read("src/renderer/src/components/sidebar/ProjectTree.tsx");
+	assert.match(src, /const\s+menuOpen\s*=\s*props\.controller\.menu\?\.kind\s*===\s*"project"\s*&&\s*props\.controller\.menu\.projectId\s*===\s*project\.id/);
+	assert.match(src, /menuOpen\s*&&\s*"pr-\[88px\]"/);
+	assert.match(src, /menuOpen\s*&&\s*"pointer-events-auto opacity-100"/);
+});
+
 test("session rows yield to hover actions on narrow sidebar", () => {
 	const src = read("src/renderer/src/components/sidebar/SessionTree.tsx");
 	// agent 行、运行中会话行、历史会话行、普通会话行共 4 处 conversation-body 全部接入

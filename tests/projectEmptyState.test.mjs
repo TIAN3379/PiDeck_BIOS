@@ -42,6 +42,10 @@ test("virtual session is promoted to a real catalog session on first send", () =
 	assert.match(app, /api\.sessions\.createDraft/);
 	assert.doesNotMatch(app, /guideBootstrapPromotionRef[\s\S]{0,400}api\.sessions\.createAnonymous/);
 	assert.match(app, /promoteSessionComposerState/);
+	// 乐观气泡必须「搬」到真实会话：虚拟会话 ID 是常量，直接拷贝会让残留消息
+	// 在下一次引导页发送时被当作 previousMessages 追加（新会话漏出旧消息）。
+	assert.match(app, /promoteSessionMessagesCache\(\{\s*fromSessionId:\s*GUIDE_BOOTSTRAP_SESSION_ID/);
+	assert.doesNotMatch(app, /sessionMessagesCacheAtom\)\[GUIDE_BOOTSTRAP_SESSION_ID\]/);
 	assert.match(app, /registerOpenSession\(session\.id, "permanent"\)/);
 	assert.match(composerAtoms, /promoteSessionComposerStateAtom/);
 	assert.match(composerAtoms, /sessionDraftByIdAtom/);

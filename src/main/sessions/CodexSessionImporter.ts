@@ -2,7 +2,7 @@ import { app } from "electron";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { CodexImportReport, CodexImportResult, CodexImportStatus, CodexSessionSummary } from "../../shared/types";
 import { getCodexSessionThreadInfo } from "../../shared/codexSessionMeta";
@@ -10,6 +10,8 @@ import { defaultSessionImportCopy, type SessionImportCopy } from "./SessionImpor
 import { normalizeImportedToolArguments } from "./importToolArguments";
 import { readImportMetaHead } from "./importMetaHead";
 import { normalizeImportedStopReason, tryImportedImageBlock } from "./importNormalize";
+import { codexImageGenerationResult, codexToolSearchOutputText, normalizeCodexToolLine, parseCodexToolOutput } from "./codexToolNormalize";
+import { loadCodexThreadTitles, lookupCodexThreadTitle, type CodexThreadTitle, type CodexThreadTitleMaps } from "./codexSessionTitles";
 
 // 扫描阶段只读每个文件头部：session_meta / 首条用户消息 / preview 都在前部，
 // 全量解析会让内存峰值随 ~/.codex/sessions 总大小线性增长（rollouts 轨迹文件常达几十 MB），
@@ -21,6 +23,92 @@ const SCAN_CONCURRENCY = 6;
 // 64KB 足够容纳；超出行数/大小视为无 meta 跳过）。
 const META_HEAD_LIMIT = 64 * 1024;
 
+/**
+ * Codex 用户消息的两代写盘格式（2026-09 起 Codex Desktop 把 user_message 事件移除）：
+ * 1. 旧 CLI（≤0.129）：每轮一条 `event_msg/user_message`（payload.message 纯文本）；
+ * 2. 新 Desktop / 迁移后（history_mode: paginated）：用户输入直接作为 `response_item`
+ *    里 `role:"user"` 的 message 写盘，且同一轮前面会写入 `<recommended_plugins>` /
+ *    `<environment_context>` / `<INSTRUCTIONS>` 等注入包装。
+ *
+ * 本导入器只支持新格式：装新版 Codex 后旧 jsonl 会被它自带的
+ * legacy_to_paginated_v1 迁移器自动转换（少数迁移失败的文件不再兼容，属可接受取舍）。
+ */
+
+/**
+ * 注入包装块：从消息原文中剥掉（标题/预览不能是包装原文）。
+ *
+ * 全部形态来自真实 ~/.codex/sessions 数据统计（2026-09）：
+ * - <environment_context> / <recommended_plugins> / <INSTRUCTIONS>：首轮环境与技能注入；
+ * - <codex_internal_context> / <turn_aborted>：目标续跑与中断控制消息；
+ * - <app-context> / <permissions instructions> / <user_instructions>：桌面上下文与权限说明；
+ * - <send_user_message_question_reply>：交互式问答回传（正文是结构化 JSON）。
+ * 标签分隔符历史上出现过下划线/连字符/空格三种写法，统一用 [_-]? 兼容。
+ */
+const CODEX_WRAPPER_TAG_NAMES = "recommended_plugins|environment_context|permissions[_-]?instructions|user_instructions|app[_-]context|codex_internal_context|turn_aborted|INSTRUCTIONS|send_user_message_question_reply";
+const CODEX_WRAPPER_BLOCK_PATTERN = new RegExp(`<(${CODEX_WRAPPER_TAG_NAMES})\\b[^>]*>[\\s\\S]*?<\\/\\1>`, "gi");
+
+/**
+ * 纯注入/控制消息的起始标记：剥完包装块后仍以这些开头的内容不是用户原话（用于标题/预览）。
+ * 典型：AGENTS.md 注入（只剩标题行）、响应注释、agent 历史回填、斜杠命令、中断提示。
+ */
+const CODEX_INTERNAL_TEXT_PREFIXES = [/^#\s*AGENTS\.md instructions\b/i, /^#\s*In app browser:/i, /^#\s*Response annotations:/i, /^##\s*Code review guidelines:/i, /^The following is the Codex agent history\b/i, /^\[Request interrupted by user/i, /^<command-name>/i, /^<send_user_message_question_reply>/i];
+
+/**
+ * 除标准 function_call 外，Codex 还有一批语义化工具行（真实数据统计得出）。
+ * custom_tool_call（apply_patch / exec）是主力工具，量级与 function_call 同级，
+ * 过去被整段跳过——导入后的会话中间工具调用凭空消失。
+ */
+const CODEX_EXTRA_TOOL_TYPES = new Set(["custom_tool_call", "web_search_call", "tool_search_call", "image_generation_call", "agent_message"]);
+
+/** 上述工具行的结果行；按 call_id 与前面的调用配对。 */
+const CODEX_EXTRA_TOOL_RESULT_TYPES = new Set(["custom_tool_call_output", "tool_search_output"]);
+
+/**
+ * 会话名文本清洗（jsonl 提取与状态库标题共用）：
+ * 剥注入包装 → 去内部标记 → 从粘贴文件列表里取 `## My request:` 正文。
+ * 清洗后为空表示“这段文本不能当标题/预览”。
+ */
+function sanitizeCodexTitleText(value: string): string {
+	const stripped = value.replace(CODEX_WRAPPER_BLOCK_PATTERN, "").trim();
+	if (!stripped) return "";
+	// 纯内部标记（AGENTS.md 标题行、响应注释、历史回填、斜杠命令、中断提示等）不是用户原话。
+	if (CODEX_INTERNAL_TEXT_PREFIXES.some((pattern) => pattern.test(stripped))) return "";
+	// 粘贴文件列表：真正的诉求写在 `## My request:` 段；没写就整条丢弃（文件清单当标题是噪声）。
+	const requestMatch = stripped.match(/##\s*My request:\s*([\s\S]*)$/i);
+	if (requestMatch) return requestMatch[1].trim();
+	if (/^#\s*Files (?:pasted|mentioned) by the user:/i.test(stripped)) return "";
+	return stripped;
+}
+
+/**
+ * 提取新格式 `role:"user"` 消息里用户真正打的字。
+ *
+ * 优先依据 payload 自带的 content_item_kinds（Codex 写盘的块来源元数据：
+ * user.text = 用户原话；plugins.recommendations / environments.environment_context 等 = 注入包装）。
+ * 缺失时启发式剥包装块；剥完只剩内部标记时返回空（调用方跳过该消息）。
+ */
+function extractCodexDesktopUserText(payload: Record<string, any>): string {
+	const blocks = Array.isArray(payload?.content) ? payload.content : [];
+	const allText = blocks
+		.map((item: unknown) => {
+			if (typeof item === "string") return item;
+			if (!item || typeof item !== "object") return "";
+			return String((item as Record<string, unknown>).text ?? "");
+		})
+		.filter(Boolean)
+		.join("\n")
+		.trim();
+	if (!allText) return "";
+
+	// 每条 user message 的 internal_chat_message_metadata_passthrough.content_item_kinds
+	// 标明块来源；只有含 user.text 的消息才可能承载用户原话。
+	const kindsRaw = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+	const kinds: string[] = Array.isArray(kindsRaw) ? kindsRaw.map((kind: unknown) => String(kind)) : [];
+	if (kinds.length > 0 && !kinds.includes("user.text")) return "";
+
+	return sanitizeCodexTitleText(allText);
+}
+
 type ParsedCodexSession = {
 	meta: Record<string, any>;
 	entries: Array<Record<string, any>>;
@@ -31,6 +119,7 @@ type ParsedCodexSession = {
 
 export class CodexSessionImporter {
 	private readonly codexRoot = join(app.getPath("home"), ".codex", "sessions");
+	private readonly codexHome = join(app.getPath("home"), ".codex");
 	private readonly piRoot = join(app.getPath("home"), ".pi", "agent", "sessions");
 
 	constructor(private readonly translate: SessionImportCopy = defaultSessionImportCopy) {}
@@ -38,6 +127,8 @@ export class CodexSessionImporter {
 	async scan(projectPath: string): Promise<CodexSessionSummary[]> {
 		const files = await this.collectJsonl(this.codexRoot).catch(() => []);
 		const normalizedProject = this.normalize(projectPath);
+		// Codex 状态库的会话名映射（用户改名 / 官方标题）：读不到时降级为 jsonl 提取，不阻塞扫描
+		const titleMaps: CodexThreadTitleMaps = await loadCodexThreadTitles(this.codexHome);
 
 		// 阶段 1：预过滤——每个文件只读头部 64KB 提取 session_meta.cwd，定位属于当前项目的会话。
 		// 注意：~/.codex/sessions 下是所有项目的会话（codex 按 cwd 归档、目录名是 UUID），
@@ -63,7 +154,7 @@ export class CodexSessionImporter {
 			sessions.push(...results);
 		}
 
-		const summaries = await Promise.all(sessions.filter((session): session is ParsedCodexSession => Boolean(session)).map((session) => this.toSummary(session, projectPath).catch(() => null)));
+		const summaries = await Promise.all(sessions.filter((session): session is ParsedCodexSession => Boolean(session)).map((session) => this.toSummary(session, projectPath, titleMaps).catch(() => null)));
 		return summaries.filter((summary): summary is CodexSessionSummary => Boolean(summary)).sort((a, b) => b.updatedAt - a.updatedAt);
 	}
 
@@ -117,10 +208,13 @@ export class CodexSessionImporter {
 				throw new Error("Codex session cwd does not match selected project");
 			}
 
+			// 状态库会话名：单次导入也查一次（有内存缓存，重复导入不重复拷库）
+			const titleMaps: CodexThreadTitleMaps = await loadCodexThreadTitles(this.codexHome);
+			const threadTitle = lookupCodexThreadTitle(titleMaps, info.meta.id ? String(info.meta.id) : undefined, sourcePath);
 			const targetPath = this.getTargetPath(projectPath, info);
 			const existing = await this.readImportMeta(targetPath);
 			await mkdir(this.getProjectSessionDir(projectPath), { recursive: true });
-			const converted = await this.convertToPiSessionStreaming(projectPath, info, targetPath);
+			const converted = await this.convertToPiSessionStreaming(projectPath, info, targetPath, threadTitle);
 
 			return {
 				id: String(info.meta.id ?? sourcePath),
@@ -141,10 +235,11 @@ export class CodexSessionImporter {
 		}
 	}
 
-	private async toSummary(session: ParsedCodexSession, projectPath: string): Promise<CodexSessionSummary> {
+	private async toSummary(session: ParsedCodexSession, projectPath: string, titleMaps: CodexThreadTitleMaps): Promise<CodexSessionSummary> {
 		const targetPath = this.getTargetPath(projectPath, session);
 		const importMeta = await this.readImportMeta(targetPath);
-		const converted = this.convertToPiSession(projectPath, session);
+		const threadTitle = lookupCodexThreadTitle(titleMaps, session.meta.id ? String(session.meta.id) : undefined, session.sourcePath);
+		const converted = this.convertToPiSession(projectPath, session, threadTitle);
 		const status: CodexImportStatus = !importMeta ? "new" : importMeta.sourceMtime === session.sourceMtime && importMeta.sourceSize === session.sourceSize ? "current" : "outdated";
 
 		const originalTimestamp = Date.parse(String(session.meta.timestamp ?? "")) || session.sourceMtime;
@@ -169,11 +264,16 @@ export class CodexSessionImporter {
 		};
 	}
 
-	private convertToPiSession(projectPath: string, session: ParsedCodexSession) {
+	private convertToPiSession(projectPath: string, session: ParsedCodexSession, threadTitle?: CodexThreadTitle) {
 		const sessionId = String(session.meta.id ?? this.hash(session.sourcePath));
 		const threadInfo = getCodexSessionThreadInfo(session.meta);
 		const timestamp = new Date(Date.parse(String(session.meta.timestamp ?? "")) || session.sourceMtime).toISOString();
 		const titleState = { title: "", preview: "" };
+		// Codex 状态库预取的标题（用户改名优先，其次官方自动标题/首条消息）：
+		// 库里的值同样可能是一整块注入包装或斜杠命令（如 `<command-name>/exit</command-name>`），
+		// 必须走同一套清洗，否则脏标题会直接从库里流进侧栏。
+		const presetTitle = this.cleanTitle(sanitizeCodexTitleText(threadTitle?.name ?? ""));
+		// jsonl 里提不出用户文本时（如包装剥不干净/首轮就崩）仍能有像样的名字
 		const toolNames = new Map<string, string>();
 		const toolStartedAt = new Map<string, number>();
 		const lines: string[] = [];
@@ -209,7 +309,7 @@ export class CodexSessionImporter {
 
 			const text = this.extractPiText(content).trim();
 			if (text && !titleState.preview) titleState.preview = text.slice(0, 160);
-			if (role === "user" && text && !titleState.title) {
+			if (role === "user" && text && !titleState.title && !presetTitle) {
 				titleState.title = this.cleanTitle(text);
 			}
 		};
@@ -246,14 +346,19 @@ export class CodexSessionImporter {
 		parentId = modelChangeId;
 
 		for (const entry of session.entries) {
-			if (entry.type === "event_msg" && entry.payload?.type === "user_message") {
-				const content = this.convertCodexUserContent(entry.payload);
-				if (content.length > 0) pushMessage("user", content, {}, entry.timestamp);
-				continue;
-			}
-
 			if (entry.type !== "response_item") continue;
 			const payload = entry.payload ?? {};
+
+			// 新格式：用户输入直接作为 response_item 里的 user message 写盘
+			// （包装块已在 extractCodexDesktopUserText 里剥掉）
+			if (payload.type === "message" && payload.role === "user") {
+				const text = extractCodexDesktopUserText(payload);
+				if (text) {
+					const content = [{ type: "text", text }, ...this.extractCodexImportedImages(payload)];
+					pushMessage("user", content, {}, entry.timestamp);
+				}
+				continue;
+			}
 
 			if (payload.type === "reasoning") {
 				const reasoning = this.extractCodexText(payload).trim();
@@ -302,6 +407,61 @@ export class CodexSessionImporter {
 				continue;
 			}
 
+			// 非标准工具行（custom_tool_call / web_search_call / tool_search_call /
+			// image_generation_call / agent_message）：与 function_call 同一套 pi 形态。
+			if (CODEX_EXTRA_TOOL_TYPES.has(payload.type)) {
+				const match = this.matchCodexToolLine(payload, this.makeId(sessionId, sequence), { names: toolNames, startedAt: toolStartedAt }, entry.timestamp);
+				if (match) {
+					const content = [...(pendingThinking ? [{ type: "thinking", thinking: pendingThinking, thinkingSignature: "codex_reasoning" }] : []), { type: "toolCall", id: match.call.id, name: match.call.name, arguments: match.call.arguments }];
+					pendingThinking = "";
+					pushMessage(
+						"assistant",
+						content,
+						{
+							api: "codex-import",
+							provider: String(session.meta.model_provider ?? "codex"),
+							model: String(session.meta.model ?? "codex"),
+							stopReason: normalizeImportedStopReason({ hasToolCall: true }),
+						},
+						entry.timestamp,
+					);
+					if (match.result) {
+						pushMessage(
+							"toolResult",
+							match.result.content,
+							{
+								toolCallId: match.call.id,
+								toolName: match.call.name,
+								isError: match.result.isError,
+								...(toolStartedAt.get(match.call.id) !== undefined ? { startedAt: toolStartedAt.get(match.call.id) } : {}),
+							},
+							entry.timestamp,
+						);
+					}
+				}
+				continue;
+			}
+
+			// 非标准工具的结果行（custom_tool_call_output / tool_search_output）
+			if (CODEX_EXTRA_TOOL_RESULT_TYPES.has(payload.type)) {
+				const matched = this.matchCodexToolResultLine(payload, { names: toolNames, startedAt: toolStartedAt }, entry.timestamp);
+				if (matched) {
+					pushMessage(
+						"toolResult",
+						matched.content,
+						{
+							toolCallId: matched.toolCallId,
+							toolName: matched.toolName,
+							isError: matched.isError,
+							...(matched.startedAt !== undefined ? { startedAt: matched.startedAt } : {}),
+							...(matched.startedAt !== undefined && matched.completedAt !== undefined ? { durationMs: Math.max(0, matched.completedAt - matched.startedAt) } : {}),
+						},
+						entry.timestamp,
+					);
+				}
+				continue;
+			}
+
 			if (payload.type === "function_call_output") {
 				const callId = String(payload.call_id ?? payload.id ?? this.makeId(sessionId, sequence));
 				const output = this.extractToolOutput(payload);
@@ -328,7 +488,7 @@ export class CodexSessionImporter {
 			pushMessage("assistant", [{ type: "thinking", thinking: pendingThinking, thinkingSignature: "codex_reasoning" }]);
 		}
 
-		const title = titleState.title || this.cleanTitle(basename(session.sourcePath)) || this.translate("session.importedTitle", { source: "Codex" });
+		const title = presetTitle || titleState.title || this.fallbackTitle(session);
 		// 使用 pi 原生 session_info 格式追加在末尾，避免旧版 sessionName 行（无 type 字段）
 		// 在文件头破坏 pi 的首行校验导致会话无法加载（见 #114）。
 		const sessionInfoId = randomUUID().slice(0, 8);
@@ -357,11 +517,13 @@ export class CodexSessionImporter {
 	 * 状态机（title/preview/messageCount/parentId/sequence/pendingThinking）与
 	 * convertToPiSession 保持一致——scan 预览与 import 结果必须等价。
 	 */
-	private async convertToPiSessionStreaming(projectPath: string, session: ParsedCodexSession, targetPath: string): Promise<{ title: string; preview: string; messageCount: number }> {
+	private async convertToPiSessionStreaming(projectPath: string, session: ParsedCodexSession, targetPath: string, threadTitle?: CodexThreadTitle): Promise<{ title: string; preview: string; messageCount: number }> {
 		const sessionId = String(session.meta.id ?? this.hash(session.sourcePath));
 		const threadInfo = getCodexSessionThreadInfo(session.meta);
 		const timestamp = new Date(Date.parse(String(session.meta.timestamp ?? "")) || session.sourceMtime).toISOString();
 		const titleState = { title: "", preview: "" };
+		// 与 convertToPiSession 同口径：状态库预取标题优先（同样要清洗内部包装），jsonl 提取只是兑底
+		const presetTitle = this.cleanTitle(sanitizeCodexTitleText(threadTitle?.name ?? ""));
 		const toolNames = new Map<string, string>();
 		const toolStartedAt = new Map<string, number>();
 		let parentId: string | null = null;
@@ -407,7 +569,7 @@ export class CodexSessionImporter {
 
 			const text = this.extractPiText(content).trim();
 			if (text && !titleState.preview) titleState.preview = text.slice(0, 160);
-			if (role === "user" && text && !titleState.title) {
+			if (role === "user" && text && !titleState.title && !presetTitle) {
 				titleState.title = this.cleanTitle(text);
 			}
 		};
@@ -444,7 +606,7 @@ export class CodexSessionImporter {
 			});
 			parentId = modelChangeId;
 
-			// 逐行流式转换；session_meta 行在循环中被自然跳过（非 event_msg/response_item）
+			// 逐行流式转换；session_meta/turn_context 等非消息行在循环中被自然跳过
 			const rl = createInterface({
 				input: createReadStream(session.sourcePath, { encoding: "utf8" }),
 				crlfDelay: Infinity,
@@ -458,14 +620,19 @@ export class CodexSessionImporter {
 					throw new Error(`Invalid line in Codex session: ${line.slice(0, 120)} (${error instanceof Error ? error.message : String(error)})`);
 				}
 
-				if (entry.type === "event_msg" && entry.payload?.type === "user_message") {
-					const content = this.convertCodexUserContent(entry.payload);
-					if (content.length > 0) await pushMessage("user", content, {}, entry.timestamp);
-					continue;
-				}
-
 				if (entry.type !== "response_item") continue;
 				const payload = entry.payload ?? {};
+
+				// 新格式：用户输入直接作为 response_item 里的 user message 写盘
+				// （包装块已在 extractCodexDesktopUserText 里剥掉）
+				if (payload.type === "message" && payload.role === "user") {
+					const text = extractCodexDesktopUserText(payload);
+					if (text) {
+						const content = [{ type: "text", text }, ...this.extractCodexImportedImages(payload)];
+						await pushMessage("user", content, {}, entry.timestamp);
+					}
+					continue;
+				}
 
 				if (payload.type === "reasoning") {
 					const reasoning = this.extractCodexText(payload).trim();
@@ -514,6 +681,64 @@ export class CodexSessionImporter {
 					continue;
 				}
 
+				// 非标准工具行（custom_tool_call / web_search_call / tool_search_call /
+				// image_generation_call / agent_message）：与 function_call 同一套 pi 形态。
+				if (CODEX_EXTRA_TOOL_TYPES.has(payload.type)) {
+					const match = this.matchCodexToolLine(payload, this.makeId(sessionId, sequence), { names: toolNames, startedAt: toolStartedAt }, entry.timestamp);
+					if (match) {
+						const content = [...(pendingThinking ? [{ type: "thinking", thinking: pendingThinking, thinkingSignature: "codex_reasoning" }] : []), { type: "toolCall", id: match.call.id, name: match.call.name, arguments: match.call.arguments }];
+						pendingThinking = "";
+						await pushMessage(
+							"assistant",
+							content,
+							{
+								api: "codex-import",
+								provider: String(session.meta.model_provider ?? "codex"),
+								model: String(session.meta.model ?? "codex"),
+								stopReason: normalizeImportedStopReason({ hasToolCall: true }),
+							},
+							entry.timestamp,
+						);
+						if (match.result) {
+							const startedAt = toolStartedAt.get(match.call.id);
+							const completedAt = this.parseTimestamp(entry.timestamp);
+							await pushMessage(
+								"toolResult",
+								match.result.content,
+								{
+									toolCallId: match.call.id,
+									toolName: match.call.name,
+									isError: match.result.isError,
+									...(startedAt !== undefined ? { startedAt } : {}),
+									...(startedAt !== undefined && completedAt !== undefined ? { durationMs: Math.max(0, completedAt - startedAt) } : {}),
+								},
+								entry.timestamp,
+							);
+						}
+					}
+					continue;
+				}
+
+				// 非标准工具的结果行（custom_tool_call_output / tool_search_output）
+				if (CODEX_EXTRA_TOOL_RESULT_TYPES.has(payload.type)) {
+					const matched = this.matchCodexToolResultLine(payload, { names: toolNames, startedAt: toolStartedAt }, entry.timestamp);
+					if (matched) {
+						await pushMessage(
+							"toolResult",
+							matched.content,
+							{
+								toolCallId: matched.toolCallId,
+								toolName: matched.toolName,
+								isError: matched.isError,
+								...(matched.startedAt !== undefined ? { startedAt: matched.startedAt } : {}),
+								...(matched.startedAt !== undefined && matched.completedAt !== undefined ? { durationMs: Math.max(0, matched.completedAt - matched.startedAt) } : {}),
+							},
+							entry.timestamp,
+						);
+					}
+					continue;
+				}
+
 				if (payload.type === "function_call_output") {
 					const callId = String(payload.call_id ?? payload.id ?? this.makeId(sessionId, sequence));
 					const output = this.extractToolOutput(payload);
@@ -540,7 +765,7 @@ export class CodexSessionImporter {
 				await pushMessage("assistant", [{ type: "thinking", thinking: pendingThinking, thinkingSignature: "codex_reasoning" }]);
 			}
 
-			const title = titleState.title || this.cleanTitle(basename(session.sourcePath)) || this.translate("session.importedTitle", { source: "Codex" });
+			const title = presetTitle || titleState.title || this.fallbackTitle(session);
 			// 使用 pi 原生 session_info 格式追加在末尾，避免旧版 sessionName 行（无 type 字段）
 			// 在文件头破坏 pi 的首行校验导致会话无法加载（见 #114）。
 			const sessionInfoId = randomUUID().slice(0, 8);
@@ -655,13 +880,14 @@ export class CodexSessionImporter {
 		return `--${normalized.replace(/^\//, "").replace(/\//g, "-")}--`;
 	}
 
-	private convertCodexUserContent(payload: Record<string, unknown> | undefined): unknown[] {
-		const record = payload ?? {};
-		const content: unknown[] = [];
-		const text = String(record.message ?? "").trim();
-		if (text) content.push({ type: "text", text });
-		content.push(...this.extractCodexImportedImages(record));
-		return content;
+	/**
+	 * 兑底标题：状态库和正文都拿不到用户文本时，用「Codex 会话 + 源会话创建日期」。
+	 * 不再用 rollout-<时间戳>-<UUID> 文件名——截断后就是一串无意义的 ID 样文本。
+	 */
+	private fallbackTitle(session: ParsedCodexSession) {
+		const createdAt = Date.parse(String(session.meta.timestamp ?? "")) || session.sourceMtime;
+		const day = Number.isFinite(createdAt) ? new Date(createdAt).toISOString().slice(0, 10) : "";
+		return this.translate("session.codexUntitledTitle", day ? { date: day } : {});
 	}
 
 	private extractCodexImportedImages(payload: Record<string, unknown>): unknown[] {
@@ -690,6 +916,76 @@ export class CodexSessionImporter {
 			})
 			.filter(Boolean)
 			.join("\n");
+	}
+
+	/**
+	 * 非标准工具行（custom_tool_call / web_search_call / tool_search_call /
+	 * image_generation_call / agent_message）共用的配对状态。
+	 *
+	 * custom_tool_call 量与 function_call 同级（apply_patch / exec 是主力工具），
+	 * 过去被整段跳过：会话导入后中间的工具调用凭空消失。这里按与 function_call
+	 * 完全相同的 pi 形态（assistant.toolCall + 独立 toolResult 行）写入。
+	 */
+	private codexToolState() {
+		return {
+			names: new Map<string, string>(),
+			startedAt: new Map<string, number>(),
+		};
+	}
+
+	/** 把一条非标准工具行转成 pi 的 assistant.toolCall + 可选 toolResult（不匹配则 null）。 */
+	private matchCodexToolLine(payload: Record<string, any>, fallbackId: string, state: { names: Map<string, string>; startedAt: Map<string, number> }, timestampValue?: unknown): { call: { id: string; name: string; arguments: Record<string, unknown> }; result?: { content: unknown[]; isError: boolean } } | null {
+		const normalized = normalizeCodexToolLine(payload, fallbackId);
+		if (!normalized) return null;
+		const { call } = normalized;
+		state.names.set(call.id, call.name);
+		const startedAt = this.parseTimestamp(timestampValue);
+		if (startedAt !== undefined) state.startedAt.set(call.id, startedAt);
+
+		// image_generation_call 的图片结果就在同一行里：直接作为 toolResult 的图片内容。
+		// 生成图常达 1~2MB base64，超过 IMPORTED_IMAGE_MAX_BASE64_CHARS 时由
+		// tryImportedImageBlock 降级成占位文本（与其它导入器同一套体积护栏）。
+		const generated = payload.type === "image_generation_call" ? codexImageGenerationResult(payload) : "";
+		if (generated) {
+			const image = tryImportedImageBlock({ type: "image", data: generated, mimeType: "image/png", name: "image_generation" });
+			return { call, result: { content: image ? [image] : [{ type: "text", text: "[image]" }], isError: false } };
+		}
+
+		if (normalized.skipResult || !normalized.result) return { call };
+		return { call, result: { content: [{ type: "text", text: normalized.result.text ?? "" }], isError: Boolean(normalized.result.isError) } };
+	}
+
+	/**
+	 * 非标准工具行的“结果行”（custom_tool_call_output / tool_search_output）：
+	 * 按 call_id 与前面的 toolCall 配对；tool_search_output 没有对应调用时忽略。
+	 */
+	private matchCodexToolResultLine(payload: Record<string, any>, state: { names: Map<string, string>; startedAt: Map<string, number> }, timestampValue?: unknown): { toolCallId: string; toolName: string; content: unknown[]; isError: boolean; startedAt?: number; completedAt?: number } | null {
+		if (payload.type === "custom_tool_call_output") {
+			const callId = String(payload.call_id ?? payload.id ?? "");
+			if (!callId) return null;
+			const parsed = parseCodexToolOutput(payload.output);
+			return {
+				toolCallId: callId,
+				toolName: state.names.get(callId) ?? "tool",
+				content: [{ type: "text", text: parsed.text }],
+				isError: parsed.isError,
+				startedAt: state.startedAt.get(callId),
+				completedAt: this.parseTimestamp(timestampValue),
+			};
+		}
+		if (payload.type === "tool_search_output") {
+			const callId = String(payload.call_id ?? payload.id ?? "");
+			if (!callId) return null;
+			return {
+				toolCallId: callId,
+				toolName: state.names.get(callId) ?? "tool_search",
+				content: [{ type: "text", text: codexToolSearchOutputText(payload) }],
+				isError: false,
+				startedAt: state.startedAt.get(callId),
+				completedAt: this.parseTimestamp(timestampValue),
+			};
+		}
+		return null;
 	}
 
 	private extractToolOutput(payload: Record<string, any>) {

@@ -4,6 +4,7 @@ import type { SettingsFocusTarget } from "../atoms";
 import { t, type TranslationKey } from "../i18n";
 import type { FuzzySearchable } from "./commandPaletteFuzzy";
 import { SETTINGS_TAB_KEYWORDS, SETTINGS_TAB_LABEL_KEYS, SETTINGS_TAB_LAYOUT } from "../components/app/settings/settingsTabLayout";
+import { isSettingsTabHidden } from "../components/app/settings/settingsTabVisibility";
 import { SETTINGS_FIELD_ANCHORS } from "./settingsFieldAnchors";
 
 /**
@@ -79,16 +80,21 @@ const CONFIG_PAGE_COMMANDS: readonly ConfigPageCommand[] = [
  *
  * openSettings 由调用方注入（App 层的 openSettingsAtom setter）——本模块保持纯数据，
  * 不直接依赖 jotai store，便于单测与复用。
+ *
+ * hiddenModules：用户在外观设置里隐藏的模块。被隐藏的 tab **仍然可搜**（用户找不回来是最糟的结果），
+ * 副标题换成「已隐藏，点击显示」；选中后仍直达该 tab（SettingsModal 会在本次弹窗内临时显示它），
+ * 不改持久化——要不要永久恢复由用户在外观页自己决定。
  */
-export function buildSettingsCommands(openSettings: (target: SettingsFocusTarget) => void): PaletteCommand[] {
+export function buildSettingsCommands(openSettings: (target: SettingsFocusTarget) => void, hiddenModules: readonly string[] = []): PaletteCommand[] {
 	const group = t("command.groupSettings");
 	const subtitle = t("command.openSettingsHint");
+	const hiddenSubtitle = t("command.openHiddenSettingsHint");
 
 	const commands: PaletteCommand[] = SETTINGS_TAB_LAYOUT.map((entry) => ({
 		id: `settings:${entry.id}`,
 		group,
 		title: t(SETTINGS_TAB_LABEL_KEYS[entry.id]),
-		subtitle,
+		subtitle: isSettingsTabHidden(hiddenModules, entry.id) ? hiddenSubtitle : subtitle,
 		keywords: SETTINGS_TAB_KEYWORDS[entry.id],
 		icon: Settings2,
 		run: () => openSettings({ tab: entry.id }),

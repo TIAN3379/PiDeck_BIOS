@@ -175,9 +175,10 @@ test("only PiDeck automatic titles can write runtime names back to the catalog",
 	assert.match(agentManager, /pendingAutomaticTitles/);
 	assert.match(agentManager, /automaticMarker\?\.title === name/);
 	assert.doesNotMatch(agentManager, /forceCatalogSync/);
-	assert.match(agentManager, /return this\.applyRuntimeTitle\(agentId, nextTitle, true, true\)/);
-	assert.match(index, /agentManager\.setAutomaticTitleChangedHandler\(/);
-	assert.match(index, /sessionCatalog\s*\.?\s*applyAutomaticTitle\(sessionId, title\)/);
+	assert.match(agentManager, /return this\.applyRuntimeTitle\(agentId, nextTitle, true, "fallback"\)/);
+	assert.match(agentManager, /applyRuntimeTitle\(agentId, name, true, "auto"\)/);
+	assert.match(index, /agentManager\.setAutomaticTitleChangedHandler\(\(agentId, title, source\)/);
+	assert.match(index, /applyAutomaticTitle\(sessionId, title, source\)/);
 	assert.match(index, /sessionsCatalogRefreshed/);
 	assert.match(index, /Pi automatic title sync to catalog failed/);
 });

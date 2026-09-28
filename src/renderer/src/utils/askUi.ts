@@ -1,4 +1,4 @@
-import type { AgentUiBatchQuestion, AgentUiRequest, AgentUiResponse } from "../../../shared/types";
+import type { AgentUiBatchQuestion, AgentUiRequest, AgentUiResponse, ChatMessage } from "../../../shared/types";
 
 /**
  * Ask 提问 UI 的纯逻辑（与渲染解耦，便于单测与 E2E 断言）。
@@ -199,6 +199,129 @@ export function formatSecurityConfirmSummary(info: SecurityConfirmInfo): string 
 }
 
 /**
+ * DSH 已作答回显（纯数据投影）。
+ *
+ * 背景：pi 的 ask 是 ask_question 工具调用，收口时主进程把问答写进工具消息
+ * meta._askCard，时间线留下静态卡；DSH 的审批/提问是带外 server-request，
+ * completed 事件不带答案值，应答后卡片直接消失（用户反馈「dsh 提交后的渲染没有做」）。
+ * 渲染层在 responder 应答 accepted 时用本函数把「请求 + 用户答案」投影成静态回显，
+ * 再经 injectAskEchoMessage 合成为 ask_question 工具消息插入时间线的应答位置
+ * （与 pi 的 meta._askCard 同一渲染路径），不落盘（DSH 历史由 host 折叠，
+ * 写进缓存的合成消息会被下次全量投影冲掉，所以只在渲染派生层注入）。
+ */
+export type AskEchoItem = {
+	question: string;
+	answer: BatchAnswerValue;
+	answered: boolean;
+};
+
+export type AskEcho = {
+	requestId: string;
+	/** 整单取消：标题显示「已取消」 */
+	cancelled: boolean;
+	items: AskEchoItem[];
+};
+
+/** batch 提交信封：serializeBatchAnswers 产出的 JSON（回显侧解码）。 */
+type BatchAnswerEnvelopeItem = { id?: unknown; value?: unknown; label?: unknown };
+
+function decodeBatchEnvelope(value: unknown): BatchAnswerEnvelopeItem[] | undefined {
+	if (typeof value !== "string") return undefined;
+	try {
+		const parsed = JSON.parse(value) as { answers?: unknown };
+		return Array.isArray(parsed?.answers) ? (parsed.answers as BatchAnswerEnvelopeItem[]) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * 把一次已接受的应答投影为回显数据；非 ask 方法或无法解读时返回 undefined（不显示回显）。
+ * - batch_ask：用 batchQuestions 逐题配对信封答案（信封解码失败退回整串原文）；
+ * - confirm：答案取 confirmed；select/input/editor：取 value；
+ * - 取消：列出原题、answered=false（与 pi _askCard 的取消语义一致）。
+ */
+export function buildAskEcho(request: AgentUiRequest, response: AgentUiResponse): AskEcho | undefined {
+	if (!["select", "confirm", "input", "editor", "batch_ask"].includes(request.method)) return undefined;
+	const cancelled = Boolean(response.cancelled);
+	const batchQuestions = request.batchQuestions ?? [];
+	if (request.method === "batch_ask" && batchQuestions.length > 0) {
+		const envelope = decodeBatchEnvelope(response.value);
+		const items: AskEchoItem[] = batchQuestions.map((question) => {
+			const answerItem = envelope?.find((entry) => entry?.id === question.id);
+			const raw = answerItem?.value;
+			const value: BatchAnswerValue = typeof raw === "string" || typeof raw === "boolean" || Array.isArray(raw) ? raw : null;
+			const label = typeof answerItem?.label === "string" ? answerItem.label : undefined;
+			return { question: formatAskTitle(question.question), answer: label ?? value, answered: !cancelled && value !== null };
+		});
+		if (!envelope && !cancelled && typeof response.value === "string") {
+			items.push({ question: formatAskTitle(request.title || ""), answer: response.value, answered: true });
+		}
+		return { requestId: request.requestId, cancelled, items };
+	}
+	const question = formatAskTitle(request.title || "");
+	if (request.method === "confirm") {
+		return { requestId: request.requestId, cancelled, items: [{ question, answer: cancelled ? null : Boolean(response.confirmed), answered: !cancelled }] };
+	}
+	return { requestId: request.requestId, cancelled, items: [{ question, answer: cancelled ? null : (response.value ?? null), answered: !cancelled }] };
+}
+
+/** 回显内联注入参数：应答时刻的快照（锚点 + 时间戳），由 ask-echo-atoms 记录。 */
+export type AskEchoPlacement = {
+	echo: AskEcho;
+	agentId: string;
+	/** 应答时刻时间线最后一条消息 id：回显合成消息插在其后（= 提问阻塞的工具调用位置） */
+	anchorMessageId?: string;
+	answeredAt: number;
+};
+
+/**
+ * 把回显投影为 pi 同款的 ask_question 工具消息（meta._askCard 走 ToolCallCard 的
+ * isAskCard 分支：行头「提问」+「已回答」徽标，展开区逐题列问答）。
+ * 批量时 questions 数组给展开列表，顶层 question/answered 供行头与徽标。
+ */
+export function askEchoToolMessage(placement: AskEchoPlacement): ChatMessage {
+	const items = placement.echo.items;
+	const questionCards = items.map((item) => ({
+		question: item.question,
+		answered: item.answered,
+		...(item.answer === null || item.answer === undefined ? {} : { answer: item.answer }),
+	}));
+	const askCard = {
+		...(questionCards[0] ?? {}),
+		answered: !placement.echo.cancelled && items.some((item) => item.answered),
+		...(questionCards.length > 1 ? { questions: questionCards } : {}),
+	};
+	return {
+		id: `dsh-ask-echo:${placement.echo.requestId}`,
+		agentId: placement.agentId,
+		role: "tool",
+		text: "",
+		timestamp: placement.answeredAt,
+		meta: { toolName: "ask_question", status: "done", _askCard: askCard },
+	};
+}
+
+/**
+ * 在派生消息列表中按锚点内联插入回显工具消息（不改动入参数组）。
+ * - 锚点缺失（应答时会话还没有消息）：插到列表头部（提问先于一切投影内容）；
+ * - 锚点找不到（历史被压缩/host 重投影改写）：放弃注入——错位的回显比没有更糟；
+ * - 已存在同 id（防重）：原样返回。
+ */
+export function injectAskEchoMessage(messages: ChatMessage[], placement: AskEchoPlacement | undefined): ChatMessage[] {
+	if (!placement) return messages;
+	const echoId = `dsh-ask-echo:${placement.echo.requestId}`;
+	if (messages.some((message) => message.id === echoId)) return messages;
+	const synthetic = askEchoToolMessage(placement);
+	if (!placement.anchorMessageId) return [synthetic, ...messages];
+	const anchorIndex = messages.findIndex((message) => message.id === placement.anchorMessageId);
+	if (anchorIndex < 0) return messages;
+	const next = messages.slice();
+	next.splice(anchorIndex + 1, 0, synthetic);
+	return next;
+}
+
+/**
  * 移除 Plan Mode / 安全确认给桌面端识别用的内部标题标记，兑底为人类可读内容。
  * - Plan Mode：[PI_DECK_PLAN_NEXT] 前缀剥掉，保留后面的计划内容；
  * - 安全确认：[PI_DECK_SECURITY_CONFIRM] + JSON 负载，换成「安全确认：<工具>」摘要。
@@ -370,4 +493,60 @@ export function shouldSuppressAskClickSnapshot(pressSnapshot: string | null, cur
 export function shouldSuppressAskClick(): boolean {
 	if (typeof window === "undefined") return false;
 	return shouldSuppressAskClickSnapshot(pressSelectionSnapshot, window.getSelection()?.toString() ?? "");
+}
+
+// ---------------------------------------------------------------------------
+// ask 交互草稿（会话级持久化）
+// ---------------------------------------------------------------------------
+// 为什么放 utils：BatchAskInlineBar 的交互态（已选答案/标签/自定义标记/输入/当前 tab/展开态）
+// 原先全部是组件内 useState，切会话 tab 卸载重建即丢（用户反馈「ask 选择中切换 tab，选择没了」）。
+// 草稿的纯数据转换（提交答案、新旧 key 判定）在这里定义，可脱离 React 单测；
+// 组件侧只负责把草稿读写到 atom family（atoms/ask-draft-atoms.ts），key 含
+// sessionId/agentId/runtimeGeneration/requestId，同一请求任意次重挂都从 atom 恢复。
+
+/** 批量问答卡的交互草稿（与 BatchAskInlineBar 的 useState 一一对应）。 */
+export type AskBatchDraft = {
+	/** 每题已选答案（value 形态） */
+	answers: Record<string, BatchAnswerValue>;
+	/** 每题已选答案的展示标签（与 value 分离：选项对象 value≠label 时提交 label） */
+	labels: Record<string, string>;
+	/** 走了「其他」自定义输入的题号集合（提交时序列化 wasCustom 标记） */
+	customAnswerIds: string[];
+	/** 各题自定义输入框 / 纯输入题的当前文本 */
+	inputValues: Record<string, string>;
+	/** 当前所在题目 tab 索引 */
+	currentTab: number;
+	/** 卡片展开/折叠态 */
+	expanded: boolean;
+};
+
+/** 空草稿：所有字段的初始值。prefill 由组件在首次挂载时注入（见 SessionRuntimeUiOverlay）。 */
+export function emptyAskBatchDraft(): AskBatchDraft {
+	return { answers: {}, labels: {}, customAnswerIds: [], inputValues: {}, currentTab: 0, expanded: true };
+}
+
+/** 单问题卡的交互草稿初始值。 */
+export function emptyAskSingleDraft() {
+	return { selectedOption: "", value: "", expanded: true };
+}
+
+/**
+ * 草稿 key 是否仍是本次请求的 key。
+ *
+ * key = `${sessionId}:${agentId}:${runtimeGeneration}:${requestId}`，理论上 family key 与内容恒等；
+ * 防御的是「同一 key 实例被复用」——例如 runtime 重启后 generation 变化、或请求 id 发生重号时，
+ * 上一请求的选择不应污染新请求（还没做整体重置的过渡帧里先拦一下）。
+ */
+export function isSameAskDraftKey(left: string | undefined, right: string): boolean {
+	return left !== undefined && left === right;
+}
+
+/**
+ * 写入一题答案并返回新的草稿（纯函数）。
+ * 调用方拿返回值直接提交/继续，不依赖 React 状态异步提交（自动前进到末题时
+ * 必须带上刚写入的答案，读 state 会漏掉本题——见 SessionRuntimeUiOverlay 的 submitAnswers）。
+ */
+export function commitBatchAnswer(draft: AskBatchDraft, questionId: string, value: BatchAnswerValue, label: string, wasCustom: boolean): AskBatchDraft {
+	const customAnswerIds = wasCustom ? (draft.customAnswerIds.includes(questionId) ? draft.customAnswerIds : [...draft.customAnswerIds, questionId]) : draft.customAnswerIds.filter((id) => id !== questionId);
+	return { ...draft, answers: { ...draft.answers, [questionId]: value }, labels: { ...draft.labels, [questionId]: label }, customAnswerIds };
 }

@@ -917,7 +917,7 @@ export class ConfigManager {
 
 		// 3) 模板路由：声明式模板优先（用户显式选择），否则内置 + 旧探针自动匹配。
 		const template = settings.config?.template;
-		if (template === "general" || template === "newapi" || template === "cookie") {
+		if (template === "general" || template === "newapi" || template === "cookie" || template === "volcengine") {
 			const built = buildDeclarativeUsageProbeTemplate(template, settings.config ?? {}, {
 				baseUrl: resolvedBaseUrl,
 				apiKey: resolvedApiKey,
@@ -925,7 +925,9 @@ export class ConfigManager {
 			if ("error" in built) {
 				return { success: false, error: built.error };
 			}
-			return this.runProviderUsageProbes(built.baseUrl, built.apiKey, resolved.headers, [built.candidate], timeoutMs, intervalMinutes);
+			// candidates 而不是 candidate：火山方舟是双 Action 候选（Agent Plan / Coding Plan
+			// 自动探测），其余模板 candidates 长度也是 1，走同一条执行路径。
+			return this.runProviderUsageProbes(built.baseUrl, built.apiKey, resolved.headers, built.candidates, timeoutMs, intervalMinutes);
 		}
 
 		const userProbes = await loadUserUsageProbes(effectiveDir);
@@ -1086,8 +1088,8 @@ export class ConfigManager {
 			return { success: false, error: this.translate("mainConfig.providerUsageUnsupported") };
 		}
 
-		// 声明式模板（general/newapi/cookie）：构建候选时可携带覆盖字段。
-		if (template === "general" || template === "newapi" || template === "cookie") {
+		// 声明式模板（general/newapi/cookie/volcengine）：构建候选时可携带覆盖字段。
+		if (template === "general" || template === "newapi" || template === "cookie" || template === "volcengine") {
 			const built = buildDeclarativeUsageProbeTemplate(
 				template,
 				{
@@ -1099,13 +1101,16 @@ export class ConfigManager {
 					cookiePath: input.cookiePath,
 					valuePath: input.valuePath,
 					currencyPath: input.currencyPath,
+					accessKeyId: input.accessKeyId,
+					secretAccessKey: input.secretAccessKey,
 				},
 				{ baseUrl: resolvedBaseUrl, apiKey: resolvedApiKey },
 			);
 			if ("error" in built) {
 				return { success: false, error: built.error };
 			}
-			return this.runProviderUsageProbes(built.baseUrl, built.apiKey, resolved.headers, [built.candidate], timeoutMs, 0);
+			// candidates：火山方舟双 Action 探测（Agent Plan / Coding Plan）依次尝试。
+			return this.runProviderUsageProbes(built.baseUrl, built.apiKey, resolved.headers, built.candidates, timeoutMs, 0);
 		}
 
 		// 内置模板：按 templateId 找候选（不可改写结构，测的是零配置路径本身）。

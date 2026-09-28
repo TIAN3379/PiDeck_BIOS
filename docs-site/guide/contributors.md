@@ -201,6 +201,16 @@ title: 贡献者
   </div>
 </div>
 
+<div class="contributor-card">
+  <div class="contributor-avatar">cm</div>
+  <div class="contributor-info">
+    <strong>cmyk-xing</strong>
+    <span class="contributor-handle">@cmyk-xing</span>
+    <p>外观设置新增「功能模块」显示开关 (#254)、修复引导页发送创建的新会话漏出历史旧消息 (#256)、启动时恢复上次窗口位置与最大化状态 (#259)</p>
+    <a href="https://github.com/cmyk-xing" target="_blank" rel="noreferrer">GitHub</a>
+  </div>
+</div>
+
 </div>
 
 <style scoped>

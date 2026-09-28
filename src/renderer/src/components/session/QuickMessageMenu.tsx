@@ -1,9 +1,11 @@
-import { useState } from "react";
 import { useSetAtom } from "jotai";
 import { MessageSquareText } from "lucide-react";
 import { t } from "../../i18n";
+import { formatAccelerator, toAriaKeyShortcuts } from "../../../../shared/shortcuts";
 import { openSettingsAtom } from "../../atoms";
 import { useQuickMessages } from "../../hooks/useQuickMessages";
+import { useQuickMessagePopover } from "../../hooks/useQuickMessagePopover";
+import { useShortcutBindings } from "../../hooks/useShortcutBindings";
 import { Button } from "../ui-shadcn/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui-shadcn/popover";
 import { QuickMessagePicker } from "./QuickMessagePicker";
@@ -19,8 +21,13 @@ import { QuickMessagePicker } from "./QuickMessagePicker";
  * 会顶穿窗口（16 条就已经高过屏幕），而 Popover 里能放搜索框 + 分页 + 固定行高的表格。
  * 直发走 controller 的 sendQuickMessage，正文不经过草稿，也不会动用户写了一半的输入
  * （契约见 useSessionSend 的 overrideText）。
+ *
+ * 开合状态不在这里用 useState：快捷键呼出与点击入口必须共享同一份状态，且都要在
+ * 打开前重读文件，统一由 useQuickMessagePopover 持有（见该 hook 的注释）。
  */
 export function QuickMessageMenu(props: {
+	/** 本栏会话 id：快捷键广播按聚焦栏去重时需要它。 */
+	sessionId: string;
 	/** Agent 启动中：整个入口禁用（与底栏其它按钮一致）。 */
 	disabled?: boolean;
 	/** 直发不可用（DSH 模型不可路由 / 生图进行中）：仍可插入草稿，只是不给直发。 */
@@ -30,20 +37,25 @@ export function QuickMessageMenu(props: {
 }) {
 	const { items, loading, error, openFile, refresh } = useQuickMessages();
 	const openSettings = useSetAtom(openSettingsAtom);
-	const [open, setOpen] = useState(false);
+	// useQuickMessages.refresh 返回快照（Promise<QuickMessagesSnapshot | null>），
+	// 而 hook 参数类型是 () => void | Promise<void>：包一层吞掉返回值，避免类型不兼容。
+	const { open, setOpen } = useQuickMessagePopover({ sessionId: props.sessionId, refresh: () => void refresh() });
+	// 按钮 tooltip 顺带展示当前生效键位（跟随设置页自定义），让快捷键可被发现。
+	// aria-keyshortcuts 要 ARIA 语法（Control+Shift+M），不能直接挂展示用的 "⌘⇧M"。
+	const { bindings, platform } = useShortcutBindings();
+	const shortcutKbd = bindings ? formatAccelerator(bindings.openQuickMessages, platform) : undefined;
+	const shortcutAria = bindings ? toAriaKeyShortcuts(bindings.openQuickMessages, platform) : undefined;
+	const triggerTitle = shortcutKbd ? `${t("app.quickMessagesTitle")} (${shortcutKbd})` : t("app.quickMessagesTitle");
 
 	return (
 		<Popover
 			open={open}
-			onOpenChange={(next) => {
-				setOpen(next);
-				// 打开时重读文件：用户可以手工编辑 quick-messages.json，弹框必须显示磁盘上的最新清单，
-				// 而不是上次挂载时的快照（主进程侧本来就不缓存，重读成本只是一次小文件读）。
-				if (next) void refresh();
-			}}
+			// setOpen（hook 内的单一写入口）会负责「打开时重读文件」；Radix 的 Esc / 点外部
+			// 收起也走这里，所以收起不需要额外处理。
+			onOpenChange={setOpen}
 		>
 			<PopoverTrigger asChild>
-				<Button variant="ghost" size="icon" className="composer-bar-btn icon size-7 rounded-md text-foreground hover:bg-muted/60" aria-label={t("app.quickMessagesTitle")} title={t("app.quickMessagesTitle")} disabled={props.disabled}>
+				<Button variant="ghost" size="icon" className="composer-bar-btn icon size-7 rounded-md text-foreground hover:bg-muted/60" aria-label={t("app.quickMessagesTitle")} aria-keyshortcuts={shortcutAria} title={triggerTitle} disabled={props.disabled}>
 					<MessageSquareText size={15} strokeWidth={2} aria-hidden="true" />
 				</Button>
 			</PopoverTrigger>

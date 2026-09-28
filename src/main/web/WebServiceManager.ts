@@ -26,6 +26,7 @@ import type {
 	SessionMessagePage,
 	SessionRecord,
 	SessionRuntimeInfo,
+	SessionRuntimeModelSelection,
 	SessionRuntimeReplacement,
 	SessionRuntimeTarget,
 	SessionSummary,
@@ -116,7 +117,7 @@ type WebServiceDependencies = {
 	getRewindCheckpointDiff: (target: SessionRuntimeTarget, checkpointId: string) => Promise<SessionCommandResult<SessionTargetedValue<string>>>;
 	restoreRewindCheckpoint: (target: SessionRuntimeTarget, checkpointId: string, scope: RewindRestoreScope) => Promise<SessionCommandResult<SessionTargetedValue<RewindRestoreResult>>>;
 	prepareSessionRuntimeResend: (target: SessionRuntimeTarget, messageId: string) => Promise<SessionCommandResult<SessionTargetedValue<{ text: string; images?: ImageContent[] }>>>;
-	setSessionRuntimeModel: (target: SessionRuntimeTarget, provider: string, modelId: string) => Promise<SessionCommandResult<SessionTargetedValue<AgentRuntimeState>>>;
+	setSessionRuntimeModel: (target: SessionRuntimeTarget, provider: string, modelId: string, modelName?: string) => Promise<SessionCommandResult<SessionTargetedValue<SessionRuntimeModelSelection>>>;
 	setSessionRuntimeThinking: (target: SessionRuntimeTarget, level: string) => Promise<SessionCommandResult<SessionTargetedValue<AgentRuntimeState>>>;
 	setSessionRuntimePermission: (target: SessionRuntimeTarget, preset: string) => Promise<SessionCommandResult<SessionTargetedValue<AgentRuntimeState>>>;
 	cloneSessionRuntime: (target: SessionRuntimeTarget) => Promise<
@@ -655,6 +656,7 @@ export class WebServiceManager {
 				newText?: string;
 				provider?: string;
 				modelId?: string;
+				modelName?: string;
 				level?: string;
 				preset?: string;
 				checkpointId?: string;
@@ -704,7 +706,7 @@ export class WebServiceManager {
 					result = await this.deps.prepareSessionRuntimeResend(target, body.messageId ?? "");
 					break;
 				case "model":
-					result = await this.deps.setSessionRuntimeModel(target, body.provider ?? "", body.modelId ?? "");
+					result = await this.deps.setSessionRuntimeModel(target, typeof body.provider === "string" ? body.provider : "", typeof body.modelId === "string" ? body.modelId : "", typeof body.modelName === "string" ? body.modelName : undefined);
 					break;
 				case "thinking":
 					result = await this.deps.setSessionRuntimeThinking(target, body.level ?? "");

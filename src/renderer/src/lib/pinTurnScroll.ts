@@ -24,10 +24,10 @@ export function pinScrollDurationMs(distancePx: number): number {
 	return Math.round(Math.min(720, Math.max(320, 240 + distance * 0.28)));
 }
 
-/** ease-out quart：快起慢收、无回弹。 */
+/** ease-in-out cubic：起步与收尾速度连续，长距离不在首帧猛跳。 */
 export function pinScrollEase(progress: number): number {
 	const t = Math.min(1, Math.max(0, progress));
-	return 1 - (1 - t) ** 4;
+	return t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;
 }
 
 export type AnimateScrollTopOptions = {

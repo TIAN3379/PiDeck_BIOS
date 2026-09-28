@@ -852,3 +852,119 @@ test("TokenDance 缺 balance 结构时不匹配（字段缺失兜底 raw）", ()
 	// 三路径全空（结构完全不匹配）才不命中；只要任一命中即合法展示
 	assert.equal(probe.parseUsageResponseBody({ balance: {} }, "{}", td.parse).matched, false);
 });
+
+test("火山方舟 Agent Plan：全 0 的未订阅响应不匹配（自动落到 Coding Plan 候选）", () => {
+	// 未订阅 Agent Plan 时官方返回 200 但四个桶全 0；若当成有效用量就会显示 0/0 假进度条。
+	const body = {
+		ResponseMetadata: { RequestId: "req-1" },
+		Result: {
+			AFPFiveHour: { Quota: 0, Used: 0, ResetTime: 1778806800000 },
+			AFPWeekly: { Quota: 0, Used: 0, ResetTime: 1778806800000 },
+			AFPMonthly: { Quota: 0, Used: 0, ResetTime: 1778806800000 },
+			AFPDaily: { Quota: 0, Used: 0 },
+		},
+	};
+	const res = probe.parseUsageResponseBody(body, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, false);
+	assert.equal(res.raw, "{}");
+});
+
+test("火山方舟 Agent Plan：AFP 桶换算成百分比，AFPDaily 不上桶", () => {
+	const body = {
+		Result: {
+			// 5h：已用 400 万 token / 1000 万 = 40%；周 200 万/3000 万 = 6.67%；月 1.2 亿/3 亿 = 40%
+			AFPFiveHour: { Quota: 10_000_000, Used: 4_000_000, ResetTime: 1778806800000 },
+			AFPWeekly: { Quota: 30_000_000, Used: 2_000_000, ResetTime: 1779231600000 },
+			AFPMonthly: { Quota: 300_000_000, Used: 120_000_000, ResetTime: 1780482000000 },
+			// 控制台不展示的日档：分母小、容易刷出 99% 惊吓值，隐藏。
+			AFPDaily: { Quota: 1_000_000, Used: 999_999 },
+		},
+	};
+	const res = probe.parseUsageResponseBody(body, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, true);
+	assert.equal(res.kind, "periods");
+	assert.equal(res.periods.rolling.percent, 40);
+	// 解析层不做四舍五入（TokenDance 等同样保留原精度），小数位数交给展示层；这里锁精确比值。
+	assert.equal(res.periods.weekly.percent, (2_000_000 / 30_000_000) * 100);
+	assert.equal(res.periods.monthly.percent, 40);
+	assert.equal(res.periods.daily, undefined);
+	// 毫秒时间戳 → ISO 字符串
+	assert.equal(res.periods.rolling.resetsAt, new Date(1778806800000).toISOString());
+});
+
+test("火山方舟 Coding Plan：QuotaUsage[] 的秒级 Percent 直接成档，-1 重置时间省略", () => {
+	const body = {
+		Result: {
+			QuotaUsage: [
+				{ Level: "session", Percent: 12, ResetTimestamp: 1782057600 },
+				{ Level: "weekly", Percent: 37.5, ResetTimestamp: 1782662400 },
+				// -1 = 无活跃窗口/不展示重置行
+				{ Level: "monthly", Percent: 68, ResetTimestamp: -1 },
+				// 未知窗口名不硬套档位
+				{ Level: "quarterly", Percent: 90 },
+			],
+		},
+	};
+	const res = probe.parseUsageResponseBody(body, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, true);
+	assert.equal(res.kind, "periods");
+	assert.equal(res.periods.rolling.percent, 12);
+	assert.equal(res.periods.rolling.resetsAt, new Date(1782057600 * 1000).toISOString());
+	assert.equal(res.periods.weekly.percent, 37.5);
+	assert.equal(res.periods.monthly.percent, 68);
+	assert.equal(res.periods.monthly.resetsAt, undefined);
+	assert.equal(res.periods.quarterly, undefined);
+});
+
+test("火山方舟：结构完全不匹配（报错体）时不命中，回退 raw 让上层报错", () => {
+	const res = probe.parseUsageResponseBody({ ResponseMetadata: { Error: { Code: "InvalidAuthorization" } } }, "ERR_BODY", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, false);
+	assert.equal(res.raw, "ERR_BODY");
+});
+
+test("火山方舟：Result 包裹缺失时退回根对象（兼容网关直出）", () => {
+	const res = probe.parseUsageResponseBody({ AFPFiveHour: { Quota: 100, Used: 50 } }, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, true);
+	assert.equal(res.periods.rolling.percent, 50);
+});
+
+test("火山方舟 Agent Plan：只返回日档时不命中（AFPDaily 隐藏，不能当唯一窗口）", () => {
+	// 日档分母小、容易刷出 99% 惊吓值，展示层已隐藏；若解析层把它当窗口，就会出现「有进度条但控制台看不到」。
+	const body = { Result: { AFPDaily: { Quota: 1_000_000, Used: 999_999 } } };
+	const res = probe.parseUsageResponseBody(body, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, false);
+	assert.equal(res.raw, "{}");
+});
+
+test("火山方舟 Agent Plan：桶字段走别名兜底，缺档不出桶", () => {
+	// 只用 ResetTimestamp 别名 + 只给 5h 档：验证别名解析与「缺档不补 0」。
+	const body = { Result: { AFPFiveHour: { Quota: 200, Used: 50, ResetTimestamp: 1782057600 } } };
+	const res = probe.parseUsageResponseBody(body, "{}", { kind: "custom", resolver: "volcengine-plan" });
+	assert.equal(res.matched, true);
+	assert.equal(res.periods.rolling.percent, 25);
+	assert.equal(res.periods.rolling.resetsAt, new Date(1782057600 * 1000).toISOString());
+	assert.equal(res.periods.weekly, undefined);
+	assert.equal(res.periods.monthly, undefined);
+});
+
+test("火山方舟 Coding Plan：数组字段别名 Usages/Details 与窗口名别名均可解析", () => {
+	// Usages 是 QuotaUsage 的兼容别名；窗口名用 "5h"/"week" 这类别名时必须仍能落到正确档位。
+	const res = probe.parseUsageResponseBody(
+		{
+			Result: {
+				Usages: [
+					{ Type: "5h", UsedPercent: 22, ResetTimestamp: 1782057600 },
+					{ Label: "week", UsedPercent: 61 },
+				],
+			},
+		},
+		"{}",
+		{ kind: "custom", resolver: "volcengine-plan" },
+	);
+	assert.equal(res.matched, true);
+	assert.equal(res.kind, "periods");
+	assert.equal(res.periods.rolling.percent, 22);
+	assert.equal(res.periods.rolling.resetsAt, new Date(1782057600 * 1000).toISOString());
+	assert.equal(res.periods.weekly.percent, 61);
+	assert.equal(res.periods.monthly, undefined);
+});

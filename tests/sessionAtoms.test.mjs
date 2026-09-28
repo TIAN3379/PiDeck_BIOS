@@ -43,6 +43,7 @@ function loadAtoms() {
 	const outlineRevision = compileModule("src/renderer/src/atoms/outlineRevision.ts");
 	const outlineProjectionCache = compileModule("src/renderer/src/atoms/outlineProjectionCache.ts");
 	const sessions = compileModule("src/renderer/src/atoms/session-atoms.ts", {
+		"./recent-session-atoms": compileModule("src/renderer/src/atoms/recent-session-atoms.ts"),
 		"../utils/agentRuntimeState": runtimeState,
 		"../utils/sessionRecordIdentity": sessionRecordIdentity,
 		"../utils/liveTextHandoff": liveTextHandoff,
@@ -283,6 +284,41 @@ test("rejects a late disk page continuation whose revision does not match", () =
 	});
 	assert.equal(applied, false);
 	assert.equal(store.get(atoms.sessionMessagesCacheAtom)["session-c"].messages[0].text, "v1");
+});
+
+test("promoteSessionMessagesCacheAtom moves the guide bootstrap bubble and leaves nothing behind for the next send", () => {
+	// 回归：引导页虚拟会话 ID 是常量、永不经 removeSessionStateAtom 清理。此前提升只「拷」
+	// 不「搬」，第 N 次从引导页发送时 useSessionSend 把残留缓存当 previousMessages 追加，
+	// 新会话一开始就带着之前 N-1 条消息。
+	const atoms = loadAtoms();
+	const store = createStore();
+	const GUIDE = "renderer:guide-bootstrap";
+	store.set(atoms.cacheSessionMessagesAtom, { sessionId: GUIDE, messages: [chatMessage("req-1", "user", "first")], source: "runtime" });
+	store.set(atoms.promoteSessionMessagesCacheAtom, { fromSessionId: GUIDE, toSessionId: "session-1" });
+	assert.deepEqual([...store.get(atoms.sessionMessagesCacheAtom)["session-1"].messages.map((m) => m.text)], ["first"]);
+	assert.equal(store.get(atoms.sessionMessagesCacheAtom)[GUIDE], undefined);
+	assert.ok(!store.get(atoms.sessionMessageLruAtom).includes(GUIDE));
+
+	// 第二次从引导页发送：模拟 useSessionSend 的 previousMessages 追加，然后再提升
+	const leftovers = store.get(atoms.sessionMessagesCacheAtom)[GUIDE]?.messages ?? [];
+	store.set(atoms.cacheSessionMessagesAtom, { sessionId: GUIDE, messages: [...leftovers, chatMessage("req-2", "user", "second")], source: "runtime" });
+	store.set(atoms.promoteSessionMessagesCacheAtom, { fromSessionId: GUIDE, toSessionId: "session-2" });
+	assert.deepEqual([...store.get(atoms.sessionMessagesCacheAtom)["session-2"].messages.map((m) => m.text)], ["second"]);
+	assert.deepEqual([...store.get(atoms.sessionMessagesCacheAtom)["session-1"].messages.map((m) => m.text)], ["first"]);
+	assert.equal(store.get(atoms.sessionMessagesCacheAtom)[GUIDE], undefined);
+});
+
+test("promoteSessionMessagesCacheAtom is a no-op without a source cache and appends onto an existing target", () => {
+	const atoms = loadAtoms();
+	const store = createStore();
+	store.set(atoms.promoteSessionMessagesCacheAtom, { fromSessionId: "ghost", toSessionId: "session-1" });
+	assert.equal(store.get(atoms.sessionMessagesCacheAtom)["session-1"], undefined);
+
+	store.set(atoms.cacheSessionMessagesAtom, { sessionId: "session-1", messages: [chatMessage("old", "assistant", "existing")], source: "runtime" });
+	store.set(atoms.cacheSessionMessagesAtom, { sessionId: "virtual", messages: [chatMessage("new", "user", "incoming")], source: "runtime" });
+	store.set(atoms.promoteSessionMessagesCacheAtom, { fromSessionId: "virtual", toSessionId: "session-1" });
+	assert.deepEqual([...store.get(atoms.sessionMessagesCacheAtom)["session-1"].messages.map((m) => m.text)], ["existing", "incoming"]);
+	assert.equal(store.get(atoms.sessionMessagesCacheAtom).virtual, undefined);
 });
 
 test("anonymous session switch-back does not wipe runtime messages via empty disk write", () => {

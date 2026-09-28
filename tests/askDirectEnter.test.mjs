@@ -89,8 +89,10 @@ test("batch: Enter advances only when the current question is answered", () => {
 
 test("overlay wires the direct-enter strategy and IME guard into ask card keydown", () => {
 	const overlay = readFileSync("src/renderer/src/components/overlays/SessionRuntimeUiOverlay.tsx", "utf8");
-	// 单卡与批量卡都走共享纯函数，不散落闭包策略
-	assert.match(overlay, /import \{\s*buildAskResponse,[\s\S]*?resolveSingleAskDirectEnter,[\s\S]*?\} from "\.\.\/\.\.\/utils\/askUi"/);
+	// 单卡与批量卡都走共享纯函数，不散落闭包策略。
+	// 正则必须容忍任意换行与成员顺序：该 import 会被格式化折成多行且含 type 成员，
+	// 不能假设 buildAskResponse 紧跟 `import {`（曾因此红灯）。
+	assert.match(overlay, /import \{[\s\S]*?buildAskResponse,[\s\S]*?resolveSingleAskDirectEnter,[\s\S]*?\} from "\.\.\/\.\.\/utils\/askUi"/);
 	assert.match(overlay, /resolveSingleAskDirectEnter\(/);
 	assert.match(overlay, /resolveBatchAskDirectEnter\(/);
 	// 所有 Enter 分支都排除 IME 合成键（keyCode 229），防止输入法选字回车误提交

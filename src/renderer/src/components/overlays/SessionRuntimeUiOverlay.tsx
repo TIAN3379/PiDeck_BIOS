@@ -1,9 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ClipboardList } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useAtom } from "jotai";
+import { EASE_OUT, SPRING_LAYOUT } from "../../lib/ease";
+import { ActionSwapRollText } from "../motion/action-swap-roll";
+import { DrawCheck } from "../motion/draw-check";
 import type { AgentUiBatchQuestion, AgentUiRequest, AgentUiResponse, SessionUiResponseInput } from "../../../../shared/types";
 import type { SessionRuntimeUiState, SessionRuntimeViewState } from "../../atoms/session-atoms";
+import { askDraftBySessionRequestAtomFamily, type AskInteractionDraft, type AskSingleDraft } from "../../atoms/ask-draft-atoms";
 import { t } from "../../i18n";
-import { buildAskResponse, formatAskTitle, isComposingKeyboardEvent, parseSecurityConfirmTitle, resolveActiveAskRequest, resolveBatchAskDirectEnter, resolveSingleAskDirectEnter, serializeBatchAnswers, shouldAutoAdvanceBatchAnswer, shouldSuppressAskClick, splitAskOption } from "../../utils/askUi";
+import {
+	type AskBatchDraft,
+	type BatchAnswerValue,
+	buildAskResponse,
+	commitBatchAnswer,
+	emptyAskBatchDraft,
+	emptyAskSingleDraft,
+	formatAskTitle,
+	isComposingKeyboardEvent,
+	isSameAskDraftKey,
+	parseSecurityConfirmTitle,
+	resolveActiveAskRequest,
+	resolveBatchAskDirectEnter,
+	resolveSingleAskDirectEnter,
+	serializeBatchAnswers,
+	shouldAutoAdvanceBatchAnswer,
+	shouldSuppressAskClick,
+	splitAskOption,
+} from "../../utils/askUi";
 import { SecurityConfirmCard } from "./SecurityConfirmCard";
 import { Button } from "../ui-shadcn/button";
 import { Input } from "../ui-shadcn/input";
@@ -43,7 +67,16 @@ export type SessionRuntimeUiResponder = {
 	respond: (request: AgentUiRequest, response: AgentUiResponse) => Promise<boolean>;
 };
 
-export function createSessionRuntimeUiResponder(input: { binding: RuntimeUiBinding; readBinding: () => RuntimeUiBinding | undefined; claim: ResponseClaim; rollback: ResponseRollback; send: (input: SessionUiResponseInput) => Promise<void>; onError?: (error: unknown) => void }): SessionRuntimeUiResponder {
+export function createSessionRuntimeUiResponder(input: {
+	binding: RuntimeUiBinding;
+	readBinding: () => RuntimeUiBinding | undefined;
+	claim: ResponseClaim;
+	rollback: ResponseRollback;
+	send: (input: SessionUiResponseInput) => Promise<void>;
+	onError?: (error: unknown) => void;
+	/** 应答成功（host 已收到）后的旁路回调：DSH 回显等，不参与应答流程 */
+	onAccepted?: (request: AgentUiRequest, response: AgentUiResponse) => void;
+}): SessionRuntimeUiResponder {
 	return {
 		respond: async (request, response) => {
 			const start = input.readBinding();
@@ -58,6 +91,7 @@ export function createSessionRuntimeUiResponder(input: { binding: RuntimeUiBindi
 			}
 			try {
 				await input.send(envelope);
+				input.onAccepted?.(request, response);
 				return true;
 			} catch (error) {
 				input.rollback({ ...envelope, request });
@@ -81,43 +115,81 @@ export type SessionRuntimeUiOverlayProps = {
 	onExpandedChange?: (expanded: boolean) => void;
 };
 
-type BatchAnswer = string | boolean | string[] | undefined;
-
 /** 批量答案 label：布尔转是/否，数组 join「、」，其余原样 */
-function batchAnswerLabel(value: BatchAnswer): string {
+function batchAnswerLabel(value: BatchAnswerValue): string {
 	if (typeof value === "boolean") return value ? t("common.true") : t("common.false");
 	if (Array.isArray(value)) return value.join("、");
 	return value ?? "";
 }
 
 /** 是否已作答：multi_select 空数组视为未作答 */
-function isBatchAnswered(value: BatchAnswer): boolean {
-	return value !== undefined && (!Array.isArray(value) || value.length > 0);
+function isBatchAnswered(value: BatchAnswerValue): boolean {
+	return value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0);
 }
 
 /** Ask 展开后由时间线 owner 重新定位到底部，确保新展开的内容不会落在视口下方。 */
 function notifyAskExpanded(onExpandedChange: ((expanded: boolean) => void) | undefined, expanded: boolean) {
 	onExpandedChange?.(expanded);
 }
-function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean; onCancel: () => void; onSubmit: (answers: string) => void; onExpandedChange?: (expanded: boolean) => void }) {
+
+/** 批量问答卡的交互草稿初始值：prefill 在此注入（与 Empty 草稿的区别）。 */
+function initialBatchDraft(questions: ReadonlyArray<AgentUiBatchQuestion>): AskBatchDraft {
+	return {
+		...emptyAskBatchDraft(),
+		inputValues: Object.fromEntries(questions.filter((question) => question.prefill).map((question) => [question.id, question.prefill ?? ""])),
+	};
+}
+
+/** 草稿写盘函数：值或函数式更新（与 jotai setAtom 的 SetStateAction 同构）。 */
+export type AskDraftSetter = (draft: AskInteractionDraft | ((current: AskInteractionDraft | undefined) => AskInteractionDraft)) => void;
+
+function BatchAskInlineBar(props: {
+	request: AgentUiRequest;
+	responding: boolean;
+	onCancel: () => void;
+	onSubmit: (answers: string) => void;
+	onExpandedChange?: (expanded: boolean) => void;
+	/** 本请求的交互草稿（batch 侧）：切 tab 重挂后恢复已选答案/输入/当前题（见 ask-draft-atoms.ts） */
+	draft?: AskInteractionDraft;
+	/** 草稿变更回写（顶层 setDraft）。批量卡内部不持有自己的 state，全部状态以草稿为唯一真相。 */
+	onDraftChange: AskDraftSetter;
+	/** 本请求的草稿 key（sessionId:agentId:generation:requestId） */
+	requestKey: string;
+}) {
 	const questions = props.request.batchQuestions ?? [];
 	const total = questions.length;
-	const [answers, setAnswers] = useState<Record<string, BatchAnswer>>({});
-	const [answerLabels, setAnswerLabels] = useState<Record<string, string>>({});
-	const [customAnswerIds, setCustomAnswerIds] = useState<Set<string>>(new Set());
-	const [inputValues, setInputValues] = useState<Record<string, string>>({});
-	const [currentTab, setCurrentTab] = useState(0);
-	const [expanded, setExpanded] = useState(true);
-	const requestKey = props.request.requestId;
+	// 动效降级开关：系统 prefers-reduced-motion 时所有借用自 beui 的过渡退化为无动画。
+	const reduce = useReducedMotion() ?? false;
+	const draftKey = props.requestKey;
+	const batch = props.draft?.batch ?? emptyAskBatchDraft();
+	const answers = batch.answers;
+	const answerLabels = batch.labels;
+	const customAnswerIds = batch.customAnswerIds;
+	const inputValues = batch.inputValues;
+	const currentTab = batch.currentTab;
+	const expanded = batch.expanded;
 
+	// 挂载 / 草稿 key 失配（新请求 / runtime 重启）：整体初始化（含 prefill）。
+	// 只依赖 draftKey：同 key 内打字回写草稿不触发重置；同 key 切走再切回（草稿在 atom 里）
+	// 不进此分支，已选内容原样恢复。
 	useEffect(() => {
-		setAnswers({});
-		setAnswerLabels({});
-		setCustomAnswerIds(new Set());
-		setInputValues(Object.fromEntries(questions.filter((question) => question.prefill).map((question) => [question.id, question.prefill ?? ""])));
-		setCurrentTab(0);
-		setExpanded(true);
-	}, [requestKey]);
+		if (!props.draft || !isSameAskDraftKey(props.draft.key, draftKey)) {
+			props.onDraftChange({ key: draftKey, batch: initialBatchDraft(questions) });
+		}
+	}, [draftKey]);
+
+	/**
+	 * batch 侧写盘（函数式更新）。为什么不能传值：
+	 * 同一事件连发（editor onChange 先写 inputValues 再写 answers；答题 + 自动前进）时，
+	 * 若各次写盘都基于「本次渲染快照」，后写会覆盖先写的结果（answers/inputValues 互相丢）。
+	 * 函数式 updater 由 React 按队列依次应用，后一个 updater 看到的 current 已含前一个的成果。
+	 */
+	function changeBatch(updater: (current: AskBatchDraft) => AskBatchDraft) {
+		props.onDraftChange((current) => {
+			const base = current?.batch ?? emptyAskBatchDraft();
+			return { ...(current ?? { key: draftKey }), key: draftKey, batch: updater(base) };
+		});
+	}
 
 	const answeredCount = questions.filter((question) => isBatchAnswered(answers[question.id])).length;
 	const allAnswered = total > 0 && answeredCount === total;
@@ -125,22 +197,9 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 	const currentQuestion = reviewTab ? undefined : questions[currentTab];
 	const finalStep = currentTab === total - 1;
 
-	/**
-	 * 写入答案并返回**新的三份 state**。
-	 *
-	 * 自动前进（尤其末题直接提交）必须在同一个事件里拿到刚写入的答案：
-	 * setAnswers/setAnswerLabels/setCustomAnswerIds 是异步提交的，再读 state 会漏掉本题。
-	 */
-	function commitAnswer(questionId: string, value: BatchAnswer, label = batchAnswerLabel(value), wasCustom = false) {
-		const nextAnswers = { ...answers, [questionId]: value };
-		const nextLabels = { ...answerLabels, [questionId]: label };
-		const nextCustom = new Set(customAnswerIds);
-		if (wasCustom) nextCustom.add(questionId);
-		else nextCustom.delete(questionId);
-		setAnswers(nextAnswers);
-		setAnswerLabels(nextLabels);
-		setCustomAnswerIds(nextCustom);
-		return { answers: nextAnswers, labels: nextLabels, custom: nextCustom };
+	/** 写入一题答案（纯函数式，见 commitBatchAnswer 注释）。 */
+	function commitAnswer(questionId: string, value: BatchAnswerValue, label = batchAnswerLabel(value), wasCustom = false) {
+		changeBatch((current) => commitBatchAnswer(current, questionId, value, label, wasCustom));
 	}
 
 	/** 自定义输入（select 的「其他」）与纯输入题的提交：写入答案并按策略自动前进。 */
@@ -150,22 +209,20 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 		return answerAndAdvance(question, value, value, question.type === "select");
 	}
 
-	function submitAnswers(overrides?: { answers?: Record<string, BatchAnswer>; labels?: Record<string, string>; custom?: Set<string> }) {
-		// 自动前进到末题时会带上「本次刚写入」的答案（overrides），不能读 state：
-		// 同一事件里 setAnswers 还没提交，直接 submitAnswers() 会把本题答案丢掉。
-		const effectiveAnswers = overrides?.answers ?? answers;
-		const effectiveLabels = overrides?.labels ?? answerLabels;
-		const effectiveCustom = overrides?.custom ?? customAnswerIds;
+	function submitAnswers(committed?: AskBatchDraft) {
+		// 末题自动前进时带上「本题刚写入的」答案集（调用方组装），不能读草稿：
+		// 同一事件里草稿写盘尚未生效，直接 submitAnswers() 会把本题答案丢掉。
+		const effective = committed ?? batch;
 		props.onSubmit(
 			serializeBatchAnswers(
 				questions,
-				effectiveAnswers,
+				effective.answers,
 				Object.fromEntries(
 					questions.map((question) => [
 						question.id,
 						{
-							label: effectiveLabels[question.id],
-							wasCustom: effectiveCustom.has(question.id),
+							label: effective.labels[question.id],
+							wasCustom: effective.customAnswerIds.includes(question.id),
 						},
 					]),
 				),
@@ -174,13 +231,23 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 	}
 
 	/** 答题并推进（返回值：本函数是否已把卡片推进到下一站，供焦点修复判断）。 */
-	function answerAndAdvance(question: AgentUiBatchQuestion, value: BatchAnswer, label?: string, wasCustom?: boolean): boolean {
-		const committed = commitAnswer(question.id, value, label, wasCustom);
+	function answerAndAdvance(question: AgentUiBatchQuestion, value: BatchAnswerValue, label?: string, wasCustom?: boolean): boolean {
+		// 先组装「写完本题后的完整答案集」：提交用的 committed 与写盘用的 updater 同源，
+		// 不依赖草稿写盘是否已生效（写盘是异步应用的，读 state/草稿会漏掉本题）。
+		const effectiveQuestionId = question.id;
+		const committed: AskBatchDraft = {
+			...batch,
+			answers: { ...batch.answers, [effectiveQuestionId]: value },
+			labels: { ...batch.labels, [effectiveQuestionId]: label ?? batchAnswerLabel(value) },
+			customAnswerIds: wasCustom ? (batch.customAnswerIds.includes(effectiveQuestionId) ? batch.customAnswerIds : [...batch.customAnswerIds, effectiveQuestionId]) : batch.customAnswerIds.filter((id) => id !== effectiveQuestionId),
+		};
+		commitAnswer(effectiveQuestionId, value, label, wasCustom);
 		if (!shouldAutoAdvanceBatchAnswer({ type: question.type, total })) return false;
 		if (!finalStep) {
-			setCurrentTab(currentTab + 1);
+			// 前进：基于「写完本题后的 current」改 currentTab（函数式，答案与 tab 不互相覆盖）
+			changeBatch((current) => ({ ...current, currentTab: currentTab + 1 }));
 		} else if (props.request.batchReview) {
-			setCurrentTab(total);
+			changeBatch((current) => ({ ...current, currentTab: total }));
 		} else {
 			// 末题且无需审阅：带上刚写入的答案直接提交全部
 			submitAnswers(committed);
@@ -194,7 +261,7 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 		<ApprovalCard
 			open={expanded}
 			onOpenChange={(next) => {
-				setExpanded(next);
+				changeBatch((current) => ({ ...current, expanded: next }));
 				notifyAskExpanded(props.onExpandedChange, next);
 			}}
 			title={formatAskTitle(props.request.title || t("ask.batchTitle", { count: total }))}
@@ -207,7 +274,8 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 		>
 			<div className="mb-2 flex min-w-0 items-center gap-2" aria-label={t("ask.batchProgress", { done: answeredCount, total })}>
 				<div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={answeredCount}>
-					<div className="h-full rounded-full bg-[var(--color-success)] transition-[width] duration-200" style={{ width: `${total > 0 ? (answeredCount / total) * 100 : 0}%` }} />
+					{/* 进度宽度走弹簧（beui ProgressDots 同源 SPRING_LAYOUT）：逐题完成时比线性 width 过渡更有「落定」感；首帧不补间。 */}
+					<motion.div className="h-full rounded-full bg-[var(--color-success)]" initial={false} animate={{ width: `${total > 0 ? (answeredCount / total) * 100 : 0}%` }} transition={reduce ? { duration: 0 } : SPRING_LAYOUT} />
 				</div>
 				<span className="shrink-0 text-micro font-medium text-text-secondary">{t("ask.batchProgress", { done: answeredCount, total })}</span>
 			</div>
@@ -226,7 +294,7 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 							aria-selected={active}
 							className={`ask-batch-tab inline-flex h-[24px] flex-none items-center gap-1 rounded-md border border-border-subtle bg-transparent px-1.5 font-sans text-micro whitespace-nowrap text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-55${answered ? ` ${ASK_TAB_ANSWERED_CLASS}` : ""}${active ? ` ${ASK_TAB_ACTIVE_CLASS}` : ""}`}
 							disabled={props.responding}
-							onClick={() => setCurrentTab(index)}
+							onClick={() => changeBatch((current) => ({ ...current, currentTab: index }))}
 						>
 							<span className="min-w-[14px] text-center font-mono font-semibold">{index + 1}</span>
 							{/* 单行截断：tab 只做摘要，完整问题在下方详情区展示；
@@ -245,7 +313,7 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 						aria-selected={reviewTab}
 						className={`ask-batch-tab ask-batch-tab--review border-[var(--color-warning)] text-[var(--color-warning)] inline-flex h-[24px] flex-none items-center gap-1 rounded-md px-1.5 font-sans text-micro whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-55${reviewTab ? " active" : ""}`}
 						disabled={props.responding}
-						onClick={() => setCurrentTab(total)}
+						onClick={() => changeBatch((current) => ({ ...current, currentTab: total }))}
 					>
 						<ClipboardList size={12} aria-hidden="true" />
 						<span className="ask-batch-tab-label">{t("ask.batchReviewTab")}</span>
@@ -253,9 +321,17 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 				) : null}
 			</div>
 
-			<div>
+			{/* 题目行放在换题动画之外的稳定层：AnimatePresence 重挂子树时这里只换 value，
+			    ActionSwapRollText（beui ApprovalCard 标题同款）逐字滚动，与下方选项体滑动互补。 */}
+			{!reviewTab && currentQuestion ? (
+				<div className="mb-1.5 text-control font-medium leading-[1.5] break-words text-text-primary">
+					<ActionSwapRollText value={currentQuestion.id}>{currentQuestion.question}</ActionSwapRollText>
+				</div>
+			) : null}
+
+			<AnimatePresence initial={false} mode="wait">
 				{reviewTab ? (
-					<div className="flex flex-col gap-1.5">
+					<motion.div key="ask-review" className="flex flex-col gap-1.5" initial={reduce ? { opacity: 1 } : { opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={reduce ? { opacity: 0 } : { opacity: 0, x: -6 }} transition={{ duration: reduce ? 0 : 0.2, ease: EASE_OUT }}>
 						<div className="inline-flex items-center gap-1 text-control font-semibold text-text-primary">
 							<ClipboardList size={16} aria-hidden="true" />
 							<span>{t("ask.batchReviewTitle")}</span>
@@ -278,33 +354,35 @@ function BatchAskInlineBar(props: { request: AgentUiRequest; responding: boolean
 						<Button className="w-full" variant="default" disabled={!allAnswered || props.responding} onClick={() => submitAnswers()}>
 							{t("ask.batchSubmitAll")}
 						</Button>
-					</div>
+					</motion.div>
 				) : currentQuestion ? (
-					<BatchQuestion
-						question={currentQuestion}
-						questionIndex={currentTab}
-						total={total}
-						answer={answers[currentQuestion.id]}
-						inputValue={inputValues[currentQuestion.id] ?? ""}
-						responding={props.responding}
-						onAnswer={(value, label, wasCustom) => answerAndAdvance(currentQuestion, value, label, wasCustom)}
-						onInputChange={(value) => setInputValues((current) => ({ ...current, [currentQuestion.id]: value }))}
-						onSubmitInput={() => submitText(currentQuestion)}
-						onPrevious={currentTab > 0 ? () => setCurrentTab(currentTab - 1) : undefined}
-						onNext={() => {
-							if (!finalStep) {
-								setCurrentTab(currentTab + 1);
-							} else if (props.request.batchReview) {
-								setCurrentTab(total);
-							} else {
-								submitAnswers();
-							}
-						}}
-						nextDisabled={finalStep && !props.request.batchReview && !allAnswered}
-						finalLabel={finalStep && !props.request.batchReview ? t("ask.batchSubmitAll") : undefined}
-					/>
+					<motion.div key={`ask-q-${currentQuestion.id}`} initial={reduce ? { opacity: 1 } : { opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={reduce ? { opacity: 0 } : { opacity: 0, x: -6 }} transition={{ duration: reduce ? 0 : 0.2, ease: EASE_OUT }}>
+						<BatchQuestion
+							question={currentQuestion}
+							questionIndex={currentTab}
+							total={total}
+							answer={answers[currentQuestion.id]}
+							inputValue={inputValues[currentQuestion.id] ?? ""}
+							responding={props.responding}
+							onAnswer={(value, label, wasCustom) => answerAndAdvance(currentQuestion, value, label, wasCustom)}
+							onInputChange={(value) => changeBatch((current) => ({ ...current, inputValues: { ...current.inputValues, [currentQuestion.id]: value } }))}
+							onSubmitInput={() => submitText(currentQuestion)}
+							onPrevious={currentTab > 0 ? () => changeBatch((current) => ({ ...current, currentTab: currentTab - 1 })) : undefined}
+							onNext={() => {
+								if (!finalStep) {
+									changeBatch((current) => ({ ...current, currentTab: currentTab + 1 }));
+								} else if (props.request.batchReview) {
+									changeBatch((current) => ({ ...current, currentTab: total }));
+								} else {
+									submitAnswers();
+								}
+							}}
+							nextDisabled={finalStep && !props.request.batchReview && !allAnswered}
+							finalLabel={finalStep && !props.request.batchReview ? t("ask.batchSubmitAll") : undefined}
+						/>
+					</motion.div>
 				) : null}
-			</div>
+			</AnimatePresence>
 		</ApprovalCard>
 	);
 }
@@ -313,10 +391,10 @@ function BatchQuestion(props: {
 	question: AgentUiBatchQuestion;
 	questionIndex: number;
 	total: number;
-	answer: BatchAnswer;
+	answer: BatchAnswerValue;
 	inputValue: string;
 	responding: boolean;
-	onAnswer: (value: BatchAnswer, label?: string, wasCustom?: boolean) => boolean;
+	onAnswer: (value: BatchAnswerValue, label?: string, wasCustom?: boolean) => boolean;
 	onInputChange: (value: string) => void;
 	onSubmitInput: () => boolean;
 	onPrevious?: () => void;
@@ -334,7 +412,7 @@ function BatchQuestion(props: {
 		refocusAfterAdvanceRef.current = false;
 		containerRef.current?.focus();
 	}, [props.questionIndex]);
-	const answer = (value: BatchAnswer, label?: string, wasCustom?: boolean) => {
+	const answer = (value: BatchAnswerValue, label?: string, wasCustom?: boolean) => {
 		if (!props.onAnswer(value, label, wasCustom)) return;
 		refocusAfterAdvanceRef.current = true;
 	};
@@ -366,7 +444,6 @@ function BatchQuestion(props: {
 				}
 			}}
 		>
-			<div className="mb-1.5 text-control font-medium leading-[1.5] break-words text-text-primary">{question.question}</div>
 			<div className="ask-batch-question-body">
 				{question.type === "confirm" ? (
 					<div className="flex gap-2">
@@ -382,7 +459,7 @@ function BatchQuestion(props: {
 							}}
 						>
 							{/* 选中态对勾：部分主题色 accent 对比度低，光靠变色难分辨已选项 */}
-							{props.answer === true ? <Check size={14} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+							{props.answer === true ? <DrawCheck className="shrink-0 text-[var(--color-success)]" /> : null}
 							{t("common.true")}
 						</Button>
 						<Button
@@ -394,7 +471,7 @@ function BatchQuestion(props: {
 								answer(false, t("common.false"));
 							}}
 						>
-							{props.answer === false ? <Check size={14} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+							{props.answer === false ? <DrawCheck className="shrink-0 text-[var(--color-success)]" /> : null}
 							{t("common.false")}
 						</Button>
 					</div>
@@ -421,9 +498,9 @@ function BatchQuestion(props: {
 										}}
 									>
 										{/* 选中态对勾标记：主题色 accent 对比度低时只靠边框/背景变色难分辨已选项 */}
-										{props.answer === value ? <Check size={14} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+										{props.answer === value ? <DrawCheck className="shrink-0 text-[var(--color-success)]" /> : null}
 										{/* 说明与标签同一行、同字号、空格分隔，只靠颜色区分（2026-12 用户反馈：
-										    说明别用小字、也别放第二行——小屏还好，大屏上又小又局限）。 */}
+										    说明别用小字、也别放第二行——小屏还好，大屏上又小又局限。 */}
 										<span className="min-w-0 flex-1 whitespace-normal break-words text-caption leading-[1.45]">
 											<span className="text-text-primary">{label}</span>
 											{description ? <span className="text-text-tertiary">{` ${description}`}</span> : null}
@@ -480,7 +557,7 @@ function BatchQuestion(props: {
 										}}
 									>
 										{/* 选中态对勾标记：主题色 accent 对比度低时只靠边框/背景变色难分辨已选项 */}
-										{selected ? <Check size={14} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+										{selected ? <DrawCheck className="shrink-0 text-[var(--color-success)]" /> : null}
 										<span className="min-w-0 flex-1 whitespace-normal break-words text-caption leading-[1.45]">
 											<span className="text-text-primary">{label}</span>
 											{description ? <span className="text-text-tertiary">{` ${description}`}</span> : null}
@@ -498,6 +575,8 @@ function BatchQuestion(props: {
 						placeholder={question.placeholder || t("ask.editorPlaceholder")}
 						disabled={props.responding}
 						onChange={(event) => {
+							// 答案与输入文本分两次写盘（函数式 updater 依次应用，互不覆盖）：
+							// 输入值同时作为答案（editor 题型持续作答语义），见 askUi.commitBatchAnswer。
 							props.onInputChange(event.target.value);
 							props.onAnswer(event.target.value || undefined, event.target.value);
 						}}
@@ -552,19 +631,36 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 	// SessionRuntimeInjector 的底栏占位需要同一份判据（见该函数注释）。
 	const request = useMemo(() => resolveActiveAskRequest(runtime, ui), [runtime, ui]);
 	const requestState = request ? ui?.requests[request.requestId] : undefined;
+	// 交互草稿：按「会话 + agent + runtime 代 + 请求」隔离（atom family）。
+	// 为什么不是组件内 useState：SessionRuntimeUiOverlay 挂在会话 timeline 里，切换 tab /
+	// 分屏切换会卸载整棵子树，useState 随之销毁；草稿绑 atom family 后，切走再切回
+	// 从 atom 原样恢复——选择是「用户进度」，不该随组件生命周期蒸发（详见 ask-draft-atoms.ts）。
 	const requestKey = request ? `${sessionId}:${request.agentId}:${ui?.runtimeGeneration}:${request.requestId}` : "";
-	const [value, setValue] = useState("");
+	const [draft, setDraft] = useAtom(askDraftBySessionRequestAtomFamily(requestKey));
+	const single = draft?.single ?? emptyAskSingleDraft();
+	const value = single.value;
+	const selectedOption = single.selectedOption;
+	const expanded = single.expanded;
 	const [busy, setBusy] = useState(false);
-	const [expanded, setExpanded] = useState(true);
-	// 单问题 select 集中提交：选项点击只改选中态，确认后才提交（2026-08 用户反馈：即点即提交易误触）
-	const [selectedOption, setSelectedOption] = useState("");
+	// 上一请求 key 的草稿实例：请求结束后本组件可能残留挂载（渲染层 keep-alive），显式 remove 防 Map 堆积
+	const prevRequestKeyRef = useRef(requestKey);
 
 	useEffect(() => {
-		setValue(request?.prefill ?? (typeof request?.value === "string" ? request.value : ""));
-		setSelectedOption("");
+		const prevKey = prevRequestKeyRef.current;
+		prevRequestKeyRef.current = requestKey;
+		if (prevKey !== requestKey && prevKey) askDraftBySessionRequestAtomFamily.remove(prevKey);
+		// 同 key 复用防御：正常情况下 family key 与草稿 key 恒等，这里兜底 key 失配时整体重置
+		// （requestId 重号、runtime 重启但 generation 未变等场景），避免上一请求的选择污染新请求。
+		if (draft && !isSameAskDraftKey(draft.key, requestKey)) {
+			setDraft({ key: requestKey });
+		}
 		setBusy(false);
-		setExpanded(true);
-	}, [requestKey, request?.prefill, request?.value]);
+	}, [requestKey]);
+
+	/** 单问题卡草稿写盘：合并 single 侧字段，batch 侧原样保留。 */
+	function commitSingleDraft(patch: Partial<AskSingleDraft>) {
+		setDraft((current) => ({ ...(current ?? { key: requestKey }), key: requestKey, single: { ...(current?.single ?? emptyAskSingleDraft()), ...patch } }));
+	}
 
 	if (!request || !requestState) return null;
 	const responding = busy || requestState.status === "responding";
@@ -584,7 +680,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 	};
 
 	if (request.method === "batch_ask") {
-		return <BatchAskInlineBar request={request} responding={responding} onCancel={cancel} onSubmit={(answers) => submitValue(answers)} onExpandedChange={onExpandedChange} />;
+		return <BatchAskInlineBar request={request} responding={responding} onCancel={cancel} onSubmit={(answers) => submitValue(answers)} onExpandedChange={onExpandedChange} draft={draft} onDraftChange={setDraft} requestKey={requestKey} />;
 	}
 
 	// 安全确认（pi-deck-security-gate 的「ask」动作）：用专用卡片展开工具/等级/详情，
@@ -597,7 +693,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 				responding={responding}
 				open={expanded}
 				onOpenChange={(next) => {
-					setExpanded(next);
+					commitSingleDraft({ expanded: next });
 					notifyAskExpanded(onExpandedChange, next);
 				}}
 				onRespond={(value) => submitValue(value)}
@@ -610,7 +706,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 		<ApprovalCard
 			open={expanded}
 			onOpenChange={(next) => {
-				setExpanded(next);
+				commitSingleDraft({ expanded: next });
 				notifyAskExpanded(onExpandedChange, next);
 			}}
 			title={t("ask.toolName")}
@@ -660,13 +756,13 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 									disabled={responding}
 									onClick={() => {
 										if (shouldSuppressAskClick()) return;
-										setSelectedOption(option);
+										commitSingleDraft({ selectedOption: option });
 									}}
 									title={parsed.description || parsed.label}
 								>
 									{/* 选中态对勾：夜间模式下 accent 混色底 + 边框仍可能不够醒目，
 									    与批量卡一致再补一个非颜色线索（success 色，不跟随主题 accent）。 */}
-									{selectedOption === option ? <Check size={14} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+									{selectedOption === option ? <DrawCheck className="shrink-0 text-[var(--color-success)]" /> : null}
 									{/* 标签不缩不截：短标签（如「开始执行」）保证两枚按钮说明文案起点对齐；
 									    超长标签兜底 max-w 截断，避免挤压说明列。 */}
 									<span className="max-w-[45%] shrink-0 truncate text-caption font-medium leading-none text-text-primary">{parsed.label}</span>
@@ -681,7 +777,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 									value={value}
 									placeholder={t("ask.customPlaceholder")}
 									disabled={responding}
-									onChange={(event) => setValue(event.target.value)}
+									onChange={(event) => commitSingleDraft({ value: event.target.value })}
 									onKeyDown={(event) => {
 										// IME 合成中的回车只用于选字/提交候选，不能当作提交键
 										if (event.key === "Enter" && !isComposingKeyboardEvent(event) && value.trim()) {
@@ -702,7 +798,15 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 							{t("ask.selectedPrefix")}
 							{splitAskOption(selectedOption).label}
 						</span>
-						<Button variant="default" disabled={responding} onClick={() => submitValue(selectedOption)}>
+						<Button
+							variant="default"
+							disabled={responding}
+							onClick={() => {
+								submitValue(selectedOption);
+								// 提交后清除选中态：应答失败（rollback）或用户重复点击时，不会把上一轮的旧选择再发出去
+								commitSingleDraft({ selectedOption: "" });
+							}}
+						>
 							{t("ask.submit")}
 						</Button>
 					</div>
@@ -725,7 +829,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 							value={value}
 							placeholder={request.placeholder || t("ask.inputPlaceholder")}
 							disabled={responding}
-							onChange={(event) => setValue(event.target.value)}
+							onChange={(event) => commitSingleDraft({ value: event.target.value })}
 							onKeyDown={(event) => {
 								// IME 合成中的回车只用于选字/提交候选，不能当作提交键
 								if (event.key === "Enter" && !isComposingKeyboardEvent(event) && value.trim()) {
@@ -746,7 +850,7 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 							value={value}
 							placeholder={request.placeholder || t("ask.editorPlaceholder")}
 							disabled={responding}
-							onChange={(event) => setValue(event.target.value)}
+							onChange={(event) => commitSingleDraft({ value: event.target.value })}
 							onKeyDown={(event) => {
 								// 多行编辑器：回车保留换行，Ctrl/Cmd+Enter 提交（与主流编辑器快捷键一致）
 								if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !isComposingKeyboardEvent(event) && value.trim()) {

@@ -1,3 +1,4 @@
+import { recentSessionActivityAtom } from "../../atoms/recent-session-atoms";
 import { Ellipsis } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
@@ -16,7 +17,7 @@ import { SessionHoverCard } from "./SessionHoverCard";
 import { TitleScrollText } from "./TitleScrollText";
 import { SESSION_TAB_DRAG_MIME } from "../../utils/sessionSplitEdge";
 import { formatRelativeTime } from "../../utils/relativeTime";
-import { RECENT_SESSIONS_INITIAL_VISIBLE, collectActiveSessionRows, collectRecentSessionRows, growRecentVisible } from "./activitySessionsModel";
+import { RECENT_SESSIONS_INITIAL_VISIBLE, collectActiveSessionRows, collectRecentActivityRows, growRecentVisible } from "./activitySessionsModel";
 import { RecentSessionsSection } from "./RecentSessionsSection";
 
 /** 活动页行样式：与 SessionTree 会话行同尺寸同圆角，但选中底不需要（活动页行不持久）。 */
@@ -39,7 +40,7 @@ const rowMoreActionsClass = "row-more-actions pointer-events-none absolute top-1
  * 在侧栏面板下半部分。活动行可能很多，若共用一个滚动容器，要一路滚到底才能看到
  * 最近会话；反过来「加载更多」也会把活动行顶出视野。两半各占 1fr、各自滚动。
  */
-export function ActiveSessionsTree(props: { controller: SidebarController; actions: SidebarActions; currentSessionId?: string }) {
+export function ActiveSessionsTree(props: { controller: SidebarController; actions: SidebarActions; currentSessionId?: string; recentOnly?: boolean }) {
 	const { controller } = props;
 	// 活动页以会话为粒度，待确认标记直接按本行 sessionId 判定，
 	// 避免订阅项目级聚合值导致一个会话的 ask 点亮整页。
@@ -52,25 +53,54 @@ export function ActiveSessionsTree(props: { controller: SidebarController; actio
 	// 「最近会话」可见条数：默认 10 条，手动「加载更多」每次 +10；「收起」回到首页大小。
 	// 行数受控是性能要求——侧栏一次性渲染几百行历史会明显卡顿（用户反馈）。
 	const [recentVisibleCount, setRecentVisibleCount] = useState(RECENT_SESSIONS_INITIAL_VISIBLE);
-	const recent = useMemo(() => collectRecentSessionRows({ catalog: controller.catalog, activeRows: liveRows, visibleCount: recentVisibleCount }), [controller.catalog, liveRows, recentVisibleCount]);
-	// 「最近」是跨项目数据，而项目 catalog 只在展开/选中该项目时才扫描。
-	// 活动页挂载时把尚未扫描的项目排进按需扫描（主进程立即返回目录缓存、后台扫描去重+冷却，
-	// 见 BackgroundScanCoordinator），否则重启后活动区与最近区会同时为空——
-	// 这正是用户要求补「最近」的起因。已在 loading/ready 的项目在 App 侧直接跳过，
-	// 且以静默方式预热（不挂 loading 态、不装看门狗），避免侧栏一堆项目同时转圈。
-	const projectIds = useMemo(() => controller.catalog.projects.map((project) => project.id), [controller.catalog.projects]);
+	const recentActivity = useAtomValue(recentSessionActivityAtom);
+	// 两种模式共用同一份「最近会话」收集逻辑：数据源是用户实际启动过的会话访问记录。
+	// 差异只在去重——本页渲染活动行时排除其中已出现的会话；简洁模式（recentOnly）不渲染
+	// 活动行，传空数组，否则正在运行的会话会在侧栏彻底消失。
+	const recent = useMemo(
+		() =>
+			collectRecentActivityRows({
+				catalog: controller.catalog,
+				activity: recentActivity,
+				activeRows: props.recentOnly ? [] : liveRows,
+				visibleCount: recentVisibleCount,
+			}),
+		[controller.catalog, liveRows, recentVisibleCount, recentActivity, props.recentOnly],
+	);
+	// 只预热本页真正要渲染的行所属项目，不再扫描全部历史来填满「最近」（旧实现的后遗症）。
+	// 活动行要用各自项目的会话记录补标题，故非 recentOnly 时并上活动行所属项目。
+	const prewarmProjectIds = useMemo(() => {
+		const wanted = new Set(recentActivity.map((entry) => entry.projectId));
+		if (!props.recentOnly) for (const row of liveRows) wanted.add(row.projectId);
+		return [...wanted].filter((id) => controller.catalog.projects.some((project) => project.id === id));
+	}, [recentActivity, liveRows, props.recentOnly, controller.catalog.projects]);
 	const ensureCatalogsLoaded = props.actions.sessions.ensureCatalogsLoaded;
 	// 每个项目只请求一次：动作引用可能随 App 每次渲染变化，若不记住已请求的项目，
 	// 失败/空结果项目会被反复重试，形成扫描请求风暴。重试交给项目刷新入口或重进活动页。
 	const requestedProjectIdsRef = useRef<Set<string>>(new Set());
 	useEffect(() => {
-		const pending = projectIds.filter((projectId) => !requestedProjectIdsRef.current.has(projectId));
+		const pending = prewarmProjectIds.filter((projectId) => !requestedProjectIdsRef.current.has(projectId));
 		if (pending.length === 0) return;
 		for (const projectId of pending) requestedProjectIdsRef.current.add(projectId);
 		ensureCatalogsLoaded(pending);
-	}, [ensureCatalogsLoaded, projectIds]);
+	}, [ensureCatalogsLoaded, prewarmProjectIds]);
 
 	const hasRecent = recent.rows.length > 0;
+	if (props.recentOnly)
+		return (
+			<div className="recent-sessions-pane flex flex-col">
+				<RecentSessionsSection
+					controller={controller}
+					actions={props.actions}
+					currentSessionId={props.currentSessionId}
+					rows={recent.rows}
+					totalCount={recent.totalCount}
+					visibleCount={recentVisibleCount}
+					onLoadMore={() => setRecentVisibleCount((current) => growRecentVisible(current, recent.totalCount))}
+					onCollapse={() => setRecentVisibleCount(RECENT_SESSIONS_INITIAL_VISIBLE)}
+				/>
+			</div>
+		);
 
 	// 两段都空才是真正的空态；只有活动区空时用一行提示顶替，
 	// 不能让 h-full 空态占满高度把下方「最近」挤出视野。
@@ -113,7 +143,7 @@ export function ActiveSessionsTree(props: { controller: SidebarController; actio
 									type="button"
 									className={cn(activeRowClass, selected && "bg-bg-active text-foreground")}
 									onClick={() => openSession()}
-									onDoubleClick={() => openSession("permanent")}
+									onDoubleClick={props.actions.sessions.simpleNavigation ? undefined : () => openSession("permanent")}
 									draggable={Boolean(sessionId)}
 									onDragStart={(event) => {
 										if (!sessionId) return;

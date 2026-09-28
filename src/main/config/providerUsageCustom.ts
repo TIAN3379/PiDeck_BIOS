@@ -12,11 +12,12 @@ import { getByPath, toNumber } from "./providerUsagePath";
 import { parseBooster } from "./providerUsageBooster";
 
 /** 专用解析器表：kind:"custom" 的 resolver 名称 → 解析函数。 */
-const CUSTOM_RESOLVERS: Record<"xai-billing" | "codex-usage" | "commandcode-credits" | "kimi-credits", (body: unknown, raw: string) => UsageProbeResponse> = {
+const CUSTOM_RESOLVERS: Record<"xai-billing" | "codex-usage" | "commandcode-credits" | "kimi-credits" | "volcengine-plan", (body: unknown, raw: string) => UsageProbeResponse> = {
 	"xai-billing": parseXaiBilling,
 	"codex-usage": parseCodexUsage,
 	"commandcode-credits": parseCommandcodeCredits,
 	"kimi-credits": parseKimiCredits,
+	"volcengine-plan": parseVolcenginePlan,
 };
 
 /** 按 resolver 名解析（未注册的 resolver 返回 undefined，由调用方回退 raw）。 */
@@ -204,6 +205,127 @@ function parseCommandcodeCredits(body: unknown, raw: string): UsageProbeResponse
 			windows,
 		},
 	};
+}
+
+/**
+ * 火山方舟套餐用量解析（GetAFPUsage / GetCodingPlanUsage 二合一）。
+ *
+ * 业务背景：方舟两种套餐的用量接口响应结构完全不同，但语义都是「几个窗口 + 已用/总额或
+ * 百分比」，正好映射到现有 periods 三档（5h → rolling、周 → weekly、月 → monthly）：
+ * - Agent Plan（GetAFPUsage）：Result 下 AFPFiveHour/Weekly/Monthly 各带 { Quota, Used,
+ *   ResetTime（epoch ms） }，需自行算百分比；Quota<=0 表示该窗口未订阅；
+ *   全部窗口 Quota<=0 = 账号没有 Agent Plan（调用方据此回落 Coding Plan）。
+ *   AFPDaily 被官方控制台隐藏（其 Quota 常高于周上限，属历史默认值），故与官方展示口径
+ *   一致只取 5h/周/月三档。
+ * - Coding Plan（GetCodingPlanUsage）：Result.QuotaUsage[] 已给 Percent（0-100）与秒级
+ *   重置时间。官方文档未给逐字段规格（依据官方 ark-cli 描述与实测），因此字段名做**防御式
+ *   多别名**匹配：数组 QuotaUsage/Usages/Details、窗口名 Level/Type/Period/Label/Window、
+ *   百分比 Percent/UsedPercent/UsagePercent、重置 ResetTimestamp/ResetTime；
+ *   session 的重置时间为 -1 表示无活跃窗口。
+ *
+ * 形态判别用「结构特征」而非 Action 名：同一解析器要被两个 Action 共用（双 plan 自动探测），
+ * 解析器拿不到请求上下文，按响应结构二分最稳（有 QuotaUsage 即 Coding Plan，否则按 AFP）。
+ */
+function parseVolcenginePlan(body: unknown, raw: string): UsageProbeResponse {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return { matched: false, raw };
+	const root = body as Record<string, unknown>;
+	// 官方响应是 { ResponseMetadata, Result } 包裹；Result 缺失时退回根对象（网关直出/旧版无包裹）。
+	const box = root.Result ?? root;
+	if (!box || typeof box !== "object" || Array.isArray(box)) return { matched: false, raw };
+	const result = box as Record<string, unknown>;
+	const codingList = volcengineCodingPlanList(result);
+	if (codingList) {
+		const coding = parseVolcengineCodingPlanWindows(codingList);
+		return Object.keys(coding).length > 0 ? { matched: true, kind: "periods", periods: coding } : { matched: false, raw };
+	}
+	const afp = parseVolcengineAfpWindows(result);
+	return Object.keys(afp).length > 0 ? { matched: true, kind: "periods", periods: afp } : { matched: false, raw };
+}
+
+/** Coding Plan 的窗口数组：官方主名 QuotaUsage，Usages/Details 作兼容别名。 */
+function volcengineCodingPlanList(result: Record<string, unknown>): unknown[] | null {
+	for (const field of ["QuotaUsage", "Usages", "Details"]) {
+		const value = result[field];
+		if (Array.isArray(value)) return value;
+	}
+	return null;
+}
+
+/** Coding Plan：QuotaUsage[] → periods；只认 session/weekly/monthly，未知窗口跳过。 */
+function parseVolcengineCodingPlanWindows(list: unknown[]): NonNullable<UsageProbeResponse["periods"]> {
+	const periods: NonNullable<UsageProbeResponse["periods"]> = {};
+	for (const item of list) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const entry = item as Record<string, unknown>;
+		// 窗口名主名 Level（实测 2026-06：session/weekly/monthly），其余字段名是防御式别名。
+		const key = volcengineCodingPlanWindowKey([entry.Level, entry.Type, entry.Period, entry.Label, entry.Window]);
+		if (!key) continue;
+		const percent = clampPercent(toNumber(entry.Percent ?? entry.UsedPercent ?? entry.UsagePercent));
+		if (percent === undefined) continue;
+		periods[key] = volcenginePeriod(percent, entry.ResetTimestamp ?? entry.ResetTime);
+	}
+	return periods;
+}
+
+/** Agent Plan：Result 下的 AFP* 桶 → periods；Quota<=0 的窗口视为未订阅而跳过。 */
+function parseVolcengineAfpWindows(result: Record<string, unknown>): NonNullable<UsageProbeResponse["periods"]> {
+	const periods: NonNullable<UsageProbeResponse["periods"]> = {};
+	// 与控制台展示口径一致：5h/周/月三档（AFPDaily 隐藏，见函数注释）。
+	const buckets: [keyof NonNullable<UsageProbeResponse["periods"]>, string][] = [
+		["rolling", "AFPFiveHour"],
+		["weekly", "AFPWeekly"],
+		["monthly", "AFPMonthly"],
+	];
+	for (const [key, field] of buckets) {
+		const bucket = result[field];
+		if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) continue;
+		const box = bucket as Record<string, unknown>;
+		const quota = toNumber(box.Quota);
+		const used = toNumber(box.Used);
+		// Quota 缺失或 <=0：该窗口未订阅（控制台同样不展示），不出桶，避免算出 0/0 的假百分比。
+		if (quota === undefined || quota <= 0) continue;
+		const percent = clampPercent(used === undefined ? undefined : (used / quota) * 100);
+		if (percent === undefined) continue;
+		periods[key] = volcenginePeriod(percent, box.ResetTime ?? box.ResetTimestamp);
+	}
+	return periods;
+}
+
+/** Coding Plan 的窗口名（多别名任一命中）→ periods 档位；未知窗口返回 null 由调用方跳过。 */
+function volcengineCodingPlanWindowKey(labels: unknown[]): keyof NonNullable<UsageProbeResponse["periods"]> | null {
+	for (const label of labels) {
+		if (typeof label !== "string") continue;
+		const normalized = label.trim().toLowerCase();
+		if (normalized === "session" || normalized === "5h" || normalized === "fivehour" || normalized === "five_hour" || normalized === "rolling_5h") return "rolling";
+		if (normalized === "weekly" || normalized === "week" || normalized === "7d") return "weekly";
+		if (normalized === "monthly" || normalized === "month") return "monthly";
+	}
+	return null;
+}
+
+/** 百分比收敛到 0-100：超卖/脏数据不展示成 >100% 的进度条。 */
+function clampPercent(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	return Math.max(0, Math.min(100, value));
+}
+
+/**
+ * 组装一档 periods；重置时间秒/毫秒混用要自适应：
+ * AFP 用毫秒时间戳（13 位，官方样例 1778806800000），Coding Plan 用秒（10 位，1782057600）；
+ * 0/-1/缺失 = 无重置时间，省略字段（UI 不显示重置行）。
+ */
+function volcenginePeriod(percent: number, resetValue: unknown): { percent: number; resetsAt?: string } {
+	const resetsAt = volcengineResetTime(resetValue);
+	return { percent, ...(resetsAt ? { resetsAt } : {}) };
+}
+
+function volcengineResetTime(value: unknown): string | undefined {
+	const raw = toNumber(value);
+	if (raw === undefined || raw <= 0) return undefined;
+	// >1e12 视为毫秒（13 位时间戳约在 2001 年之后），否则按秒处理。
+	const ms = raw > 1e12 ? raw : raw * 1000;
+	const date = new Date(ms);
+	return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 /**

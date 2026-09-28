@@ -12,8 +12,7 @@ function assertDisplay(actual, expected) {
 }
 
 /**
- * 运行中切换思考强度：renderer 不预设“下一轮”语义，
- * 只展示后端返回的最新 runtime state；是否作用于当前回合由后端决定。
+ * 思考档位的展示与模型选择同源：会话/引导页偏好是唯一权威，运行态只负责执行。
  */
 test("computeThinkingDisplay: 有当前档位时展示当前档位", () => {
 	assertDisplay(computeThinkingDisplay("xhigh"), {
@@ -29,7 +28,7 @@ test("computeThinkingDisplay: 无任何档位信息时返回空序列", () => {
 	});
 });
 
-test("resolveComposerThinkingLevel: live 时优先 runtime state", () => {
+test("resolveComposerThinkingLevel: 会话保存的选择优先于 runtime 和 fallback", () => {
 	assert.equal(
 		resolveComposerThinkingLevel({
 			state: "xhigh",
@@ -37,19 +36,18 @@ test("resolveComposerThinkingLevel: live 时优先 runtime state", () => {
 			fallback: "off",
 			isLive: true,
 		}),
-		"xhigh",
+		"max",
 	);
 });
 
-test("resolveComposerThinkingLevel: 非 live 时忽略残留 state，展示 catalog", () => {
+test("resolveComposerThinkingLevel: 无会话记录时只使用引导页 fallback", () => {
 	assert.equal(
 		resolveComposerThinkingLevel({
 			state: "xhigh",
-			record: "max",
 			fallback: "off",
-			isLive: false,
+			isLive: true,
 		}),
-		"max",
+		"off",
 	);
 });
 
@@ -65,15 +63,14 @@ test("契约: thinking 按钮运行中可点，启动中禁用", () => {
 test("契约: ComposerArea 不预先限制运行中的思考强度修改", () => {
 	const area = readFileSync("src/renderer/src/components/session/ComposerArea.tsx", "utf8");
 	// Pi/DSH 是否支持当前回合由后端决定，renderer 只在启动中禁用入口。
-	assert.match(area, /disabled=\{composer\.isBusy \|\| composer\.isStarting\}/);
+	assert.match(area, /disabled=\{composer\.isStarting\}/);
 	assert.match(area, /thinkingDisabled=\{composer\.isStarting\}/);
 	assert.match(area, /modelDisabled=\{composer\.isStarting\}/);
 });
 
-test("契约: runtime 返回的思考档位用于同步 SessionRecord", () => {
-	// 思考档位应用链路现由 controller 持有（选择器与 Ctrl+T 快捷键共用同一实现）
-	const picker = [readFileSync("src/renderer/src/hooks/useSessionPreferenceState.ts", "utf8"), readFileSync("src/renderer/src/hooks/useSessionPreferenceController.ts", "utf8")].join("\n");
-	assert.match(picker, /const appliedThinkingLevel = agentState\.thinkingLevel \?\? level/);
-	assert.match(picker, /thinkingLevel: appliedThinkingLevel/);
+test("契约: 活动 Pi 会话将 get_state 返回的有效档位写入会话记录", () => {
+	const picker = readFileSync("src/renderer/src/hooks/useSessionPreferenceController.ts", "utf8");
+	assert.match(picker, /applied\.value\.thinkingLevel/);
+	assert.doesNotMatch(picker, /appliedThinkingLevel/);
 	assert.doesNotMatch(picker, /thinkingPending|setThinkingPending/);
 });

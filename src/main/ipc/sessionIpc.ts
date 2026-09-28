@@ -10,6 +10,7 @@ import { ipcChannels } from "../../shared/ipc";
 import { isDshPermissionPreset } from "../../shared/types/agent";
 import { isRewindRestoreScope } from "../../shared/types/rewind";
 import { canonicalizeSessionPath } from "../../shared/sessionIdentity";
+import { createSessionModelPreference } from "../../shared/modelDisplayName";
 import type {
 	CreateSessionDraftInput,
 	CreateAnonymousSessionInput,
@@ -30,11 +31,13 @@ import type {
 	DshModelDiscoveryInput,
 	FetchedModel,
 	SessionMessagePage,
+	SessionModelPreference,
 	RewindCheckpointPageParams,
 	ResolveLaunchDefaultsInput,
 	ResolvedLaunchDefaults,
 	ArchivedDshSession,
 } from "../../shared/types";
+import type { BridgeEventInput, BridgeResyncInput } from "../../shared/types/bridge";
 import { parseSessionProcessEventsFromFile } from "../sessions/sessionProcessEventsFile";
 import { dshUnavailablePageFor } from "../dsh/dshManualStop";
 import { downgradeRunningStartedBefore, downgradeStaleRunning } from "../pi/derivedSubagents";
@@ -53,6 +56,15 @@ function isDshModelDiscoveryInput(input: unknown): input is DshModelDiscoveryInp
 
 function isRecord(input: unknown): input is Record<string, unknown> {
 	return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+/** Normalize untrusted model input before it reaches the persisted catalog. */
+function normalizeSessionModelPreference(input: unknown): SessionModelPreference | undefined {
+	if (!isRecord(input) || typeof input.provider !== "string" || typeof input.modelId !== "string" || (input.modelName !== undefined && typeof input.modelName !== "string")) return undefined;
+	const provider = input.provider.trim();
+	const modelId = input.modelId.trim();
+	if (!provider || !modelId || provider.length > 128 || modelId.length > 256 || (typeof input.modelName === "string" && input.modelName.length > 256)) return undefined;
+	return createSessionModelPreference(provider, modelId, input.modelName);
 }
 /**
  * 已扫描过项目的集合（模块级）：决定 catalogList 走「首次同步扫描」还是
@@ -83,6 +95,7 @@ import type { ConfigManager } from "../config/ConfigManager";
 import type { TerminalSessionManager } from "../terminal/TerminalSessionManager";
 import type { CodexSessionImporter } from "../sessions/CodexSessionImporter";
 import type { ClaudeSessionImporter } from "../sessions/ClaudeSessionImporter";
+import type { QoderSessionImporter } from "../sessions/QoderSessionImporter";
 import type { OpenCodeSessionImporter } from "../sessions/OpenCodeSessionImporter";
 import type { ZCodeSessionImporter } from "../sessions/ZCodeSessionImporter";
 import type { WorkBuddySessionImporter } from "../sessions/WorkBuddySessionImporter";
@@ -290,6 +303,7 @@ export type SessionIpcDeps = {
 	configManager: ConfigManager;
 	codexSessionImporter: CodexSessionImporter;
 	claudeSessionImporter: ClaudeSessionImporter;
+	qoderSessionImporter: QoderSessionImporter;
 	openCodeSessionImporter: OpenCodeSessionImporter;
 	zcodeSessionImporter: ZCodeSessionImporter;
 	workbuddySessionImporter: WorkBuddySessionImporter;
@@ -361,6 +375,7 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		configManager,
 		codexSessionImporter,
 		claudeSessionImporter,
+		qoderSessionImporter,
 		openCodeSessionImporter,
 		zcodeSessionImporter,
 		workbuddySessionImporter,
@@ -454,11 +469,11 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 			const current = sessionCatalog.get(sessionId);
 			if (!current || current.backend === "dsh" || !current.filePath) return;
 			const patch: {
-				model?: { provider: string; modelId: string };
+				model?: SessionModelPreference;
 				thinkingLevel?: string;
 				updatedAt: number;
 			} = { updatedAt: current.updatedAt };
-			if (!current.model && metadata.model) patch.model = { ...metadata.model };
+			if (!current.model && metadata.model) patch.model = createSessionModelPreference(metadata.model.provider, metadata.model.modelId, undefined);
 			if (!current.thinkingLevel && metadata.thinkingLevel) {
 				patch.thinkingLevel = metadata.thinkingLevel;
 			}
@@ -558,17 +573,25 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		}
 		// Auto-fill model / thinkingLevel from pi config when the caller hasn't
 		// provided them, so the composer bar shows the effective default.
-		// DSH 后端不适用 pi 的模型配置（模型路由由 DSH host 自己的 settings 决定），
-		// 只跳过 model；思考档位值域与 DSH 兼容（off/high/max 等），新会话默认档位
-		// 同样填充——否则 DSH 新会话的思考按钮只显示「思考」而非实际默认档位。
-		let model = input.backend === "dsh" ? undefined : input.model;
+		// DSH 后端不适用 pi 的模型配置（模型路由由 DSH host 自己的 settings 决定）：
+		// **显式传入的 model 仍然接受**（issue #253）——引导页在 DSH 态下的点选必须带到会话上，
+		// 否则 host 只能用部署默认（settings.yaml 的 agent-default-model），用户表现为
+		// 「切到 DSH 后模型换不了」。与侧栏「新建会话后切 DSH 再选模型」走 updateRecord 的
+		// 既有链路保持一致：只做形状归一化，不用 models.json 校验（DSH 的 provider 是
+		// host route 名，不在 models.json 里，校验会把合法选择全丢掉）。模型是否被 host
+		// 接受由激活时的 applyPreferences → DshAgentManager.setModel 裁决（host 拒绝时
+		// 降级到部署默认并告警，不让创建失败）。
+		// 缺省模型仍不从 pi 配置解析：DSH 没有可读的启动默认解析器（部署默认由 host 自己决定）。
+		// 思考档位值域与 DSH 兼容（off/high/max 等），新会话默认档位同样填充——否则 DSH
+		// 新会话的思考按钮只显示「思考」而非实际默认档位。
+		let model = normalizeSessionModelPreference(input.model);
 		let thinkingLevel = input.thinkingLevel;
 		if ((input.backend !== "dsh" && !model) || !thinkingLevel) {
 			try {
 				const [settingsResult, modelsResult] = await Promise.all([configManager.getSettingsConfig(), configManager.getModelsConfig()]);
 				// 引导页/渲染层显式传入的模型（如欢迎页偏好）也可能指向已删除的供应商/模型：
-				// 校验其仍存在于 models.json，不存在则丢弃交给解析器兜底（lastUsed → 显式默认 → 第一个可用），
-				// 避免新会话带着幽灵模型启动（用户反馈「删了供应商/模型新建会话还是它」）。
+				// 校验其仍存在于 models.json，不存在则交给解析器按欢迎页点选 → 配置默认 →
+				// enabledModels → lastUsed 的顺序兜底，避免新会话带着幽灵模型启动。
 				if (input.backend !== "dsh" && model) {
 					if (
 						typeof model.provider !== "string" ||
@@ -584,8 +607,8 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 				// 缺省填充与引导页展示共用同一解析器（launchDefaults），
 				// 保证「预选的默认」与「创建时真正套用的默认」永远同源。
 				// 欢迎页偏好（renderer localStorage）同样经主进程校验存在性后按
-				// 「显式默认 > 偏好 > 上次使用 > 空」参与解析；explicit model（用户主动
-				// 指名）仍优先于一切（input.model，见上方校验）。
+				// 「欢迎页点选 > 显式默认 > enabledModels > 上次使用 > 空」参与解析；
+				// explicit model（用户主动指名）仍优先于一切（input.model，见上方校验）。
 				const defaults = resolveLaunchDefaultOptions({
 					backend: input.backend,
 					settings: settingsResult.parsed,
@@ -608,7 +631,6 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 			projectId: input.projectId,
 			title: input.title?.trim() || mainCopy("session.newTitle"),
 			environment: settingsStore.get().wslEnabled ? "wsl" : "native",
-			titleLocked: false,
 			// 后端透传：仅接受白名单枚举，其余视为 pi（渲染层不可信输入校验在边界）。
 			backend: input.backend === "dsh" ? "dsh" : undefined,
 			model,
@@ -656,6 +678,13 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		return result;
 	});
 	ipcMain.handle(ipcChannels.sessionsCatalogUpdate, async (_event, sessionId: string, patch: UpdateSessionRecordInput) => {
+		const normalizedModel = patch.model === undefined ? undefined : patch.model === null ? null : normalizeSessionModelPreference(patch.model);
+		if (patch.model !== undefined && patch.model !== null && !normalizedModel) {
+			throw new Error(mainCopy("session.invalidModel"));
+		}
+		if (patch.model !== undefined) {
+			patch = { ...patch, model: normalizedModel };
+		}
 		const entry = sessionCatalog.get(sessionId);
 		if (!entry) throw new Error(mainCopy("session.notFound"));
 		// 后端锁定（草稿期可改，激活后禁止）：pi 会话文件（JSONL）与 DSH 会话
@@ -1360,6 +1389,47 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		}
 	});
 	ipcMain.handle(ipcChannels.sessionsUiResponse, (_event, input: SessionUiResponseInput) => sessionRuntimeCoordinator.respondToUi(input));
+	/**
+	 * GUI 扩展桥：渲染进程回灌交互事件 → 排入该 agent 的桥队列。
+	 *
+	 * 边界校验（AGENTS.md「输入校验在边界」）：
+	 * - 三个身份字段必填（sessionId / agentId / runtimeGeneration）
+	 * - runtimeGeneration 必须与该会话当前 runtime 一致，拒绝旧 runtime 的迟到事件
+	 * 失败一律返回 false（渲染层据此静默丢弃），**不抛错跨 IPC**。
+	 */
+	ipcMain.handle(ipcChannels.sessionsBridgeEvent, (_event, input: BridgeEventInput) => {
+		if (!input || typeof input !== "object") return false;
+		const { sessionId, agentId, runtimeGeneration, event } = input;
+		if (typeof sessionId !== "string" || !sessionId) return false;
+		if (typeof agentId !== "string" || !agentId) return false;
+		if (typeof runtimeGeneration !== "number" || !Number.isFinite(runtimeGeneration)) return false;
+		if (!event || typeof event !== "object" || typeof event.type !== "string") return false;
+		const current = sessionRuntimeCoordinator.getTarget(sessionId);
+		if (!current || current.agentId !== agentId || current.runtimeGeneration !== runtimeGeneration) {
+			// 旧 runtime 的迟到事件：丢弃，不报错
+			return false;
+		}
+		return sessionRuntimeCoordinator.pushBridgeEvent(agentId, event);
+	});
+	/**
+	 * GUI 扩展桥：渲染进程要求桥**全量重推一次**（§9.4）。
+	 *
+	 * 边界校验与 `sessionsBridgeEvent` 完全一致（三个身份字段 + runtime 一致性）——
+	 * 不新写一套规则，避免两处漂移。失败一律返回 false，**不抛错跨 IPC**。
+	 */
+	ipcMain.handle(ipcChannels.sessionsBridgeResync, (_event, input: BridgeResyncInput) => {
+		if (!input || typeof input !== "object") return false;
+		const { sessionId, agentId, runtimeGeneration } = input;
+		if (typeof sessionId !== "string" || !sessionId) return false;
+		if (typeof agentId !== "string" || !agentId) return false;
+		if (typeof runtimeGeneration !== "number" || !Number.isFinite(runtimeGeneration)) return false;
+		const current = sessionRuntimeCoordinator.getTarget(sessionId);
+		if (!current || current.agentId !== agentId || current.runtimeGeneration !== runtimeGeneration) {
+			// 旧 runtime 的迟到请求：忽略，不报错
+			return false;
+		}
+		return sessionRuntimeCoordinator.requestBridgeResync(agentId);
+	});
 	ipcMain.handle(ipcChannels.sessionsRuntimeList, () => sessionRuntimeCoordinator.listRuntimes());
 	ipcMain.handle(ipcChannels.sessionsRuntimeActivate, async (_event, sessionId: string) => {
 		const startedAt = Date.now();
@@ -1569,7 +1639,18 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		});
 	});
 	ipcMain.handle(ipcChannels.sessionsRuntimePrepareResend, (_event, target: SessionRuntimeTarget, messageId: string) => handleSessionCommandResult(appLogger, "prepareRuntimeResend", target, { messageId }, () => sessionRuntimeCoordinator.prepareRuntimeResend(target, messageId)));
-	ipcMain.handle(ipcChannels.sessionsRuntimeSetModel, (_event, target: SessionRuntimeTarget, provider: string, modelId: string) => sessionRuntimeCoordinator.setRuntimeModel(target, provider, modelId));
+	ipcMain.handle(ipcChannels.sessionsRuntimeSetModel, (_event, target: SessionRuntimeTarget, provider: unknown, modelId: unknown, modelName?: unknown) => {
+		if (typeof provider !== "string" || typeof modelId !== "string" || (modelName !== undefined && typeof modelName !== "string") || !provider.trim() || !modelId.trim() || provider.length > 128 || modelId.length > 256 || (typeof modelName === "string" && modelName.length > 256)) {
+			return Promise.resolve({
+				ok: false as const,
+				error: {
+					code: "SESSION_COMMAND_FAILED" as const,
+					debugDetails: "Invalid model selection",
+				},
+			});
+		}
+		return sessionRuntimeCoordinator.setRuntimeModel(target, provider.trim(), modelId.trim(), modelName);
+	});
 	ipcMain.handle(ipcChannels.sessionsRuntimeSetThinking, (_event, target: SessionRuntimeTarget, level: string) => sessionRuntimeCoordinator.setRuntimeThinking(target, level));
 	ipcMain.handle(ipcChannels.sessionsRuntimeSetPermission, (_event, target: SessionRuntimeTarget, preset: string) => {
 		// Renderer input is untrusted: reject values outside DSH's finite preset
@@ -1685,6 +1766,23 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 		if (!project) throw new Error(`Project not found: ${projectId}`);
 		const result = await claudeSessionImporter.import(project.path, sourcePaths);
 		void appLogger.info("session", "Claude sessions imported", {
+			projectId,
+			sourceCount: sourcePaths.length,
+		});
+		return result;
+	});
+	ipcMain.handle(ipcChannels.qoderSessionsScan, async (_event, projectId: string) => {
+		const project = projectStore.get(projectId);
+		if (!project) throw new Error(`Project not found: ${projectId}`);
+		const result = await qoderSessionImporter.scan(project.path);
+		void appLogger.debug("session", "Qoder sessions scanned", { projectId });
+		return result;
+	});
+	ipcMain.handle(ipcChannels.qoderSessionsImport, async (_event, projectId: string, sourcePaths: string[]) => {
+		const project = projectStore.get(projectId);
+		if (!project) throw new Error(`Project not found: ${projectId}`);
+		const result = await qoderSessionImporter.import(project.path, sourcePaths);
+		void appLogger.info("session", "Qoder sessions imported", {
 			projectId,
 			sourceCount: sourcePaths.length,
 		});

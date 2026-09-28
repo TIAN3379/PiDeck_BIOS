@@ -14,8 +14,11 @@ import { createTsSandbox } from "./helpers/createTsSandbox.mjs";
  * 扫描时 OOM 被系统静默杀进程（无任何日志）。修复：
  * 1. collectJsonl 跳过 rollouts/ 目录；
  * 2. scan 只读每个文件头部 1MB（session_meta/preview 都在前部），坏行/半行容错；
- * 3. 分块并发（SCAN_CONCURRENCY=6）限制同时驻留的缓冲数；
- * 4. 导入（全量转换）加 IMPORT_MAX_SIZE=80MB 硬上限，超限报错而非 OOM。
+ * 3. 分块并发（SCAN_CONCURRENCY=6）限制同时驻留的缓冲数。
+ *
+ * 2026-09 用户消息新格式：Codex Desktop 把每轮的 event_msg/user_message 事件移除，
+ * 用户输入直接作为 response_item role:user 写盘（前面带 <recommended_plugins>/
+ * <environment_context> 等注入包装）。导入器只支持新格式；旧 event_msg 不再识别。
  */
 function loadTranspiled(sourcePath, sandbox) {
 	const source = readFileSync(sourcePath, "utf8");
@@ -44,7 +47,8 @@ function sessionJsonl(id, cwd) {
 			payload: { id, cwd, timestamp: "2026-08-10T10:00:00.000Z", model: "gpt-5" },
 		}),
 	);
-	// 两条对话轮次：assistant 回复在前（preview 取第一条非空文本），user 问题在后（title 来源）
+	// 两条对话轮次：assistant 回复在前（preview 取第一条非空文本），user 问题在后（title 来源）。
+	// 新格式：user 是 response_item role:user，内部带 content_item_kinds=[user.text]。
 	for (let i = 0; i < 2; i++) {
 		lines.push(
 			JSON.stringify({
@@ -52,7 +56,17 @@ function sessionJsonl(id, cwd) {
 				payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: `回复 ${i}` }] },
 			}),
 		);
-		lines.push(JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: `问题 ${i}` } }));
+		lines.push(
+			JSON.stringify({
+				type: "response_item",
+				payload: {
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: `问题 ${i}` }],
+					internal_chat_message_metadata_passthrough: { content_item_kinds: ["user.text"] },
+				},
+			}),
+		);
 	}
 	return `${lines.join("\n")}\n`;
 }
@@ -150,7 +164,7 @@ test("codex scan: meta head filter tolerates broken leading lines", async () => 
 		const sessions = join(home, ".codex", "sessions");
 		mkdirSync(sessions, { recursive: true });
 		// meta 前有坏行（手改/损坏的会话）：预过滤应跳过坏行找到 meta
-		writeFileSync(join(sessions, "dirty.jsonl"), '{"type":"event_msg","payload":{"type":"user_message","message":"前导消息"}}\n' + "not-json\n" + sessionJsonl("dirty", project));
+		writeFileSync(join(sessions, "dirty.jsonl"), '{"type":"turn_context","payload":{"cwd":"x"}}\n' + "not-json\n" + sessionJsonl("dirty", project));
 		// 完全没有 meta 的文件（如手放的数据文件）：应被跳过而不是报错
 		writeFileSync(join(sessions, "nometa.jsonl"), '{"type":"response_item","payload":{}}\n'.repeat(4));
 
@@ -200,6 +214,70 @@ test("codex import: multi-hundred-MB session streams without loading it whole", 
 			["session", "codex_import", "model_change"],
 		);
 		assert.equal(JSON.parse(targetLines[targetLines.length - 1]).type, "session_info");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+// 回归 2026-09：Codex 的语义化工具行（custom_tool_call / web_search_call /
+// tool_search_call / image_generation_call）过去被整段跳过 —— 导入后的会话里
+// 文件修改、命令执行、联网检索全部凭空消失。它们必须与 function_call 同一套
+// pi 形态（assistant.toolCall + 配对 toolResult）落盘。
+test("codex import: non-standard tool lines become toolCall + paired toolResult", async () => {
+	const home = mkdtempSync(join(tmpdir(), "codex-tools-"));
+	try {
+		const project = join(home, "proj");
+		const sessions = join(home, ".codex", "sessions");
+		mkdirSync(sessions, { recursive: true });
+		const lines = [
+			JSON.stringify({ type: "session_meta", payload: { id: "thread-tools", cwd: project, timestamp: "2026-08-10T10:00:00.000Z" } }),
+			// 标准 function_call（既有能力，防回归）
+			JSON.stringify({ type: "response_item", timestamp: "2026-08-10T10:00:01.000Z", payload: { type: "function_call", call_id: "c1", name: "shell_command", arguments: '{"command":"ls"}' } }),
+			JSON.stringify({ type: "response_item", timestamp: "2026-08-10T10:00:02.000Z", payload: { type: "function_call_output", call_id: "c1", output: "ok" } }),
+			// custom_tool_call（apply_patch）：参数是裸 patch 文本
+			JSON.stringify({ type: "response_item", timestamp: "2026-08-10T10:00:03.000Z", payload: { type: "custom_tool_call", call_id: "c2", name: "apply_patch", input: "*** Begin Patch\n*** Add File: a.md\n+x\n*** End Patch\n", status: "completed" } }),
+			JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call_output", call_id: "c2", output: '{"output":"Success. Updated the following files:\nA a.md\n","metadata":{"exit_code":0}}', timestamp: "2026-08-10T10:00:04.000Z" } }),
+			// web_search_call：只有查询词，没有结果正文
+			JSON.stringify({ type: "response_item", timestamp: "2026-08-10T10:00:05.000Z", payload: { type: "web_search_call", status: "completed", action: { type: "search", query: "codex rollout format", queries: ["codex rollout format"] } } }),
+			// image_generation_call：小图内联，大图占位
+			JSON.stringify({ type: "response_item", timestamp: "2026-08-10T10:00:06.000Z", payload: { type: "image_generation_call", id: "ig1", status: "generating", revised_prompt: "一张示意图", result: "iVBORw0KGgoAAAANSUhEUg==" } }),
+		];
+		writeFileSync(join(sessions, "tools.jsonl"), `${lines.join("\n")}\n`);
+
+		const { CodexSessionImporter } = loadImporter(home);
+		const report = await new CodexSessionImporter().import(project, [join(sessions, "tools.jsonl")]);
+		assert.equal(report.results[0].success, true);
+
+		const entries = readFileSync(report.results[0].targetPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line))
+			.filter((entry) => entry.type === "message");
+
+		const toolCalls = entries.flatMap((entry) => (entry.message?.content ?? []).filter((block) => block.type === "toolCall").map((block) => ({ ...block, ts: entry.timestamp })));
+		const toolResults = entries.filter((entry) => entry.message?.role === "toolResult").map((entry) => entry.message);
+		const names = [...toolCalls.map((call) => call.name)].sort();
+
+		assert.deepEqual(names, ["apply_patch", "image_generation", "shell_command", "web_search"], "四类工具都要落成 toolCall");
+		assert.equal(toolResults.length, 4, "每个调用都要有配对结果行");
+
+		// custom_tool_call 的 patch 正文保留在参数里
+		const patchCall = toolCalls.find((call) => call.name === "apply_patch");
+		assert.match(patchCall.arguments.input, /\*\*\* Begin Patch/);
+		const patchResult = toolResults.find((result) => result.toolCallId === "c2");
+		assert.equal(patchResult.isError, false);
+		assert.match(patchResult.content[0].text, /Success\. Updated/);
+		assert.equal(patchResult.toolName, "apply_patch");
+
+		// 小图直接内联成 pi image 块
+		const imageResult = toolResults.find((result) => result.toolName === "image_generation");
+		assert.equal(imageResult.content[0].type, "image");
+		assert.equal(imageResult.content[0].mimeType, "image/png");
+
+		// 标准 function_call 仍按原样配对（带派生耗时）
+		const shellResult = toolResults.find((result) => result.toolCallId === "c1");
+		assert.equal(shellResult.toolName, "shell_command");
+		assert.equal(typeof shellResult.durationMs, "number");
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}

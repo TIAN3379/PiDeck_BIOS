@@ -131,11 +131,14 @@ export function MarkdownLink(
 			if (ok) showNotice(t("app.pathCopied"));
 		});
 	};
-	// false=已确认不存在：渲染纯文本；undefined=未知或校验中：维持普通文本链接，
-	// 等存在性结果回来后只改变是否可点击，不引入胶囊式视觉跳变。
+	// false=已确认不存在：
+	// - 显式 Markdown 链接（[text](path)）是作者声明过的链接，失效时降级灰字提示；
+	// - remarkLinkifyPaths 自动识别的裸路径（file://）作者从未声明成链接，误识别/幻觉路径
+	//   一律按普通正文渲染（继承上下文样式）。否则中文散文里被误识别的词（`降分辨率/抽帧`）
+	//   会在正文中间突然变灰，看起来像高亮/阴影（线上回归）。
 	if (isFileLink || isLocalRef) {
 		if (pathExists === false) {
-			return <span className="text-text-tertiary">{children}</span>;
+			return isFileLink ? <>{children}</> : <span className="text-text-tertiary">{children}</span>;
 		}
 	}
 	const linkClass = [className, isFileLink || isLocalRef ? "cursor-pointer font-mono text-[var(--color-accent)] underline decoration-[var(--color-accent)]/50 underline-offset-2 hover:decoration-[var(--color-accent)]" : undefined].filter(Boolean).join(" ") || undefined;

@@ -87,6 +87,13 @@ export function buildTurnDisplay(
 			}
 			return;
 		}
+		if (item.kind === "error-group") {
+			// 错误诊断：与重试行同层的过程行（可点开看 debugDetails 具体错误）
+			if (item.message.role === "error") {
+				items.push({ kind: "process-entry", entry: { kind: "error-entry", id: item.id, message: item.message } });
+			}
+			return;
+		}
 		if (item.kind !== "message" || item.message.role !== "assistant") return;
 		// 消息自带的思考 / live 同 id：插到该回答之前（思考→回答时序）。
 		// Live 时 text 可空，叶子 ThinkingStep 从 streamingThinkingByIdAtom 填。

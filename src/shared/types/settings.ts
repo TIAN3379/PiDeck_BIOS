@@ -29,7 +29,7 @@ export type WebNetworkAddress = {
 export type WorkspaceContentOpenMode = "split" | "maximize";
 /** 会话 Tab 打开模式：preview=单击为临时预览（发消息后自动晋升常驻），permanent=单击即常驻共存 */
 export type SessionTabOpenMode = "preview" | "permanent";
-export type AppFontSizeMode = "compact" | "default" | "medium" | "large" | "xlarge";
+export type AppFontSizeMode = "compact" | "medium" | "large" | "xlarge";
 
 /** 更新源：atomgit = 国内 AtomGit 源（默认首选）；github = 官方 GitHub Release。 */
 export type UpdateSourceId = "atomgit" | "github";
@@ -53,6 +53,14 @@ export type MirrorHealthResult = {
 
 /** 宠物缩放默认值：0.3 = 设置滑块 30%。出厂 100% 太大，新用户/缺省回退都用此值。 */
 export const DEFAULT_PET_SCALE = 0.3;
+/** toast 展示时长（ms）出厂值：全局统一时长，与渲染层 notice.ts 常量一致。 */
+export const DEFAULT_TOAST_DURATION_MS = 4000;
+/**
+ * toast 时长「常驻（不自动消失）」哨兵值。
+ * 必须用有限数：设置落盘走 settings.json，`JSON.stringify(Infinity)` 会变成 null，
+ * 升级后读回即丢失。渲染层在 configureNoticeDefaults 里把哨兵映射回 POSITIVE_INFINITY。
+ */
+export const TOAST_DURATION_STICKY_MS = -1;
 export type AppFontBaseMode = "system" | "sans" | "serif" | "custom";
 export type AppFontMonoMode = "system-mono" | "custom";
 /** 主窗口启动尺寸预设：last=上次关闭时的窗口大小（读不到时顺延默认）；fullscreen 占满屏幕，maximized 最大化，其余为固定窗口 */
@@ -96,7 +104,7 @@ export type AppSettings = {
 	backgroundImageOpacity: number;
 	/** 界面语言，system 跟随系统语言；pseudo 用于长文案布局压力测试 */
 	language: AppLanguageMode;
-	/** 启动时主窗口尺寸预设，默认 last（上次窗口大小，读不到时顺延 maximized） */
+	/** 启动时主窗口几何预设，默认 last（上次窗口位置和大小，读不到时顺延 maximized） */
 	startupWindowMode: StartupWindowMode;
 	piEnvironmentChecked: boolean;
 	/** 最近一次 pi 环境检测成功的结果缓存（命令路径 + 版本），打开设置直接显示，不重复检测 */
@@ -105,7 +113,8 @@ export type AppSettings = {
 	sessionTabOpenMode: SessionTabOpenMode;
 	/**
 	 * 是否在首轮 agent 成功结束后，用当前 pi 模型异步生成会话标题。
-	 * 默认关闭以避免用户无感知地产生额外模型调用和 token 消耗；设置只在新建或重启 Agent 进程时注入，关闭不影响已有会话的主 agent。
+	 * 默认开启，让侧栏自动获得可读标题；会额外消耗一次模型调用和少量 token（设置说明已写明）。
+	 * 设置只在新建或重启 Agent 进程时注入，关闭不影响已有会话的主 agent。
 	 */
 	autoSessionTitle: boolean;
 	/**
@@ -171,6 +180,14 @@ export type AppSettings = {
 	 * 弹出时机由渲染层忙碌检测控制（输入中/模态打开/窗口隐藏时延迟），与本开关解耦。
 	 */
 	announcementNotificationEnabled: boolean;
+	/**
+	 * 应用内 toast 的展示时长（ms），全局统一口径：所有提示（含调用方显式传入的时长、
+	 * error/warning/question 档）都按此值停留，只有调用方要求「常驻」的提示不受影响。
+	 * 起因是扩展 ctx.ui.notify 等提示硬编码 1500ms，用户普遍反馈来不及看。
+	 * 取值：有限正数毫秒（主进程钳制 1000–60000）或 TOAST_DURATION_STICKY_MS(-1)=常驻；
+	 * 非法值读取时钳回默认。渲染层把哨兵映射为 Number.POSITIVE_INFINITY。
+	 */
+	toastDurationMs: number;
 	/** 是否在会话中显示模型思考过程，默认开启 */
 	showThinking: boolean;
 	/**
@@ -180,10 +197,11 @@ export type AppSettings = {
 	 */
 	expandInterimDuringStream: boolean;
 	/**
-	 * 新一轮（用户发送新消息）开始时自动收起上一轮展开的中间过程，节省渲染资源。
-	 * true（默认）：发送新消息后收起所有非最新轮（含手动展开的）；false：保持现状。
+	 * 时间线是否按「过程组」显示（实验特性）。
+	 * true（默认）：一轮里连续的思考与工具调用合并成过程组，点开组头才展开明细；
+	 * false：保持平铺显示（连续思考/工具调用逐条铺开）。
 	 */
-	collapsePrevRunsOnNewTurn: boolean;
+	processGroupDisplay: boolean;
 	/** 是否开启开发者控制台（DevTools） */
 	showDevTools: boolean;
 	/**
@@ -267,6 +285,8 @@ export type AppSettings = {
 	 * Tab 按内容收缩（w-fit），短标题的 Tab 不受影响；有前置徽标时上限另加
 	 * SESSION_TAB_BADGE_EXTRA_WIDTH（28px，旧 132px 差值）。外观设置滑杆可调。
 	 */
+	/** Navigation presentation only; does not change session identities. */
+	navigationMode: "tabs" | "simple";
 	sessionTabMaxWidth: number;
 	/** 编辑器最大文件大小（MB），超过此大小的文件不加载编辑器。默认 5MB。 */
 	maxEditorFileSizeMB: number;
@@ -325,6 +345,15 @@ export type AppSettings = {
 	 * 配置本身不删除（仍正常保存于 auth.json 并供 pi 加载），恢复显示即可继续展开编辑。可选以兼容旧 settings.json。
 	 */
 	hiddenAuthProviders?: string[];
+
+	// ── 功能模块显示开关：外观设置里按需收起不用的模块 UI 入口 ──
+	/**
+	 * 用户主动隐藏的功能模块 id 列表（清单与语义见 shared/hiddenModules.ts）。
+	 * 隐藏后：对应设置 tab 从侧栏消失；`dsh` 还会收起配置管理的 DSH 分页与新建会话的 DSH 选项，
+	 * `imagegen` 还会收起输入框的生图入口。只隐藏入口，不清配置、不停已启用的后台功能；
+	 * 命令面板仍可搜到并一键恢复显示。默认 `[]` 全部显示；可选以兼容旧 settings.json。
+	 */
+	hiddenModules?: string[];
 
 	// ── 供应商卡片排序：用户在模型页拖拽/上移下移后写入的自定义顺序 ──
 	/**

@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowUp, FileJson, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, FileJson, GripVertical, ListPlus, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { MAX_QUICK_MESSAGES, MAX_QUICK_MESSAGE_LENGTH } from "../../../../../shared/quickMessages";
 import { useQuickMessageEditor } from "../../../hooks/useQuickMessageEditor";
 import { t } from "../../../i18n";
@@ -7,7 +8,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "../../ui-shadcn/input";
 
 /**
- * 「管理快捷消息」弹框：条目清单的增删/排序/恢复默认/重新读取/打开配置文件。
+ * 「管理快捷消息」弹框：条目清单的增删/排序/补充内置/恢复默认/重新读取/打开配置文件。
  *
  * 为什么从设置页搬到弹框里：条目上限 30 条，16 条出厂清单就能把设置页撑成一屏半，
  * 设置页只该留一行「条目预览 + 配置更多」（见 QuickMessagesSetting）。这里用弹框而不是
@@ -22,13 +23,82 @@ import { Input } from "../../ui-shadcn/input";
 export function QuickMessagesDialog(props: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const editor = useQuickMessageEditor();
 	const { rows } = editor;
+	const latestRef = useRef({ rows, open: props.open, reorderItems: editor.reorderItems });
+	latestRef.current = { rows, open: props.open, reorderItems: editor.reorderItems };
+	const dragRef = useRef<{ index: number; rows: string[] } | null>(null);
+	const [dropTarget, setDropTarget] = useState<number | null>(null);
+
+	/** ref 是内部拖放的唯一来源；外部载荷即使伪造下标也不能触发排序。 */
+	const clearDrag = useCallback(() => {
+		dragRef.current = null;
+		setDropTarget(null);
+	}, []);
+
+	useEffect(() => {
+		// 下标只对开始拖动时那份列表有意义；增删/编辑/刷新和关闭都取消本次拖动。
+		clearDrag();
+		return () => {
+			dragRef.current = null;
+		};
+	}, [rows, props.open, clearDrag]);
+
+	/** 只允许把柄启动原生 HTML drag；自定义 MIME 仅让浏览器启动拖放，不携带消息正文。 */
+	const startDrag = useCallback((event: DragEvent<HTMLButtonElement>, index: number) => {
+		const current = latestRef.current;
+		if (!current.open || index < 0 || index >= current.rows.length) {
+			event.preventDefault();
+			return;
+		}
+		event.stopPropagation();
+		dragRef.current = { index, rows: current.rows };
+		event.dataTransfer.effectAllowed = "move";
+		event.dataTransfer.setData("application/x-pideck-quick-message", "move");
+	}, []);
+
+	/** 拖放期间使用最新 ref 校验列表身份，不能让过期事件移动到另一条消息。 */
+	const canDrop = useCallback((target: number) => {
+		const current = latestRef.current;
+		const source = dragRef.current;
+		return current.open && source !== null && source.rows === current.rows && source.index >= 0 && source.index < current.rows.length && Number.isInteger(target) && target >= 0 && target < current.rows.length;
+	}, []);
+
+	const dragOver = useCallback(
+		(event: DragEvent<HTMLDivElement>, target: number) => {
+			// 同时拦住输入框默认接收文本/文件的行为，不把外部 drop 交给宿主处理。
+			event.preventDefault();
+			event.stopPropagation();
+			const allowed = canDrop(target);
+			event.dataTransfer.dropEffect = allowed ? "move" : "none";
+			setDropTarget(allowed ? target : null);
+		},
+		[canDrop],
+	);
+
+	const drop = useCallback(
+		(event: DragEvent<HTMLDivElement>, target: number) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const source = dragRef.current;
+			const allowed = canDrop(target);
+			clearDrag();
+			if (allowed && source) latestRef.current.reorderItems(source.index, target);
+		},
+		[canDrop, clearDrag],
+	);
 
 	return (
-		<Dialog open={props.open} onOpenChange={props.onOpenChange}>
-			<DialogContent className="max-w-[600px] gap-3">
+		<Dialog
+			open={props.open}
+			onOpenChange={(open) => {
+				if (!open) clearDrag();
+				props.onOpenChange(open);
+			}}
+		>
+			<DialogContent className="sm:max-w-[min(960px,calc(100vw-48px))] gap-3">
 				<DialogHeader>
 					<DialogTitle>{t("settings.quickMessages")}</DialogTitle>
 					<DialogDescription>{t("settings.quickMessagesDesc", { max: MAX_QUICK_MESSAGES })}</DialogDescription>
+					<p className="text-caption text-muted-foreground">{t("settings.quickMessagesConfigHint")}</p>
 				</DialogHeader>
 
 				{editor.loading ? (
@@ -39,16 +109,29 @@ export function QuickMessagesDialog(props: { open: boolean; onOpenChange: (open:
 						<div className="flex max-h-[min(52vh,420px)] min-h-0 flex-col gap-1.5 overflow-y-auto pr-1">
 							{rows.length === 0 ? <p className="py-3 text-caption text-muted-foreground">{t("settings.quickMessagesEmpty")}</p> : null}
 							{rows.map((text, index) => (
-								<div key={index} className="flex min-w-0 items-center gap-1">
-									<Input value={text} maxLength={MAX_QUICK_MESSAGE_LENGTH} placeholder={t("settings.quickMessagesPlaceholder")} onChange={(event) => editor.setItem(index, event.target.value)} onBlur={editor.flushPending} className="min-w-0 flex-1" />
+								<div key={index} onDragOver={(event) => dragOver(event, index)} onDragLeave={() => setDropTarget(null)} onDrop={(event) => drop(event, index)} className={`flex min-w-0 items-center gap-1 rounded-md ${dropTarget === index ? "bg-accent ring-1 ring-inset ring-primary" : ""}`}>
+									{/* 仅把柄可拖动，输入框仍可选字；键盘用户继续使用相邻的上下移按钮。 */}
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										tabIndex={-1}
+										draggable
+										title={t("settings.quickMessagesDragHandle")}
+										aria-label={t("settings.quickMessagesDragHandle")}
+										onDragStart={(event) => startDrag(event, index)}
+										onDragEnd={clearDrag}
+										className="shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing"
+									>
+										<GripVertical size={14} strokeWidth={1.8} aria-hidden="true" />
+									</Button>
+									<Input autoFocus={index === rows.length - 1 && text === ""} value={text} maxLength={MAX_QUICK_MESSAGE_LENGTH} placeholder={t("settings.quickMessagesPlaceholder")} onChange={(event) => editor.setItem(index, event.target.value)} onBlur={editor.flushPending} className="min-w-0 flex-1" />
 									<Button type="button" variant="ghost" size="icon-sm" title={t("settings.quickMessagesMoveUp")} aria-label={t("settings.quickMessagesMoveUp")} disabled={index === 0} onClick={() => editor.moveItem(index, -1)}>
 										<ArrowUp size={14} strokeWidth={1.8} aria-hidden="true" />
 									</Button>
 									<Button type="button" variant="ghost" size="icon-sm" title={t("settings.quickMessagesMoveDown")} aria-label={t("settings.quickMessagesMoveDown")} disabled={index === rows.length - 1} onClick={() => editor.moveItem(index, 1)}>
 										<ArrowDown size={14} strokeWidth={1.8} aria-hidden="true" />
 									</Button>
-									{/* 列表用「上移/下移」而不是拖拽排序：条目通常不到 20 条，顺序只在弹框里体现一次，
-									    拖拽需要引入新的交互栈且键盘不可用，上下移按钮对两种操作方式都成立。 */}
 									<Button type="button" variant="ghost" size="icon-sm" title={t("settings.quickMessagesRemove")} aria-label={t("settings.quickMessagesRemove")} onClick={() => editor.removeItem(index)}>
 										<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
 									</Button>
@@ -60,19 +143,23 @@ export function QuickMessagesDialog(props: { open: boolean; onOpenChange: (open:
 								<Plus size={14} strokeWidth={2} aria-hidden="true" />
 								{t("settings.quickMessagesAdd")}
 							</Button>
+							<Button type="button" variant="outline" size="sm" disabled={editor.merging || editor.atLimit} title={t("settings.quickMessagesMergeDefaultsHint")} onClick={() => void editor.mergeDefaults()}>
+								<ListPlus size={14} strokeWidth={2} aria-hidden="true" />
+								{t(editor.merging ? "settings.quickMessagesMerging" : "settings.quickMessagesMergeDefaults")}
+							</Button>
 							{editor.atLimit ? <span className="text-caption text-muted-foreground">{t("settings.quickMessagesLimit", { max: MAX_QUICK_MESSAGES })}</span> : null}
 						</div>
 					</div>
 				)}
 
-				{/* 配置文件出口：手工编辑同样生效，这里的三个按钮是「配置化」的可见入口 */}
+				{/* 个人文件与内置资源互不自动合并；恢复默认是整体替换，补充内置才保留现有顺序。 */}
 				<DialogFooter className="sm:justify-between">
 					<div className="flex flex-wrap items-center gap-1">
-						<Button type="button" variant="ghost" size="sm" disabled={!editor.defaultsAvailable} title={editor.defaultsAvailable ? undefined : t("settings.quickMessagesDefaultsUnavailable")} onClick={editor.resetDefaults}>
+						<Button type="button" variant="ghost" size="sm" disabled={!editor.defaultsAvailable || editor.merging} title={editor.defaultsAvailable ? t("settings.quickMessagesResetHint") : t("settings.quickMessagesDefaultsUnavailable")} onClick={editor.resetDefaults}>
 							<RotateCcw size={14} strokeWidth={2} aria-hidden="true" />
 							{t("settings.quickMessagesReset")}
 						</Button>
-						<Button type="button" variant="ghost" size="sm" title={t("settings.quickMessagesReloadHint")} onClick={() => void editor.reload()}>
+						<Button type="button" variant="ghost" size="sm" disabled={editor.merging} title={t("settings.quickMessagesReloadHint")} onClick={() => void editor.reload()}>
 							<RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
 							{t("settings.quickMessagesReload")}
 						</Button>

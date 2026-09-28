@@ -1,5 +1,7 @@
 import { ChevronRight, ChevronsDownUp, Ellipsis, Filter, Folder, FolderOpen, FolderPlus, Plus, RefreshCw } from "lucide-react";
 import type { DragEvent } from "react";
+import { useProjectLongPressDrag } from "../../hooks/useProjectLongPressDrag";
+import { SidebarRemovalList, SidebarRemovalRow } from "./SidebarRemovalRow";
 import { useAtomValue } from "jotai";
 import type { Project, WorktreeEntry } from "../../../../shared/types";
 import type { SidebarController } from "../../hooks/useSidebarController";
@@ -8,11 +10,12 @@ import type { SidebarActions } from "./SidebarContent";
 import { ActiveSessionsTree } from "./ActiveSessionsTree";
 import { SessionTree } from "./SessionTree";
 import { WorktreeTree } from "./WorktreeTree";
+import { SessionActivityIndicator } from "../session/SessionActivityIndicator";
 import { isLiveRuntimeStatus } from "../../utils/sessionCommands";
 import { sessionDisplayName } from "../../utils/sessionDisplayName";
 import { displayProjectDirectoryName, isChatProject } from "../../rendererUtils";
 import { sessionRuntimeUiByIdAtom } from "../../atoms/session-atoms";
-import { countPendingAsksForSessions } from "../../utils/askUi";
+import { countPendingAsksForSessions, hasPendingAskForSession } from "../../utils/askUi";
 import type { AskRequestEntry } from "../../utils/askUi";
 import { PendingAskBadge } from "./PendingAskBadge";
 import { Button } from "../ui-shadcn/button";
@@ -61,6 +64,7 @@ function countProjectPendingAsks(projectId: string, controller: SidebarControlle
 }
 
 export function ProjectTree(props: {
+	simple?: boolean;
 	controller: SidebarController;
 	actions: SidebarActions;
 	currentProjectId?: string;
@@ -71,9 +75,13 @@ export function ProjectTree(props: {
 	removingWorktreePaths?: ReadonlySet<string>;
 }) {
 	const sessionRuntimeUiById = useAtomValue(sessionRuntimeUiByIdAtom);
+	const longPress = useProjectLongPressDrag();
 	const rootProjects = props.controller.catalog.projects.filter((project) => !project.worktreeParentId && matchesProject(project, props.controller.search.trim(), props.controller));
 	const dragStart = (event: DragEvent<HTMLButtonElement>, projectId: string) => {
-		if (props.controller.search.trim()) return;
+		if (props.controller.search.trim() || !longPress.canDrag(projectId)) {
+			event.preventDefault();
+			return;
+		}
 		event.dataTransfer.effectAllowed = "move";
 		event.dataTransfer.setData("text/plain", projectId);
 		props.controller.startProjectDrag(projectId);
@@ -86,6 +94,7 @@ export function ProjectTree(props: {
 		if (source && source !== projectId) void props.actions.projects.reorder(source, projectId);
 	};
 	const renderProject = (project: Project) => {
+		const menuOpen = props.controller.menu?.kind === "project" && props.controller.menu.projectId === project.id;
 		const collapsed = props.controller.isProjectCollapsed(project.id);
 		const projectDirectoryName = displayProjectDirectoryName(project);
 		const sourceFilter = props.controller.sourceFilterFor(project.id);
@@ -95,14 +104,18 @@ export function ProjectTree(props: {
 		// 项目级「运行中」判定：任一 Agent 进程存活（starting/idle/running）即视为运行中。
 		// 与 ActiveSessionsTree 活动页同源，保证折叠时的项目 tag 与展开后的子行状态一致。
 		const hasLiveAgent = props.controller.catalog.agents.some((agent) => agent.projectId === project.id && isLiveRuntimeStatus(agent.status));
-		// 统计该项目（及直属 worktree）所有会话中处于等待用户确认/回答的 Ask 数量
+		const relatedProjectIds = new Set([project.id, ...props.controller.catalog.projects.filter((candidate) => candidate.worktreeParentId === project.id).map((candidate) => candidate.id)]);
+		const hasRunningAgent = [...relatedProjectIds].some((projectId) =>
+			(props.controller.catalog.sessionsByProject[projectId] ?? []).some((session) => {
+				const status = props.controller.catalog.runtimeBySessionId[session.id]?.status;
+				return (status === "starting" || status === "running") && !hasPendingAskForSession(session.id, sessionRuntimeUiById);
+			}),
+		);
 		const pendingAskCount = countProjectPendingAsks(project.id, props.controller, sessionRuntimeUiById);
-		// 运行态属于具体会话，而不是项目容器；项目行只负责导航，避免多个 Agent 同时运行时
-		// 项目头像出现无法指向目标会话的聚合动画。
 		return (
-			<div key={project.id} className={cn("project-group mb-1.5", project.worktreeEnabled && "worktree-enabled")}>
+			<SidebarRemovalRow key={project.id} itemId={project.id} className={cn("project-group mb-1.5", project.worktreeEnabled && "worktree-enabled")}>
 				<div
-					className={cn(treeRowClass, !props.controller.search.trim() && "project-draggable", dragging && "dragging opacity-60", dragOver && "drag-over ring-1 ring-border")}
+					className={cn(treeRowClass, dragging && "dragging opacity-60", dragOver && "drag-over ring-1 ring-border")}
 					onContextMenu={(event) => {
 						event.preventDefault();
 						void props.controller.openMenu({ kind: "project", projectId: project.id, x: event.clientX, y: event.clientY });
@@ -119,8 +132,13 @@ export function ProjectTree(props: {
 					</button>
 					<button
 						type="button"
-						className="flex min-w-0 flex-1 items-center gap-1 py-0 pr-1 text-left"
-						draggable={!props.controller.search.trim()}
+						className={cn("flex min-w-0 flex-1 select-none items-center gap-1 py-0 pr-1 text-left", longPress.readyProjectId === project.id ? "cursor-grab active:cursor-grabbing" : "cursor-pointer")}
+						draggable={!props.controller.search.trim() && longPress.readyProjectId === project.id}
+						onPointerDown={(event) => {
+							if (!props.controller.search.trim()) longPress.start(project.id, event);
+						}}
+						onPointerMove={longPress.move}
+						onPointerLeave={longPress.cancel}
 						onDragStart={(event) => dragStart(event, project.id)}
 						onDragOver={(event) => {
 							if (props.controller.drag.sourceProjectId && props.controller.drag.sourceProjectId !== project.id) {
@@ -130,8 +148,12 @@ export function ProjectTree(props: {
 						}}
 						onDragLeave={() => props.controller.setProjectDropTarget(undefined)}
 						onDrop={(event) => drop(event, project.id)}
-						onDragEnd={props.controller.finishProjectDrag}
+						onDragEnd={() => {
+							longPress.cancel();
+							props.controller.finishProjectDrag();
+						}}
 						onClick={() => {
+							if (longPress.consumeClick()) return;
 							// 项目主行同时承担选择和手风琴切换，让项目卡片本身保持唯一且明确的导航入口。
 							props.controller.toggleProject(project.id);
 							props.actions.projects.select(project.id);
@@ -140,7 +162,7 @@ export function ProjectTree(props: {
 						<span className="grid size-5 shrink-0 place-items-center text-muted-foreground" aria-hidden="true">
 							{collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}
 						</span>
-						<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover:pr-[88px] group-focus-within:pr-[88px]">
+						<div className={cn("conversation-body min-w-0 flex-1 transition-[padding-right] group-hover:pr-[88px] group-focus-within:pr-[88px]", menuOpen && "pr-[88px]")}>
 							{/* 筛选 / + / ⋯ 共 3 个按钮常驻浮层，hover 时统一让位 88px。
                   twMerge 语义见 tests/sidebarNarrowRowActions.test.mjs 契约测试。 */}
 							<div className="conversation-title flex min-w-0 items-center">
@@ -150,9 +172,8 @@ export function ProjectTree(props: {
 									<strong className={`min-w-0 truncate font-medium${project.missing ? " text-muted-foreground" : ""}`}>{projectDirectoryName}</strong>
 									{/* 待确认徽章：当项目下有会话等待用户输入/确认时醒目展示 */}
 									<PendingAskBadge count={pendingAskCount} />
-									{/* 折叠时项目行只剩名称，用黄色状态点提示该工作区仍有 Agent 进程在跑；
-                      展开后子行自带状态点，不再重复提示。颜色与语义对齐 agent 行的 running 状态点（bg-warning）。 */}
-									{collapsed && hasLiveAgent && <span className="size-1.5 shrink-0 rounded-full bg-warning" title={t("app.projectRunningHint")} aria-hidden="true" />}
+									{/* 简洁模式汇总实际计算中状态（含worktree）；空闲进程不转。 */}
+									{props.simple ? <SessionActivityIndicator status={hasRunningAgent ? "running" : undefined} /> : collapsed && hasLiveAgent && <span className="size-1.5 shrink-0 rounded-full bg-warning" title={t("app.projectRunningHint")} aria-hidden="true" />}
 								</div>
 								{/* 目录已被删除/移动/未挂载：保留记录并标记，用户可右键移除或恢复目录 */}
 								{project.missing && (
@@ -164,7 +185,7 @@ export function ProjectTree(props: {
 							{/* 项目名称只承担导航信息；详细会话状态由下方的 Agent/历史会话行承担。 */}
 						</div>
 					</button>
-					<div className={cn(dimmedActionsClass, "pr-1", props.controller.menu?.kind === "project" && props.controller.menu.projectId === project.id && "pointer-events-auto opacity-100")}>
+					<div className={cn(dimmedActionsClass, "pr-1", menuOpen && "pointer-events-auto opacity-100")}>
 						{/* 过滤历史记录入口：hover 常驻（右键菜单同款功能），筛选生效时高亮提示 */}
 						<button
 							type="button"
@@ -226,7 +247,7 @@ export function ProjectTree(props: {
 						)}
 					</div>
 				)}
-			</div>
+			</SidebarRemovalRow>
 		);
 	};
 
@@ -319,9 +340,9 @@ export function ProjectTree(props: {
 	});
 
 	const projectsSection = (
-		<>
+		<section aria-label={t("app.sidebarProjects")} role="tree">
 			{workspaceProjects.length > 0 && (
-				<section aria-label={t("app.sidebarProjects")} role="tree">
+				<div>
 					{/* 分组标题栏：左侧「项目」标题，右侧 = 「+ 添加项目」+ 全部折叠/展开（高频操作外露）
             + 「⋯ 更多操作」。目录存在性重扫属于低频维护动作，收进菜单避免挤占窄侧栏。 */}
 					<div className="flex items-center justify-between px-1 pb-1">
@@ -358,13 +379,13 @@ export function ProjectTree(props: {
 							</DropdownMenu>
 						</div>
 					</div>
-					{workspaceProjects.map(renderProject)}
-				</section>
+				</div>
 			)}
+			<SidebarRemovalList remainingIds={props.controller.catalog.projects.map((project) => project.id)}>{workspaceProjects.map(renderProject)}</SidebarRemovalList>
 			{/* 无任何工作区项目（新用户只有内置 Chat）：显式渲染空态引导。
           此前该分组整体不渲染，用户不知道可以添加项目目录，误以为只能聊天（issue #149）。 */}
 			{workspaceProjects.length === 0 && (
-				<section aria-label={t("app.sidebarProjects")} className="mt-1">
+				<div className="mt-1">
 					<div className="flex items-center justify-between px-1 pb-1">
 						<span className="text-caption font-medium text-muted-foreground">{t("app.sidebarProjects")}</span>
 						<DropdownMenu>
@@ -390,10 +411,18 @@ export function ProjectTree(props: {
 							{t("app.addProject")}
 						</Button>
 					</div>
-				</section>
+				</div>
 			)}
-		</>
+		</section>
 	);
 
+	if (props.simple)
+		return (
+			<>
+				{projectsSection}
+				{chatSection}
+				<ActiveSessionsTree controller={props.controller} actions={props.actions} currentSessionId={props.currentSessionId} recentOnly />
+			</>
+		);
 	return <>{props.controller.navTab === "active" ? <ActiveSessionsTree controller={props.controller} actions={props.actions} currentSessionId={props.currentSessionId} /> : props.controller.navTab === "chats" ? chatSection : projectsSection}</>;
 }

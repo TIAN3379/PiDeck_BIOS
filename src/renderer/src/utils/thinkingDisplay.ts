@@ -1,7 +1,7 @@
 /**
- * Derive the thinking-level text from the latest runtime or catalog value.
- * The backend decides whether a live change affects the current turn, so the
- * renderer must not invent a separate "next turn" state.
+ * Derive the thinking-level text from PiDeck's saved selection.
+ * Runtime telemetry remains available elsewhere, but cannot replace the user preference shown
+ * in the composer or picker.
  */
 export type ThinkingDisplayResult = {
 	levels: string[];
@@ -16,9 +16,9 @@ export function computeThinkingDisplay(current: string | undefined): ThinkingDis
 }
 
 /**
- * 底栏/选择器当前思考档位：只在 runtime 仍 live 时优先 state。
- * 与 resolveComposerLiveModel 同一规则，避免残留 state.thinkingLevel 盖住 catalog。
+ * 底栏/选择器当前思考档位只读取会话保存的用户选择或引导页默认。
+ * runtime 回传值描述执行状态，不能改写 PiDeck 的当前选择。
  */
-export function resolveComposerThinkingLevel(input: { state?: string; record?: string; fallback?: string; isLive: boolean }): string | undefined {
-	return (input.isLive ? input.state : undefined) ?? input.record ?? input.fallback;
+export function resolveComposerThinkingLevel(input: { record?: string; fallback?: string }): string | undefined {
+	return input.record ?? input.fallback;
 }

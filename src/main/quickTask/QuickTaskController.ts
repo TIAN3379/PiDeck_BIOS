@@ -67,6 +67,10 @@ export class QuickTaskController {
 	getWorkbenchBounds(): Rectangle | undefined {
 		return this.saved?.bounds;
 	}
+	/** 进入紧凑模式前工作台是否处于最大化/全屏；仅在 getWorkbenchBounds() 有值时有意义。 */
+	wasWorkbenchMaximized(): boolean {
+		return this.saved ? this.saved.maximized || this.saved.fullscreen : false;
+	}
 	async open(path: string): Promise<void> {
 		const requestId = this.state.requestId + 1;
 		// A renderer fetching state during validation must not create a draft from an unchecked path.

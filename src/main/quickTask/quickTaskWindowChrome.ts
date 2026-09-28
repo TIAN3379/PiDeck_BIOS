@@ -19,7 +19,7 @@ export type QuickTaskWindowChromeDeps = {
 	/** 主窗口读取器：mainWindow 是模块级可空变量，必须每次现取而不是捕获快照。 */
 	getWindow: () => BrowserWindow | null;
 	/** 持久化工作台几何（由 index.ts 装配为 saveLastWindowBounds(userData, …)）。 */
-	saveWorkbenchBounds: (size: { width: number; height: number }) => void;
+	saveWorkbenchBounds: (bounds: { x: number; y: number; width: number; height: number; maximized: boolean }) => void;
 };
 
 export class QuickTaskWindowChrome {
@@ -36,15 +36,19 @@ export class QuickTaskWindowChrome {
 	}
 
 	/**
-	 * 关窗时保存工作台几何。
+	 * 关窗时保存工作台几何（位置 + 尺寸 + 是否最大化）。
 	 * 紧凑模式激活期间窗口是 720×760，此时必须存控制器捕获的 saved bounds，
 	 * 否则会把小窗口尺寸写进 lastWindowBounds（下次启动直接变窄）。
+	 * 最大化/全屏时存 normal bounds（还原后的几何），maximized 标记让下次启动先按 normal
+	 * 几何建窗再 maximize——用户从最大化还原时回到原来的位置，而不是屏幕中央。
+	 * 全屏不单独持久化：全屏是临时观看态，按最大化恢复即可。
 	 */
 	saveWorkbenchBoundsOnClose(window: BrowserWindow): void {
 		if (window.isDestroyed()) return;
 		const workbench = this.controller.getWorkbenchBounds();
-		const normal = workbench ?? (window.isMaximized() || window.isFullScreen() ? window.getNormalBounds() : window.getBounds());
-		this.deps.saveWorkbenchBounds({ width: normal.width, height: normal.height });
+		const maximized = workbench ? this.controller.wasWorkbenchMaximized() : window.isMaximized() || window.isFullScreen();
+		const normal = workbench ?? (maximized ? window.getNormalBounds() : window.getBounds());
+		this.deps.saveWorkbenchBounds({ x: normal.x, y: normal.y, width: normal.width, height: normal.height, maximized });
 	}
 
 	/**

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
@@ -33,6 +34,15 @@ test("name 带首尾空白：trim 后拼接", () => {
 	assert.equal(labelOf({ provider: "openai", id: "gpt-4o", name: " GPT-4o " }), "openai/GPT-4o");
 });
 
-test("name 与 id 相同：显示 provider/id（调用方据此省略 tooltip 后缀）", () => {
+test("name 与 id 相同：仍显示 provider/id", () => {
 	assert.equal(labelOf({ provider: "openai", id: "gpt-4o", name: "gpt-4o" }), "openai/gpt-4o");
+});
+
+test("Web 选择器同样用保存名称显示并保留 identity tooltip", () => {
+	const source = readFileSync("src/renderer/src/web/WebHeader.tsx", "utf8");
+	assert.match(source, /resolveModelDisplayName\(model\.modelName,\s*model\.modelId\)/);
+	assert.match(source, /const selectedLabel\s*=\s*model && selectedName \? `\$\{model\.provider\}\/\$\{selectedName\}`/);
+	assert.match(source, /const selectedTooltip\s*=\s*model && selectedName \? `\$\{selectedName\} · \$\{model\.provider\}\/\$\{model\.modelId\}`/);
+	assert.match(source, /const label\s*=\s*`\$\{item\.provider\}\/\$\{name\}`/);
+	assert.match(source, /title=\{`\$\{name\} · \$\{item\.provider\}\/\$\{item\.id\}`\}/);
 });

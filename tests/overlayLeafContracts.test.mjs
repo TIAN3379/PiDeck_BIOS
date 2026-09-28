@@ -102,6 +102,15 @@ const askUiMock = {
 	parseSecurityConfirmTitle: () => null,
 	formatAskTitle: (title) => title.replace(/^\[PI_DECK_PLAN_NEXT\]\s*/u, "").trim(),
 	splitAskOption: (option) => ({ label: option }),
+	emptyAskBatchDraft: () => ({ answers: {}, labels: {}, customAnswerIds: [], inputValues: {}, currentTab: 0, expanded: true }),
+	emptyAskSingleDraft: () => ({ selectedOption: "", value: "", expanded: true }),
+	isSameAskDraftKey: (left, right) => left === right,
+	commitBatchAnswer: (draft, questionId, value, label, wasCustom) => ({
+		...draft,
+		answers: { ...draft.answers, [questionId]: value },
+		labels: { ...draft.labels, [questionId]: label },
+		customAnswerIds: wasCustom && !draft.customAnswerIds.includes(questionId) ? [...draft.customAnswerIds, questionId] : draft.customAnswerIds,
+	}),
 };
 
 test("runtime responder rejects old generation and sends cancelled response with binding", async () => {
@@ -311,6 +320,7 @@ test("allowOther renders a custom input and sends its value through the responde
 				},
 			];
 		},
+		useRef: (initial) => ({ current: initial }),
 		useEffect: () => {
 			cursor += 1;
 		},
@@ -322,6 +332,22 @@ test("allowOther renders a custom input and sends its value through the responde
 		"lucide-react": { Info: () => null },
 		"../../i18n": { t: (key) => key },
 		"../../utils/askUi": askUiMock,
+		// 草稿 atom family：返回带 key 的占位对象，useAtom 按 key 读写 hookStates（切 tab 持久化语义不在此测试范围）
+		"../../atoms/ask-draft-atoms": {
+			askDraftBySessionRequestAtomFamily: (key) => ({ key }),
+		},
+		jotai: {
+			useAtom: (requestAtom) => {
+				const key = requestAtom?.key ?? "";
+				hookStates[`draft:${key}`] ??= undefined;
+				return [
+					hookStates[`draft:${key}`],
+					(next) => {
+						hookStates[`draft:${key}`] = typeof next === "function" ? next(hookStates[`draft:${key}`]) : next;
+					},
+				];
+			},
+		},
 	});
 	const request = { agentId: "a1", requestId: "r-custom", method: "select", title: "Pick", options: ["one"], allowOther: true };
 	const props = {

@@ -17,6 +17,9 @@ dist-runtime/**/*.json
 release*/
 docs-site/.vitepress/cache/
 docs-site/.vitepress/dist/
+# Vite 加载 vitepress 配置时写出的临时模块（config.mts.timestamp-<时间戳>-<哈希>.mjs）：
+# 进程正常退出会自行清理，文件被留在工作区说明上次构建异常中断，不该进版本库。
+docs-site/.vitepress/*.timestamp-*.mjs
 # README 共用图片的生成副本：唯一数据源是 docs/images/<名>，由 docs-site 插件在
 # dev / build 时复制到这里（其余 public/images 下的图仍入库）。
 docs-site/public/images/wechat-qrcode.png

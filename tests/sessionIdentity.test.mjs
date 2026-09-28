@@ -55,6 +55,21 @@ test("treats pi JSONL file-stem timestamps as placeholders, not session titles",
 	assert.equal(looksLikePiSessionFileStem("Untitled"), false);
 });
 
+// 回归 2026-09：Codex jsonl 不带会话名，旧导入器把源文件名当标题写到导入产物，
+// 侧栏显示成一串会话 ID（rollout-2026-07-13T18-44-48-019f5b14-474...）。
+// 这类标题必须被识别为占位名，才能在重导入后接受状态库里的真实会话名。
+test("treats Codex rollout file stems (full and cleanTitle-truncated) as placeholders", () => {
+	const { looksLikeCodexSessionFileStem } = loadModule();
+	assert.equal(looksLikeCodexSessionFileStem("rollout-2026-07-13T18-44-48-019f5b14-4742-7ca1-8c11-784dd0faf0d4.jsonl"), true);
+	assert.equal(looksLikeCodexSessionFileStem("rollout-2026-07-13T18-44-48-019f5b14-4742-7ca1-8c11-784dd0faf0d4"), true);
+	// cleanTitle 截断形态：40 字符 + "..."（UUID 只保留前 11 位）
+	assert.equal(looksLikeCodexSessionFileStem("rollout-2026-07-13T18-44-48-019f5b14-474..."), true);
+	// 普通标题/其它来源文件名不受影响
+	assert.equal(looksLikeCodexSessionFileStem("梳理智能巡检论文思路"), false);
+	assert.equal(looksLikeCodexSessionFileStem("codex_019f5b14-4742.jsonl"), false);
+	assert.equal(looksLikeCodexSessionFileStem("rollout-notatimestamp"), false);
+});
+
 test("canonicalizes native session paths without collapsing WSL case", () => {
 	const { canonicalizeSessionPath } = loadModule();
 	assert.equal(canonicalizeSessionPath("C:\\Users\\Dev\\.pi\\sessions\\A.jsonl/", "native"), "c:/users/dev/.pi/sessions/a.jsonl");

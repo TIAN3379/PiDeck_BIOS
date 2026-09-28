@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { SidebarRemovalList, SidebarRemovalRow } from "./SidebarRemovalRow";
 import { ChevronDown, ChevronUp, Ellipsis, HatGlasses, Image as ImageIcon, Pin, Trash2 } from "lucide-react";
 import { useAtomValue } from "jotai";
 import type { AgentTab, Project, SessionRecord, SessionSummary } from "../../../../shared/types";
@@ -8,11 +9,13 @@ import { sessionRuntimeUiByIdAtom } from "../../atoms/session-atoms";
 import { t } from "../../i18n";
 import { formatRelativeTime } from "../../utils/relativeTime";
 import { hasPendingAskForSession } from "../../utils/askUi";
+import { BridgeGuiSlot } from "../bridge/BridgeSlot";
 import { filterSidebarSessions, getBoundSidebarRuntimeAgent, type SidebarController } from "../../hooks/useSidebarController";
 import { Button } from "../ui-shadcn/button";
 import type { SidebarActions } from "./SidebarContent";
 import { PendingAskBadge } from "./PendingAskBadge";
 import { SessionBackendMark, SessionSourceBadge } from "../session/SessionSourceBadge";
+import { SessionActivityIndicator } from "../session/SessionActivityIndicator";
 import { SessionHoverCard } from "./SessionHoverCard";
 import { TitleScrollText } from "./TitleScrollText";
 import { cn } from "../../lib/utils";
@@ -115,7 +118,12 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 	const showMoreText = props.nested ? showMoreLabel : t("app.projectShowMoreChildren", { count: "" }).replace(/\s+$/, "");
 	const collapseLabel = t("app.projectCollapseChildren");
 	const hasRows = catalogLoading || draftSessions.length > 0 || display.visibleChildren.length > 0 || display.hiddenChildCount > 0;
-	if (!hasRows) return null;
+	const [retainingExit, setRetainingExit] = useState(hasRows);
+	useEffect(() => {
+		if (hasRows) setRetainingExit(true);
+	}, [hasRows]);
+	// 最后一条也必须留到退场结束；空树最终仍不占 session-card 的空间。
+	if (!hasRows && !retainingExit) return null;
 
 	/** 单击走设置默认模式（App 层读 sessionTabOpenMode）；双击显式常驻。
 	 *  不设本地默认值：undefined 透传后由 App 的 sessions.open 用设置值兜底 */
@@ -168,7 +176,13 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 		return (
 			<div key={session.id} className={rowContainerClass} onContextMenu={(event) => openContext(event, session, false)}>
 				<SessionHoverCard session={session} title={title} projectName={props.project.name} disabled={Boolean(props.controller.menu)}>
-					<button type="button" className={cn(sessionRowClass, "session-row codex-subagent-sidebar-row pl-2", session.id === props.currentSessionId && selectedRowClass)} onClick={() => openSession(session.id)} onDoubleClick={() => openSession(session.id, "permanent")} {...sessionDragProps(session.id)}>
+					<button
+						type="button"
+						className={cn(sessionRowClass, "session-row codex-subagent-sidebar-row pl-2", session.id === props.currentSessionId && selectedRowClass)}
+						onClick={() => openSession(session.id)}
+						onDoubleClick={props.actions.sessions.simpleNavigation ? undefined : () => openSession(session.id, "permanent")}
+						{...sessionDragProps(session.id)}
+					>
 						<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover/row:pr-7 group-focus-within/row:pr-7">
 							<div className="conversation-title flex min-w-0 items-center gap-1.5">
 								<TitleScrollText text={title} />
@@ -232,7 +246,7 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 			// session_info event, so only use it for an unbound runtime with no record.
 			const displayTitle = agentSession ? ("title" in agentSession ? agentSession.title : agentSession.name || child.agent.title) : child.agent.title;
 			return (
-				<Fragment key={child.key}>
+				<SidebarRemovalRow key={child.key} itemId={agentSession?.id ?? child.agent.id}>
 					{/* 运行中 Agent 行：标题常被 truncate（如 "JZSSC40..."），悬浮展示完整标题 */}
 					<div
 						className={rowContainerClass}
@@ -248,12 +262,16 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 								onClick={() => {
 									if (agentSession) openSession(agentSession.id);
 								}}
-								onDoubleClick={() => {
-									if (agentSession) openSession(agentSession.id, "permanent");
-								}}
+								onDoubleClick={
+									props.actions.sessions.simpleNavigation
+										? undefined
+										: () => {
+												if (agentSession) openSession(agentSession.id, "permanent");
+											}
+								}
 								{...(agentSession ? sessionDragProps(agentSession.id) : {})}
 							>
-								{renderRuntimeStatusDot(child.agent.status)}
+								{props.actions.sessions.simpleNavigation ? <SessionActivityIndicator status={child.agent.status} sessionId={agentSession?.id} /> : renderRuntimeStatusDot(child.agent.status)}
 								<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover/row:pr-7 group-focus-within/row:pr-7">
 									<div className="conversation-title flex min-w-0 items-center gap-1.5">
 										{/* 运行中 Agent 行：标题常被 truncate（如 "JZSSC40..."），悬浮展示完整标题；
@@ -289,14 +307,14 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 						</Button>
 					</div>
 					{renderSubagents(groupKey, child.codexSubagents, child.piSubagents)}
-				</Fragment>
+				</SidebarRemovalRow>
 			);
 		}
 		const runtime = getBoundSidebarRuntimeAgent(props.controller.catalog, child.session.id);
 		const runtimeSnapshot = props.controller.catalog.runtimeBySessionId[child.session.id];
 		const pinned = props.controller.isSessionPinned(child.session.id);
 		return (
-			<Fragment key={child.session.id}>
+			<SidebarRemovalRow key={child.session.id} itemId={child.session.id}>
 				<div className={rowContainerClass} onContextMenu={(event) => openContext(event, child.session)}>
 					<SessionHoverCard session={child.session} title={child.session.name} projectName={props.project.name} status={runtimeSnapshot?.status} disabled={Boolean(props.controller.menu)}>
 						<button
@@ -309,10 +327,10 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 								child.session.id === props.currentSessionId && selectedRowClass,
 							)}
 							onClick={() => openSession(child.session.id)}
-							onDoubleClick={() => openSession(child.session.id, "permanent")}
+							onDoubleClick={props.actions.sessions.simpleNavigation ? undefined : () => openSession(child.session.id, "permanent")}
 							{...sessionDragProps(child.session.id)}
 						>
-							{renderRuntimeStatusDot(runtimeSnapshot?.status)}
+							{props.actions.sessions.simpleNavigation ? <SessionActivityIndicator status={runtimeSnapshot?.status} sessionId={child.session.id} /> : renderRuntimeStatusDot(runtimeSnapshot?.status)}
 							{pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
 							<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover/row:pr-7 group-focus-within/row:pr-7">
 								<div className="conversation-title flex min-w-0 items-center gap-1.5">
@@ -353,44 +371,65 @@ export function SessionTree(props: { project: Project; sessions: readonly Sessio
 						<Ellipsis size={14} aria-hidden="true" />
 					</Button>
 				</div>
+				{/* GUI 扩展桥：会话列表条目附加落点（ctx.gui.setSessionItemExtra）。
+				    **追加**在行容器之后、子代理列表之前 —— 不改行本身的结构与 hover/拖拽行为（§7.4 只追加）。
+				    无贡献时返回 null，不占位。
+				    注：仓库无统一 SessionItem 组件，此处只接了 SessionTree 的历史会话行；
+				    ActiveSessionsTree / RecentSessionsSection / SessionTabsBar 仍为 pending。 */}
+				<BridgeGuiSlot sessionId={child.session.id} slot="session.item" className="flex flex-col gap-0.5 pl-5" />
 				{renderSubagents(groupKey, child.codexSubagents, child.piSubagents)}
-			</Fragment>
+			</SidebarRemovalRow>
 		);
 	};
 
 	return (
 		<div className={cn(props.nested ? "worktree-children m-0 border-0 bg-transparent p-0" : "session-card", "flex flex-col gap-0")}>
-			{draftSessions.map((session) => {
-				const runtime = props.controller.catalog.runtimeBySessionId[session.id];
-				return (
-					<div key={`draft:${session.id}`} className={cn("draft-session-row group/draft grid items-center gap-1", "grid-cols-[minmax(0,1fr)_2rem]")} onContextMenu={(event) => openDraftContext(event, session)}>
-						<SessionHoverCard session={session} title={session.title} projectName={props.project.name} status={runtime?.status} disabled={Boolean(props.controller.menu)}>
-							<button type="button" className={cn(sessionRowClass, "session-row draft-session-trigger", session.id === props.currentSessionId && selectedRowClass)} onClick={() => openSession(session.id)} onDoubleClick={() => openSession(session.id, "permanent")} {...sessionDragProps(session.id)}>
-								<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover/row:pr-7 group-focus-within/row:pr-7">
-									<div className="conversation-title flex min-w-0 items-center gap-1.5">
-										{renderRuntimeStatusDot(runtime?.status)}
-										{/* 草稿会话：选中背景仍保留，聚焦行也允许 hover 查看完整标题 */}
-										<TitleScrollText text={session.title} className="font-medium" />
-										<SessionBackendMark backend={session.backend} />
-										{/* 草稿会话同样按会话粒度标记待确认 ask。 */}
-										{hasPendingAskForSession(session.id, sessionRuntimeUiById) && <PendingAskBadge count={1} />}
-									</div>
-								</div>
-							</button>
-						</SessionHoverCard>
-						<Button variant="ghost" size="icon" className="draft-session-delete" aria-label={t("common.delete")} title={t("common.delete")} onClick={() => void props.actions.sessions.deleteDraft(session)}>
-							<Trash2 size={14} aria-hidden="true" />
-						</Button>
+			<SidebarRemovalList
+				remainingIds={[...props.sessions.map((session) => session.id), ...projectAgents.map((agent) => agent.id)]}
+				onExitComplete={() => {
+					if (!hasRows) setRetainingExit(false);
+				}}
+			>
+				{draftSessions.map((session) => {
+					const runtime = props.controller.catalog.runtimeBySessionId[session.id];
+					return (
+						<SidebarRemovalRow key={`draft:${session.id}`} itemId={session.id}>
+							<div className={cn("draft-session-row group/draft grid items-center gap-1", "grid-cols-[minmax(0,1fr)_2rem]")} onContextMenu={(event) => openDraftContext(event, session)}>
+								<SessionHoverCard session={session} title={session.title} projectName={props.project.name} status={runtime?.status} disabled={Boolean(props.controller.menu)}>
+									<button
+										type="button"
+										className={cn(sessionRowClass, "session-row draft-session-trigger", session.id === props.currentSessionId && selectedRowClass)}
+										onClick={() => openSession(session.id)}
+										onDoubleClick={props.actions.sessions.simpleNavigation ? undefined : () => openSession(session.id, "permanent")}
+										{...sessionDragProps(session.id)}
+									>
+										<div className="conversation-body min-w-0 flex-1 transition-[padding-right] group-hover/row:pr-7 group-focus-within/row:pr-7">
+											<div className="conversation-title flex min-w-0 items-center gap-1.5">
+												{props.actions.sessions.simpleNavigation ? <SessionActivityIndicator status={runtime?.status} sessionId={session.id} /> : renderRuntimeStatusDot(runtime?.status)}
+												{/* 草稿会话：选中背景仍保留，聚焦行也允许 hover 查看完整标题 */}
+												<TitleScrollText text={session.title} className="font-medium" />
+												<SessionBackendMark backend={session.backend} />
+												{/* 草稿会话同样按会话粒度标记待确认 ask。 */}
+												{hasPendingAskForSession(session.id, sessionRuntimeUiById) && <PendingAskBadge count={1} />}
+											</div>
+										</div>
+									</button>
+								</SessionHoverCard>
+								<Button variant="ghost" size="icon" className="draft-session-delete" aria-label={t("common.delete")} title={t("common.delete")} onClick={() => void props.actions.sessions.deleteDraft(session)}>
+									<Trash2 size={14} aria-hidden="true" />
+								</Button>
+							</div>
+						</SidebarRemovalRow>
+					);
+				})}
+				{catalogLoading && (
+					<div key="catalog-loading" className="project-session-loading">
+						<div className="loader animate-pideck-spin" />
+						<span>{t("app.projectSessionsLoading")}</span>
 					</div>
-				);
-			})}
-			{catalogLoading && (
-				<div className="project-session-loading">
-					<div className="loader animate-pideck-spin" />
-					<span>{t("app.projectSessionsLoading")}</span>
-				</div>
-			)}
-			{display.visibleChildren.map(renderChild)}
+				)}
+				{display.visibleChildren.map(renderChild)}
+			</SidebarRemovalList>
 
 			{(display.hiddenChildCount > 0 || canCollapseChildren) && (
 				<div className="flex min-w-0 items-center gap-1">

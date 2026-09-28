@@ -47,6 +47,12 @@ function extractToolDetails(result: unknown): unknown {
 	return (result as { details?: unknown }).details;
 }
 
+function extractRawCommand(args: unknown): string | undefined {
+	if (!args || typeof args !== "object" || !("command" in args)) return undefined;
+	const command = args.command;
+	return typeof command === "string" ? command : undefined;
+}
+
 /** 对超长工具文本做首尾截断，保留头部和尾部以兼顾开头信息和错误堆栈。 */
 export function truncateForDetail(text: unknown, translate: ToolDetailTranslate, maxChars = TOOL_DETAIL_MAX_CHARS): string {
 	// safeJson/extractToolResultText 在某些输入下可能返回 undefined（如 JSON.stringify(undefined)），
@@ -90,15 +96,12 @@ export function formatToolDetail(toolName: string, args: unknown, result: unknow
 		}
 	}
 	const argsText = argsObj ? truncateForDetail(safeJson(argsObj), translate) : "";
+	const rawCommand = toolName.trim().toLowerCase() === "bash" ? extractRawCommand(argsObj) : undefined;
+	const commandText = rawCommand === undefined ? "" : truncateForDetail(rawCommand, translate);
 	const resultText = result ? truncateForDetail(extractToolResultText(result) || safeJson(result), translate) : "";
 	const detailsText = details ? truncateForDetail(safeJson(details), translate) : "";
 	const status = translate(isError ? "mainTool.failed" : "mainTool.done");
-	const sections = [
-		translate("mainTool.name", { name: toolName || "tool" }),
-		translate("mainTool.status", { status }),
-		args ? translate("mainTool.arguments", { value: argsText }) : "",
-		result ? translate("mainTool.result", { value: resultText }) : "",
-		details ? translate("mainTool.details", { value: detailsText }) : "",
-	].filter(Boolean);
+	const argsSection = args ? (rawCommand !== undefined ? translate("mainTool.command", { command: commandText }) : translate("mainTool.arguments", { value: argsText })) : "";
+	const sections = [translate("mainTool.name", { name: toolName || "tool" }), translate("mainTool.status", { status }), argsSection, result ? translate("mainTool.result", { value: resultText }) : "", details ? translate("mainTool.details", { value: detailsText }) : ""].filter(Boolean);
 	return sections.join("\n\n");
 }

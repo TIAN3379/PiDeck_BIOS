@@ -93,10 +93,12 @@ function cleanScanTitle(value?: string): string | undefined {
  * session_info 名 > 旧版私有 sessionName > 首条 user 文本 > 首条 assistant 文本）。
  * 推断不出返回 undefined（空文件/只有 tool 消息），由调用方兜底 Untitled。
  *
- * @returns { name, fromSessionInfo }：fromSessionInfo 仅保留来源信息，供诊断与
+ * @returns { name, fromSessionInfo, fallbackName }：fromSessionInfo 仅保留来源信息，供诊断与
  * 首次发现标题推断使用。PiDeck catalog 已有记录后不再接受任何 JSONL 名称反向写入。
+ * fallbackName 是本文件的弱兜底候选（首条 user 文本，其次首条 assistant 文本），
+ * 与最终 name 取谁无关：#266 存量自愈要用它判断 catalog 里存的这一行是不是当年被误锁的首句。
  */
-function inferScanNameFromLines(lines: string[], extractText: (content: unknown) => string): { name?: string; fromSessionInfo: boolean } {
+function inferScanNameFromLines(lines: string[], extractText: (content: unknown) => string): { name?: string; fromSessionInfo: boolean; fallbackName?: string } {
 	let latestSessionInfoName: string | undefined;
 	let name: string | undefined;
 	let firstUserText = "";
@@ -127,11 +129,12 @@ function inferScanNameFromLines(lines: string[], extractText: (content: unknown)
 	// 取出 clean 前先保留来源标记：清洗后也可能是 timestamp/stem，
 	// 此时它不再能作为 session_info 标题使用。
 	const infoName = cleanScanTitle(latestSessionInfoName) || cleanScanTitle(name);
-	if (infoName) return { name: infoName, fromSessionInfo: true };
 	// 首条 user 可能是展开后的 `/模板名` / `&会话引用` 块：先剥块正文，只拿用户自己写的字当回退标题，
 	// 否则重开/扫描会把 `<prompt_template …>` 原文写回 catalog（与 inferTitleFromMessages 同一套清洗）。
+	// 弱兜底候选先算出来，权威名赢的时候也要带出去（#266 指纹修复的比对基准）。
 	const fallback = cleanScanTitle(textForSessionTitle(firstUserText)) || cleanScanTitle(firstAssistantText);
-	if (fallback) return { name: fallback, fromSessionInfo: false };
+	if (infoName) return { name: infoName, fromSessionInfo: true, fallbackName: fallback };
+	if (fallback) return { name: fallback, fromSessionInfo: false, fallbackName: fallback };
 	return { name: undefined, fromSessionInfo: false };
 }
 
@@ -170,6 +173,14 @@ export class SessionScanner {
 	 * 大会话继续受窗口上界保护，且 catalog 不会接受其外部标题反向写入。
 	 */
 	private static readonly SUMMARY_NAME_FULL_SCAN_MAX_BYTES = 1024 * 1024;
+	/**
+	 * 「文件内真首句」的有界读取上限（#266 存量自愈的第二指纹基准）。
+	 *
+	 * 系统提示动辄几百 KB，64KB 的头窗口经常还没进到第一条用户消息，于是头/尾窗口兜底会
+	 * 退化成「尾部某条消息」——而当年被缺陷版本锁进 catalog 的首句兜底来自实时视图的真首句。
+	 * 8MB 覆盖「首条用户消息之前的系统提示」这一常见量级，同时给读取量一个硬上界。
+	 */
+	private static readonly FIRST_MESSAGE_TITLE_MAX_BYTES = 8 * 1024 * 1024;
 	/**
 	 * 整文件读入的体量上限：超过即拒绝（抛可读错误）。
 	 *
@@ -1685,11 +1696,12 @@ export class SessionScanner {
 		};
 	}
 
-	/** 导入器约定文件名：codex_<id>.jsonl / claude_<id>.jsonl / opencode_<id>.jsonl / zcode_<id>.jsonl / cursor_<id>.jsonl。 */
+	/** 导入器约定文件名：codex_<id>.jsonl / claude_<id>.jsonl / qoder_<id>.jsonl / opencode_<id>.jsonl / zcode_<id>.jsonl / cursor_<id>.jsonl。 */
 	private inferSourceFromFileName(filePath: string): NonNullable<SessionSummary["source"]> {
 		const base = basename(filePath).toLowerCase();
 		if (base.startsWith("codex_")) return "codex";
 		if (base.startsWith("claude_")) return "claude";
+		if (base.startsWith("qoder_")) return "qoder";
 		if (base.startsWith("opencode_")) return "opencode";
 		if (base.startsWith("zcode_")) return "zcode";
 		if (base.startsWith("workbuddy_")) return "workbuddy";
@@ -1780,6 +1792,7 @@ export class SessionScanner {
 					codexAgentRole = this.optionalString(entry.agentRole);
 					codexAgentNickname = this.optionalString(entry.agentNickname);
 				} else if (entry.type === "claude_import") source = "claude";
+				else if (entry.type === "qoder_import") source = "qoder";
 				else if (entry.type === "opencode_import") source = "opencode";
 				else if (entry.type === "zcode_import") source = "zcode";
 				else if (entry.type === "workbuddy_import") source = "workbuddy";
@@ -1892,6 +1905,8 @@ export class SessionScanner {
 			filePath,
 			projectPath: projectPath ? this.canonicalProjectPath(projectPath, isWsl) : this.inferProjectPathFromFile(filePath),
 			name: inferredName,
+			// 无名称时的会话占位文案不是权威名；有名称时透传来源供 catalog 定所有权（#266）。
+			nameFromSessionInfo: inferred.name ? inferred.fromSessionInfo : undefined,
 			preview: preview.slice(0, 160),
 			updatedAt: info.mtimeMs,
 			messageCount,
@@ -1984,7 +1999,7 @@ export class SessionScanner {
 	 * `includeTitle=true` 时有界读取头尾，并在小会话中精确扫描最后一个 session_info。
 	 * `false` 时只读取有界头部，供已锁定 catalog 记录补结构元数据而不触碰标题窗口。
 	 */
-	private async readHeadAndInfer(filePath: string, includeTitle = true): Promise<{ raw: string; name: string | undefined; nameFromSessionInfo: boolean } | null> {
+	private async readHeadAndInfer(filePath: string, includeTitle = true): Promise<{ raw: string; name: string | undefined; nameFromSessionInfo: boolean; fallbackName?: string } | null> {
 		const isWsl = this.isWslPath(filePath);
 		try {
 			const windowBytes = SessionScanner.SUMMARY_NAME_WINDOW_BYTES;
@@ -2003,10 +2018,11 @@ export class SessionScanner {
 			if (version.size <= SessionScanner.SUMMARY_NAME_FULL_SCAN_MAX_BYTES && version.size > windowBytes) {
 				const latestSessionInfoName = await this.inferLatestSessionInfoFromSmallFile(filePath, version.size);
 				if (latestSessionInfoName) {
-					return { raw: head, name: latestSessionInfoName, nameFromSessionInfo: true };
+					// 权威名赢，但弱兜底候选仍要带出去（legacy 存量条目的指纹比对基准）。
+					return { raw: head, name: latestSessionInfoName, nameFromSessionInfo: true, fallbackName: inferred.fallbackName };
 				}
 			}
-			return { raw: head, name: inferred.name, nameFromSessionInfo: inferred.fromSessionInfo };
+			return { raw: head, name: inferred.name, nameFromSessionInfo: inferred.fromSessionInfo, fallbackName: inferred.fallbackName };
 		} catch {
 			// 读不到（权限/锁定/不存在）：返回 null，调用方按 best-effort 处理，不拒绝文件。
 			return null;
@@ -2062,12 +2078,34 @@ export class SessionScanner {
 	 * provisional 标题阶段采用该名称，后续 pi/TUI 改名不会覆盖 PiDeck 显示标题。
 	 * `includeTitle:false` 只返回头部有效性和结构元数据，不读取尾部或小文件全文。
 	 */
-	async inferSessionNameAndValidity(filePath: string, options: { includeTitle?: boolean } = {}): Promise<{ name?: string; nameFromSessionInfo?: boolean; valid?: boolean; parentSessionPath?: string; forked?: boolean }> {
+	async inferSessionNameAndValidity(filePath: string, options: { includeTitle?: boolean; includeFirstUserText?: boolean } = {}): Promise<{ name?: string; nameFromSessionInfo?: boolean; valid?: boolean; parentSessionPath?: string; forked?: boolean; fallbackName?: string; firstUserText?: string }> {
 		const head = await this.readHeadAndInfer(filePath, options.includeTitle !== false);
 		if (!head) return {};
 		const parentSessionPath = await this.detectFlatSubagentParentFromHead(filePath, head.raw);
 		const forked = this.detectForkedFromHead(head.raw);
-		return { name: head.name, nameFromSessionInfo: head.nameFromSessionInfo, valid: isValidPiSessionFileHead(head.raw), parentSessionPath, forked: forked || undefined };
+		// #266 存量自愈的第二指纹基准：只有真首句才和当年锁进 catalog 的标题可比。调用方仅在
+		// 「窗口兜底对不上目录标题」时才要（多一次有界读），默认不读。
+		const firstUserText = options.includeFirstUserText ? await this.inferFirstMessageTitle(filePath) : undefined;
+		return { name: head.name, nameFromSessionInfo: head.nameFromSessionInfo, valid: isValidPiSessionFileHead(head.raw), parentSessionPath, forked: forked || undefined, fallbackName: head.fallbackName, firstUserText };
+	}
+
+	/**
+	 * 有界读取文件开头，取「文件内首条 user 文本」（其次首条 assistant 文本）。
+	 *
+	 * 与 readHeadAndInfer 的头/尾窗口不同：这里从头往后单调读，不会因为 64KB 头窗口还没读到第一条
+	 * 用户消息（系统提示很大时很常见）就退化成「尾部某条消息」。用于 #266 存量自愈的指纹比对——
+	 * 当年被锁进 catalog 的首句兜底来自实时视图的真首句，必须用同一基准才比得上。
+	 *
+	 * 读取有界（FIRST_MESSAGE_TITLE_MAX_BYTES）：超限时宁可放弃比对（保持原标题），不做无界扫描。
+	 */
+	async inferFirstMessageTitle(filePath: string, maxBytes = SessionScanner.FIRST_MESSAGE_TITLE_MAX_BYTES): Promise<string | undefined> {
+		try {
+			const prefix = this.isWslPath(filePath) ? await this.readWslFileHead(filePath, maxBytes) : await this.readLocalFilePrefix(filePath, maxBytes);
+			// 末尾可能截断半行：inferScanNameFromLines 会跳过不可解析行。
+			return inferScanNameFromLines(prefix.split(/\r?\n/).filter(Boolean), (content) => this.extractText(content)).fallbackName;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**

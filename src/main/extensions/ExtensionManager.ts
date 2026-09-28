@@ -8,7 +8,7 @@ import type { AppSettings, DisabledExtensionEntry, PiCliUpdateResult, PiExtensio
 import type { PiLocator } from "../pi/PiLocator";
 import { toWslLinuxPath, toWindowsHostPath, type WslEnvironment } from "../wsl/WslPaths";
 import type { MainProcessTranslationKey } from "../../shared/i18n/mainProcessCopy";
-import { BUILT_IN_EXTENSIONS, readEffectiveBuiltInExtensionsVersion, resolveBuiltInExtensionPath, type BuiltInExtensionPathRoots } from "./builtInExtensions";
+import { BUILT_IN_EXTENSIONS, INTERNAL_BUILT_IN_EXTENSIONS, readEffectiveBuiltInExtensionsVersion, resolveBuiltInExtensionPath, type BuiltInExtensionPathRoots } from "./builtInExtensions";
 import { MIN_PI_MINOR_VERSION_FOR_EXTENSION_WHITELIST, parsePiMinorVersion } from "./extensionVersionGate";
 // 版本比较与应用更新检查共用同一实现（含预发布语义：beta < 同号正式版）。
 import { compareVersions } from "../utils/versionCompare";
@@ -219,7 +219,7 @@ export class ExtensionManager {
 
 		// 已标记移除但磁盘仍有残留时主动清掉，修复「UI 已禁用但仍冲突」的历史状态。
 		for (const builtInName of removedBuiltIn) {
-			if (!builtInName.startsWith("pi-deck-")) continue;
+			if (!builtInName.startsWith("pi-deck-") || (INTERNAL_BUILT_IN_EXTENSIONS as readonly string[]).includes(builtInName)) continue;
 			await this.removeBuiltInFile(builtInName).catch(() => undefined);
 		}
 
@@ -336,6 +336,9 @@ export class ExtensionManager {
 		const normalized = source.trim();
 		if (!normalized.startsWith("pi-deck-")) {
 			throw new Error("只能操作内置扩展");
+		}
+		if ((INTERNAL_BUILT_IN_EXTENSIONS as readonly string[]).includes(normalized)) {
+			throw new Error("内部内置扩展不可禁用");
 		}
 		const current = this.getPiDeckSettings().removedBuiltInExtensions ?? [];
 		if (!current.includes(normalized)) {

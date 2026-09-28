@@ -13,7 +13,12 @@
 
 import type { UpdateSourceId } from "./types/settings";
 
-/** 更新所指向的 GitHub 仓库坐标（唯一事实来源，与 main/update/releaseRepo.ts 同源）。 */
+/**
+ * 更新所指向的 GitHub 仓库坐标（唯一事实来源，main/update/releaseRepo.ts 直接复用）。
+ *
+ * 仓库已由 pi-desktop 更名为 PiDeck：旧名只能靠 GitHub 改名重定向工作，一旦重定向失效
+ * （旧名被回收/被他人注册）更新检查会直接 404，禁止再回填旧名。
+ */
 export const UPDATE_REPO_OWNER = "ayuayue";
 export const UPDATE_REPO = "PiDeck";
 

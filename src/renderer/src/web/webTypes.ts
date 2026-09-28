@@ -5,7 +5,7 @@
  * 由 webApi.ts 轮询填充。会话/运行态只读展示用，不持有桌面端 atoms。
  */
 
-import type { AgentUiBatchQuestion } from "../../../shared/types";
+import type { AgentUiBatchQuestion, SessionModelPreference } from "../../../shared/types";
 
 export type WebProject = {
 	id: string;
@@ -24,7 +24,7 @@ export type WebSession = {
 	title: string;
 	status: string;
 	projectPath?: string;
-	model?: { provider: string; modelId: string };
+	model?: SessionModelPreference;
 	thinkingLevel?: string;
 	/** 运行时后端（pi/dsh；缺省 pi），侧栏/头部徽标展示用 */
 	backend?: import("../../../shared/types").AgentBackend;

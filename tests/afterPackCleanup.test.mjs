@@ -61,7 +61,7 @@ test("afterPack cleanup preserves the Lark SDK package main entry", async () => 
 		await mkdir(dirname(archive), { recursive: true });
 		await createAsarPackage(sourceDir, archive);
 
-		await afterPackCleanup({ appOutDir });
+		await afterPackCleanup({ appOutDir, verifyNodePtyRuntime: false });
 
 		const entries = normalizedEntries(archive);
 		assert.ok(entries.includes("node_modules/@larksuiteoapi/node-sdk/lib/index.js"), "the package.json main entry must remain in the final asar");
@@ -112,15 +112,15 @@ test("afterPack cleanup keeps the target arch node-pty prebuild when cross-build
 	try {
 		const sourceDir = join(appOutDir, "fixture");
 		const archive = join(appOutDir, "resources", "app.asar");
+		const ptyDir = join(sourceDir, "node_modules", "node-pty");
 		const prebuildsDir = join(appOutDir, "resources", "app.asar.unpacked", "node_modules", "node-pty", "prebuilds");
 
-		await put(join(sourceDir, "node_modules", "node-pty", "README.md"), "fixture documentation\n");
-		await mkdir(dirname(archive), { recursive: true });
-		await createAsarPackage(sourceDir, archive);
-
+		await put(join(ptyDir, "README.md"), "fixture documentation\n");
 		for (const archName of ["linux-x64", "linux-arm64", "darwin-x64", "win32-x64"]) {
-			await put(join(prebuildsDir, archName, "pty.node"), "NATIVE");
+			await put(join(ptyDir, "prebuilds", archName, "pty.node"), "NATIVE");
 		}
+		await mkdir(dirname(archive), { recursive: true });
+		await createAsarPackageWithOptions(sourceDir, archive, { unpack: "*.node" });
 
 		// electronPlatformName + arch(3=arm64) 是 electron-builder AfterPackContext 的形状
 		await afterPackCleanup({ appOutDir, electronPlatformName: "linux", arch: 3 });
@@ -137,15 +137,15 @@ test("afterPack cleanup falls back to host arch when context arch is absent", as
 	try {
 		const sourceDir = join(appOutDir, "fixture");
 		const archive = join(appOutDir, "resources", "app.asar");
+		const ptyDir = join(sourceDir, "node_modules", "node-pty");
 		const prebuildsDir = join(appOutDir, "resources", "app.asar.unpacked", "node_modules", "node-pty", "prebuilds");
 
-		await put(join(sourceDir, "node_modules", "node-pty", "README.md"), "fixture documentation\n");
-		await mkdir(dirname(archive), { recursive: true });
-		await createAsarPackage(sourceDir, archive);
-
+		await put(join(ptyDir, "README.md"), "fixture documentation\n");
 		for (const archName of ["linux-x64", "win32-x64"]) {
-			await put(join(prebuildsDir, archName, "pty.node"), "NATIVE");
+			await put(join(ptyDir, "prebuilds", archName, "pty.node"), "NATIVE");
 		}
+		await mkdir(dirname(archive), { recursive: true });
+		await createAsarPackageWithOptions(sourceDir, archive, { unpack: "*.node" });
 
 		// 不传 arch/electronPlatformName：退化为构建机平台，保持旧行为不崩
 		await afterPackCleanup({ appOutDir });
@@ -171,7 +171,7 @@ test("afterPack cleanup keeps versioned libvips shared objects unpacked", async 
 		const relativeLibvipsPath = "node_modules/@deepseek-ai/dsh-attachment-local/node_modules/@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.18.3";
 		assert.equal(isUnpackedInHeader(archive, relativeLibvipsPath), true, "fixture must start with libvips outside app.asar");
 
-		await afterPackCleanup({ appOutDir });
+		await afterPackCleanup({ appOutDir, verifyNodePtyRuntime: false });
 
 		assert.equal(isUnpackedInHeader(archive, relativeLibvipsPath), true, "repacking asar must preserve versioned ELF libraries outside app.asar");
 		assert.equal(normalizedEntries(archive).includes("node_modules/@deepseek-ai/dsh-attachment-local/node_modules/@img/sharp-libvips-linux-x64/lib/README.md"), false, "the fixture must exercise a real afterPack cleanup and repack");
@@ -180,7 +180,51 @@ test("afterPack cleanup keeps versioned libvips shared objects unpacked", async 
 	}
 });
 
-test("afterPack cleanup keeps node-pty unpacked after asar repack", async () => {
+test("afterPack preserves Linux source-built node-pty when no target prebuild exists", async () => {
+	const appOutDir = await mkdtemp(join(tmpdir(), "pideck-after-pack-linux-pty-"));
+	try {
+		const sourceDir = join(appOutDir, "fixture");
+		const archive = join(appOutDir, "resources", "app.asar");
+		const ptyDir = join(sourceDir, "node_modules", "node-pty");
+		const ptyNodeRel = "node_modules/node-pty/build/Release/pty.node";
+
+		await put(join(ptyDir, "lib", "index.js"), "module.exports = {};\n");
+		await put(join(ptyDir, "build", "Release", "pty.node"), "NATIVE_BUILD");
+		await put(join(ptyDir, "README.md"), "fixture documentation that forces a repack\n");
+		await mkdir(dirname(archive), { recursive: true });
+		await createAsarPackageWithOptions(sourceDir, archive, { unpack: "*.node" });
+
+		await afterPackCleanup({ appOutDir, electronPlatformName: "linux", arch: 1 });
+
+		const { existsSync } = await import("node:fs");
+		const unpackedPty = join(appOutDir, "resources", "app.asar.unpacked", "node_modules", "node-pty");
+		assert.equal(isUnpackedInHeader(archive, ptyNodeRel), true, "repacking must keep Linux build/Release/pty.node unpacked");
+		assert.equal(existsSync(join(unpackedPty, "build", "Release", "pty.node")), true, "without a linux prebuild, build/Release/pty.node is the only loadable runtime artifact");
+		assert.equal(normalizedEntries(archive).includes("node_modules/node-pty/README.md"), false, "the fixture must exercise an asar repack");
+	} finally {
+		await rm(appOutDir, { recursive: true, force: true });
+	}
+});
+
+test("afterPack fails closed when node-pty has no loadable native artifact", async () => {
+	const appOutDir = await mkdtemp(join(tmpdir(), "pideck-after-pack-missing-pty-"));
+	try {
+		const sourceDir = join(appOutDir, "fixture");
+		const archive = join(appOutDir, "resources", "app.asar");
+		const ptyDir = join(sourceDir, "node_modules", "node-pty");
+
+		await put(join(ptyDir, "lib", "index.js"), "module.exports = {};\n");
+		await put(join(ptyDir, "README.md"), "fixture documentation that forces a repack\n");
+		await mkdir(dirname(archive), { recursive: true });
+		await createAsarPackage(sourceDir, archive);
+
+		await assert.rejects(() => afterPackCleanup({ appOutDir, electronPlatformName: "linux", arch: 1 }), /node-pty runtime artifact missing for linux-x64/);
+	} finally {
+		await rm(appOutDir, { recursive: true, force: true });
+	}
+});
+
+test("afterPack cleanup removes node-pty build only when a target prebuild remains", async () => {
 	const appOutDir = await mkdtemp(join(tmpdir(), "pideck-after-pack-pty-"));
 	try {
 		const sourceDir = join(appOutDir, "fixture");
@@ -229,7 +273,7 @@ test("afterPack cleanup keeps node-pty unpacked after asar repack", async () => 
 		assert.equal(normalizedEntries(archive).includes("node_modules/node-pty/src/index.ts"), false, "asar copy of node-pty src/ is compile-time only");
 		assert.equal(existsSync(join(unpackedPty, "src")), false, "unpacked node-pty src/ must go");
 		assert.equal(existsSync(join(unpackedPty, "third_party")), false, "unpacked node-pty third_party/ must go");
-		assert.equal(existsSync(join(unpackedPty, "build")), false, "unpacked node-pty build/ must go; runtime loads prebuilds");
+		assert.equal(existsSync(join(unpackedPty, "build")), false, "a target prebuild lets afterPack remove unpacked node-pty build/");
 		assert.equal(existsSync(join(unpackedPty, "deps")), false, "unpacked node-pty deps/ is winpty source, not required at runtime");
 		assert.equal(existsSync(join(unpackedPty, "scripts")), false, "unpacked node-pty scripts/ is compile-time only");
 		assert.equal(normalizedEntries(archive).includes("node_modules/node-pty/deps/winpty/README.md"), false, "asar copy of node-pty deps/ must go with the unpacked tree");

@@ -2,15 +2,21 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * 主窗口大小记忆（startupWindowMode="last" 的存储层）。
- * 关闭窗口/退出应用时保存 normal bounds（最大化/全屏时取 getNormalBounds），
- * 下次启动按记录尺寸打开；文件放在 userData/last-window-bounds.json，
+ * 主窗口几何记忆（startupWindowMode="last" 的存储层）。
+ * 关闭窗口/退出应用时保存 normal bounds（最大化/全屏时取 getNormalBounds）及是否最大化，
+ * 下次启动按记录的位置与尺寸打开；文件放在 userData/last-window-bounds.json，
  * 与用户设置（settings.json）分离——这是运行时状态而非用户显式配置。
+ *
+ * x/y/maximized 为可选：早期版本只存宽高，旧文件读出来没有位置时回退到主显示器居中，
+ * 不要求用户清理记录。
  */
 
 export type LastWindowBounds = {
 	width: number;
 	height: number;
+	x?: number;
+	y?: number;
+	maximized?: boolean;
 };
 
 /** BrowserWindow 当前的最小产品尺寸；workArea 不足时仍优先保留这两个下限。 */
@@ -44,11 +50,15 @@ function normalizeWorkAreaDimension(value: number): number | null {
 }
 
 /**
- * 将启动尺寸收敛到目标显示器的 workArea，并在可行时居中留出安全内边距。
+ * 将启动几何收敛到目标显示器的 workArea。
  *
- * 没有持久化 x/y 时，调用方使用主显示器作为确定的目标显示器。workArea 某一维
- * 小于最小窗口尺寸时无法同时满足「完全适配」和现有最小窗口约束，因此保留最小值，
- * 仍按该维居中，避免额外引入会改变产品行为的动态 minWidth/minHeight。
+ * 尺寸先按 workArea 减安全内边距裁到可容纳；workArea 某一维小于最小窗口尺寸时无法同时
+ * 满足「完全适配」和现有最小窗口约束，因此保留最小值，避免额外引入会改变产品行为的动态
+ * minWidth/minHeight。
+ *
+ * 位置：记录带 x/y 时钳制到 workArea 内（显示器拔掉/分辨率变化后窗口不会落到看不见的地方，
+ * 但仍尽量贴近用户上次放的位置）；没有 x/y（旧记录或预设模式）时在 workArea 内居中，
+ * 由调用方用主显示器作为确定的目标显示器。
  */
 export function constrainWindowBoundsToWorkArea(bounds: LastWindowBounds, workArea: WindowWorkArea): WindowStartupBounds {
 	const requestedWidth = normalizeRequestedDimension(bounds.width, MIN_WINDOW_WIDTH);
@@ -68,20 +78,42 @@ export function constrainWindowBoundsToWorkArea(bounds: LastWindowBounds, workAr
 	const height = availableHeight >= MIN_WINDOW_HEIGHT ? Math.min(requestedHeight, availableHeight) : MIN_WINDOW_HEIGHT;
 
 	return {
-		x: areaX + Math.round((areaWidth - width) / 2),
-		y: areaY + Math.round((areaHeight - height) / 2),
+		x: resolveAxisPosition(bounds.x, width, areaX, areaWidth),
+		y: resolveAxisPosition(bounds.y, height, areaY, areaHeight),
 		width,
 		height,
 	};
 }
 
-/** 读取上次窗口大小；文件缺失/损坏/尺寸过小（小于最小窗口 880×640）时返回 null，由调用方顺延默认 */
+/**
+ * 单轴定位：有记录位置则钳制到 [areaStart+inset, areaEnd-inset-size]；窗口比可用区还大
+ * （最小尺寸兜底触发）时只能贴左/上边。无记录则居中。
+ */
+function resolveAxisPosition(recorded: number | undefined, size: number, areaStart: number, areaSize: number): number {
+	if (typeof recorded !== "number" || !Number.isFinite(recorded)) {
+		return areaStart + Math.round((areaSize - size) / 2);
+	}
+	const minimum = areaStart + WINDOW_WORK_AREA_INSET;
+	const maximum = areaStart + areaSize - WINDOW_WORK_AREA_INSET - size;
+	if (maximum < minimum) return areaStart;
+	return Math.min(Math.max(Math.round(recorded), minimum), maximum);
+}
+
+/**
+ * 读取上次窗口几何；文件缺失/损坏/尺寸过小（小于最小窗口 880×640）时返回 null，由调用方顺延默认。
+ * x/y 缺失或非有限数时整体丢弃位置（不允许只有一个轴），maximized 非 true 一律按 false。
+ */
 export function readLastWindowBounds(dir: string): LastWindowBounds | null {
 	try {
 		const raw = readFileSync(join(dir, "last-window-bounds.json"), "utf8");
 		const data = JSON.parse(raw) as Partial<LastWindowBounds>;
 		if (typeof data.width === "number" && typeof data.height === "number" && Number.isFinite(data.width) && Number.isFinite(data.height) && data.width >= MIN_WINDOW_WIDTH && data.height >= MIN_WINDOW_HEIGHT) {
-			return { width: Math.round(data.width), height: Math.round(data.height) };
+			return {
+				width: Math.round(data.width),
+				height: Math.round(data.height),
+				...readPosition(data.x, data.y),
+				...(data.maximized === true ? { maximized: true } : {}),
+			};
 		}
 	} catch {
 		// 文件不存在或 JSON 损坏：按无记录处理
@@ -89,12 +121,26 @@ export function readLastWindowBounds(dir: string): LastWindowBounds | null {
 	return null;
 }
 
-/** 保存上次窗口大小（宽高取整，防抖由调用方控制） */
+/** 保存上次窗口几何（坐标与宽高取整，防抖由调用方控制） */
 export function saveLastWindowBounds(dir: string, bounds: LastWindowBounds): void {
 	try {
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, "last-window-bounds.json"), JSON.stringify({ width: Math.round(bounds.width), height: Math.round(bounds.height) }), "utf8");
+		const payload: LastWindowBounds = {
+			width: Math.round(bounds.width),
+			height: Math.round(bounds.height),
+			...readPosition(bounds.x, bounds.y),
+			...(bounds.maximized === true ? { maximized: true } : {}),
+		};
+		writeFileSync(join(dir, "last-window-bounds.json"), JSON.stringify(payload), "utf8");
 	} catch {
 		// 磁盘/权限失败静默：窗口记忆是可选的体验增强，不影响主流程
 	}
+}
+
+/** 两轴都是有限数才算有位置记录；只有一轴时丢弃，避免半截坐标把窗口摆到奇怪的地方。 */
+function readPosition(x: unknown, y: unknown): { x: number; y: number } | Record<string, never> {
+	if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)) {
+		return { x: Math.round(x), y: Math.round(y) };
+	}
+	return {};
 }

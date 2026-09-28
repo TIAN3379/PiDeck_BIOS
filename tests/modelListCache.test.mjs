@@ -30,6 +30,7 @@ test("parsePiListModels parses table with provider/model/thinking", () => {
 	assert.equal(models.length, 2);
 	assert.equal(models[0].provider, "openai");
 	assert.equal(models[0].id, "gpt-5");
+	assert.equal(models[0].name, "gpt-5", "目录兜底名称只保留 id，由展示层统一加 provider");
 	assert.equal(models[0].reasoning, true);
 	assert.equal(models[1].provider, "deepseek");
 	assert.equal(models[1].reasoning, true);
@@ -147,6 +148,7 @@ test("modelsFromPiConfig flattens settings-page models.json", () => {
 	assert.equal(models[0].name, "Flash");
 	assert.equal(models[0].reasoning, true);
 	assert.equal(models[2].provider, "openai");
+	assert.equal(models[2].name, "gpt-4o");
 	assert.equal(models[2].images, true);
 	assert.equal(modelsFromPiConfig({ providers: {} }).length, 0);
 });
@@ -225,7 +227,7 @@ test("renderer picker flow shows restart confirm on needsRestart", () => {
 	assert.doesNotMatch(preferenceController, /desktopApi\.sessions\.restartRuntime/);
 	assert.doesNotMatch(pickerHost, /desktopApi\.sessions\.restartRuntime/);
 	// 确认时先写会话记录再重启：setRuntimeModel 失败路径不再写 catalog。
-	assert.match(preferenceController, /updateRecord\(sessionId, \{[\s\S]*?model: \{ provider: intent\.provider, modelId: intent\.modelId \}/);
+	assert.match(preferenceController, /updateRecord\(sessionId, \{[\s\S]*?model:\s*\{\s*provider:\s*intent\.provider,\s*modelId:\s*intent\.modelId,\s*modelName:\s*intent\.modelName/);
 	assert.match(pickerHost, /modelRestartTitle/);
 	assert.match(pickerHost, /modelRestartBody/);
 });
@@ -255,7 +257,8 @@ test("welcome page explicit model/thinking selections persist and are promoted i
 	// 无 record 的引导页仍是一个可交互 composer：用户点选必须覆盖静态默认值，
 	// 并同时贯通「选择后立即显示」与「首次发送创建真实会话」两条链路。
 	// setItem 的 key 实参可能被格式化换行：容忍 ( 与 key 之间的空白。
-	assert.match(picker, /localStorage\s*\.?\s*setItem\(\s*WELCOME_MODEL_KEY/);
+	// 模型偏好按后端写到各自的键（issue #253）：DSH 的 route 名不能进 pi 的偏好。
+	assert.match(picker, /localStorage\.setItem\(\s*isDshSession \? WELCOME_DSH_MODEL_KEY : WELCOME_MODEL_KEY/);
 	assert.match(picker, /localStorage\.setItem\(WELCOME_THINKING_KEY, level\)/);
 	assert.match(components, /readWelcomeThinkingPreference\(\)\?\.thinkingLevel/);
 	assert.match(components, /fallback: welcomeThinking \?\? props\.defaultThinkingLevel/);

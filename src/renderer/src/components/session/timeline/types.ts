@@ -9,13 +9,13 @@
  * 领域对象类型（AgentRunItem / ThinkingGroupItem / ToolGroupItem）目前暂存于
  * AppUtils.ts，随重构逐步迁移至此；本模块只定义展示层新增类型，避免大爆炸。
  */
-import type { AgentRunItem, MessageItem, RetryGroupItem, ThinkingGroupItem, ToolGroupItem } from "../../app/AppUtils";
+import type { AgentRunItem, ErrorGroupItem, MessageItem, RetryGroupItem, ThinkingGroupItem, ToolGroupItem } from "../../app/AppUtils";
 import type { ChatMessage } from "../../../../../shared/types";
 
-export type { AgentRunItem, MessageItem, RetryGroupItem, ThinkingGroupItem, ToolGroupItem };
+export type { AgentRunItem, ErrorGroupItem, MessageItem, RetryGroupItem, ThinkingGroupItem, ToolGroupItem };
 
-/** 单个执行过程条目：思考步骤、工具步骤或自动重试状态。 */
-export type TurnProcessEntry = { kind: "thinking-entry"; id: string; group: ThinkingGroupItem } | { kind: "tool-entry"; id: string; group: ToolGroupItem } | { kind: "retry-entry"; id: string; message: ChatMessage };
+/** 单个执行过程条目：思考步骤、工具步骤、自动重试或错误诊断。 */
+export type TurnProcessEntry = { kind: "thinking-entry"; id: string; group: ThinkingGroupItem } | { kind: "tool-entry"; id: string; group: ToolGroupItem } | { kind: "retry-entry"; id: string; message: ChatMessage } | { kind: "error-entry"; id: string; message: ChatMessage };
 
 /** 扁平展示序列中的一个节点。 */
 export type TurnDisplayItem = { kind: "process-entry"; entry: TurnProcessEntry } | { kind: "interim-answer"; id: string; message: ChatMessage } | { kind: "final-answer"; id: string; message: ChatMessage };

@@ -10,9 +10,9 @@ description: PiDeck 每个版本的发布记录：新功能、问题修复与体
 - [中文 CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
 - [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
 
-## v0.7.7-beta
+## v0.7.7
 
-发布时间：2026-09-21
+发布时间：2026-09-22
 
 - 🚀 **工作区文件按名称搜索（#215）**
 - 🚀 **从其他目录导入会话（项目移动 / 改名后找回历史）**

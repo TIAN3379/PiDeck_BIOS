@@ -299,6 +299,29 @@ test("runtime:pack 默认 lite，CI 交叉打满 6 平台并上传，禁止独�
 	assert.doesNotMatch(release, /releases\/download\/dsh-runtime/, "独立 sidecar tag 会抢走 GitHub /releases/latest");
 });
 
+// 2026-09-22 v0.7.7 两次事故都出在 pack 准备阶段「省掉完整 npm ci」：先漏 tar
+// （12 个 runtime 资产全缺），补发时又缺 tsc + @types/node + @deepseek-ai 类型
+// （本地包 dsh-tool-pwsh-persistent 构建失败，6 平台全挂）。这里把前提钉死：
+// 两个 pack job 必须装完整依赖，并在 pack 前自检脚本裸 import 与构建工具链。
+test("pack job 必须装完整依赖（tar / tsc / @deepseek-ai 类型缺一即事故）", () => {
+	const release = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf8");
+	const publish = readFileSync(join(repoRoot, ".github/workflows/publish-dsh-runtime.yml"), "utf8");
+	const jobs = [
+		["release.yml pack-dsh-runtime", release.split("pack-dsh-runtime:")[1] ?? ""],
+		["publish-dsh-runtime.yml pack-and-upload-cross", publish.split("pack-and-upload-cross:")[1]?.split("pack-and-upload:")[0] ?? ""],
+	];
+	for (const [label, job] of jobs) {
+		assert.ok(job.includes("Pack DSH runtime (cross)"), `${label}: job 片段定位失败`);
+		assert.match(job, /npm ci --ignore-scripts --no-audit --no-fund/, `${label}: 必须完整 npm ci（--ignore-scripts 跳过 electron 二进制）`);
+		// 只看安装命令本身：注释里会出现 --omit=dev 这种历史说明，属于文档不是配置。
+		assert.doesNotMatch(job, /npm (ci|install)[^\n]*--omit=dev/, `${label}: 禁止 --omit=dev（缺 tsc/@deepseek-ai 类型，本地包构建必挂）`);
+		assert.doesNotMatch(job, /Restore semver/, `${label}: 不再手工 curl 拼 node_modules`);
+		assert.ok(job.indexOf("Verify packing script deps resolvable") < job.indexOf("Pack DSH runtime (cross)"), `${label}: 自检必须在 pack 之前`);
+		assert.match(job, /await import\('tar'\)/, `${label}: 自检要覆盖脚本裸 import`);
+		assert.match(job, /require\.resolve\('typescript'\)/, `${label}: 自检要覆盖本地包构建工具链`);
+	}
+});
+
 /** 手动补发入口：runtime 变更后不必重打安装包，但仍必须挂 latest v*。 */
 test("publish-dsh-runtime.yml 提供手动上传入口，并要求同步到默认分支", () => {
 	const publish = readFileSync(".github/workflows/publish-dsh-runtime.yml", "utf8");

@@ -86,6 +86,8 @@ import * as tar from "tar";
 // 裁剪规则独立成模块：CLI 主流程不便 import（会触发打包），测试直接引用规则单测。
 import { allEntryCandidates, isExcluded, isNpmHashedLeftoverDir, isSrcPrunable, runtimeEntryResolvableOnDisk } from "./runtime-prune-rules.mjs";
 import { collectLockClosure, isPlatformGatedEntry, npmPlatformArgs, normalizeTarget, pinnedDependenciesFromClosure } from "./dshRuntimeLockClosure.mjs";
+// 本地包构建的 cwd/命令构造同样独立成模块（交叉模式下符号链接导致 npm 找不到 tsc）。
+import { localPackageBuildInvocation } from "./local-package-build.mjs";
 
 const require = createRequire(import.meta.url);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -259,11 +261,10 @@ function ensureClosureEntriesBuilt(closureDirs) {
 		// 直接报错交给人判断。
 		if (isSymlinkedLocalPackage(dir) && typeof pkg.scripts?.build === "string") {
 			console.warn(`[pack-dsh-runtime] ⚠️ ${rel}: 运行时入口缺失（${entries.join(", ")}），自动执行 npm run build...`);
-			// Windows 上 npm 是 npm.cmd shim，CreateProcess 不经 cmd.exe 不能执行批处理（EINVAL），
-			// 必须显式走 cmd.exe；不用 shell:true——Node 24 传参会触发 DEP0190（参数不转义只拼接），
-			// 而这里的参数全是固定常量，无用户输入，无注入面。
-			const [npmCmd, npmArgs] = process.platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", "npm", "run", "build"]] : ["npm", ["run", "build"]];
-			execFileSync(npmCmd, npmArgs, { cwd: dir, stdio: "inherit" });
+			// 构建调用交给 local-package-build.mjs（cwd 用真实路径）：交叉模式下 dir 是
+			// 临时工作区里的符号链接，按逻辑路径 npm 找不到仓库工具链（tsc），原因见该模块注释。
+			const build = localPackageBuildInvocation(dir);
+			execFileSync(build.command, build.args, { cwd: build.cwd, stdio: "inherit" });
 			if (entries.some((entry) => runtimeEntryResolvableOnDisk(dir, entry))) continue;
 			console.error(`[pack-dsh-runtime] ❌ ${rel}: npm run build 后入口仍缺失（${entries.join(", ")}），中止打包。`);
 			process.exit(1);

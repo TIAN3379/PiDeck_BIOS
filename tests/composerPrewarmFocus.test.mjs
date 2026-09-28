@@ -35,6 +35,9 @@ const timeline = compile("src/renderer/src/hooks/useSessionTimelineController.ts
 	"../utils/sessionHistoryAvailability": compile("src/renderer/src/utils/sessionHistoryAvailability.ts"),
 	"./timeline/autoExpandThreshold": { TURN_WINDOW_AUTO_EXPAND_THRESHOLD: 120, resolveAutoExpandThreshold: (h) => Math.max(120, Math.round(h * 0.4)) },
 	"./timeline/scrollHistoryPolicy": {},
+	// programmaticScrollGuard 是纯模块（无内部 import），直接编译真模块；缺这一条时 loader 会
+	// 回落到以 tests/ 为基准的 nodeRequire，解析 .ts 必失败（模块已搬到 hooks/timeline）。
+	"./timeline/programmaticScrollGuard": compile("src/renderer/src/hooks/timeline/programmaticScrollGuard.ts"),
 	"../components/session/timeline/turnRenderWindow": {
 		TIMELINE_SCROLLED_TURN_LIMIT: 3,
 		TIMELINE_WINDOW_EXPAND_STEP: 3,

@@ -146,7 +146,8 @@ export function useSessionActions(options: UseSessionActionsOptions) {
 		// DSH 删除会记墓碑：刷新/自动导入不再把同一 host 会话导回侧栏。
 		showToast(t("app.sessionDeleted"), 3200);
 		const projectId = sessionsProjectId ?? activeProjectId;
-		if (projectId) await refreshProjectSessions(projectId);
+		// 删除结果已经应用到本地；保留对账但不让其它会话再次进入 loading 布局。
+		if (projectId) await refreshProjectSessions(projectId, true);
 	}
 
 	/** 归档历史会话：文件移入归档目录并从列表移除（可恢复，区别于删除） */

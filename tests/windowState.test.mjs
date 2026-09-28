@@ -105,3 +105,60 @@ test("windowState: invalid values fall back to finite minimum-size bounds", () =
 
 	assert.deepEqual(bounds, { x: 0, y: 0, width: 880, height: 640 });
 });
+
+// ===== 位置与最大化记忆（#?）——此前只存宽高，每次启动都居中 =====
+
+test("windowState: position and maximized flag round-trip through save/read", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pideck-ws-"));
+	try {
+		saveLastWindowBounds(dir, { x: 2100.4, y: -80.6, width: 1360, height: 800, maximized: true });
+		assert.deepEqual(readLastWindowBounds(dir), { x: 2100, y: -81, width: 1360, height: 800, maximized: true });
+		// maximized=false 不落盘（与旧文件格式保持一致，读出时字段缺省即 false）
+		saveLastWindowBounds(dir, { x: 10, y: 20, width: 1360, height: 800, maximized: false });
+		assert.deepEqual(readLastWindowBounds(dir), { x: 10, y: 20, width: 1360, height: 800 });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("windowState: legacy size-only record still reads (no position, not maximized)", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pideck-ws-"));
+	try {
+		writeFileSync(join(dir, "last-window-bounds.json"), '{"width":1251,"height":965}', "utf8");
+		assert.deepEqual(readLastWindowBounds(dir), { width: 1251, height: 965 });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("windowState: half or non-finite position is dropped as a whole", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pideck-ws-"));
+	try {
+		writeFileSync(join(dir, "last-window-bounds.json"), '{"width":1251,"height":965,"x":100}', "utf8");
+		assert.deepEqual(readLastWindowBounds(dir), { width: 1251, height: 965 });
+		writeFileSync(join(dir, "last-window-bounds.json"), '{"width":1251,"height":965,"x":100,"y":1e999,"maximized":"yes"}', "utf8");
+		assert.deepEqual(readLastWindowBounds(dir), { width: 1251, height: 965 });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("windowState: recorded position inside the work area is restored as-is (no centering)", () => {
+	const bounds = constrainWindowBoundsToWorkArea({ x: 300, y: 120, width: 1251, height: 965 }, { x: 0, y: 0, width: 2560, height: 1400 });
+	assert.deepEqual(bounds, { x: 300, y: 120, width: 1251, height: 965 });
+});
+
+test("windowState: recorded position is clamped into the work area with the safety inset", () => {
+	const workArea = { x: 0, y: 0, width: 1920, height: 1040 };
+	// 右下越界 → 贴右下内边距
+	assert.deepEqual(constrainWindowBoundsToWorkArea({ x: 1500, y: 900, width: 1200, height: 800 }, workArea), { x: 1920 - 16 - 1200, y: 1040 - 16 - 800, width: 1200, height: 800 });
+	// 左上越界（显示器拔掉后残留的负坐标）→ 贴左上内边距
+	assert.deepEqual(constrainWindowBoundsToWorkArea({ x: -3000, y: -500, width: 1200, height: 800 }, workArea), { x: 16, y: 16, width: 1200, height: 800 });
+	// 次显示器的负坐标 workArea 内位置原样保留
+	assert.deepEqual(constrainWindowBoundsToWorkArea({ x: -1500, y: 40, width: 1200, height: 800 }, { x: -1920, y: 0, width: 1920, height: 1040 }), { x: -1500, y: 40, width: 1200, height: 800 });
+});
+
+test("windowState: recorded position on a work area smaller than the minimum window snaps to the area origin", () => {
+	const bounds = constrainWindowBoundsToWorkArea({ x: 500, y: 300, width: 1200, height: 900 }, { x: 100, y: 50, width: 800, height: 600 });
+	assert.deepEqual(bounds, { x: 100, y: 50, width: 880, height: 640 });
+});

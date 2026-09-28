@@ -1,7 +1,8 @@
 import { atom } from "jotai";
-import { atomFamily } from "jotai/utils";
+import { atomFamily, selectAtom } from "jotai/utils";
 import type { SessionRecord, SessionSummary } from "../../../shared/types";
 import { sessionDisplayName } from "../utils/sessionDisplayName";
+import { isDisplayableSessionRecord } from "../utils/sessionRecordDisplay";
 import { sessionHistoryMutationOverlayByIdAtom, sessionIdsByProjectAtom, sessionRecordsAtom, sessionRuntimeByIdAtom, sessionRuntimeUiByIdAtom } from "./session-atoms";
 
 export function sessionRecordToSummary(session: SessionRecord): SessionSummary | undefined {
@@ -10,7 +11,8 @@ export function sessionRecordToSummary(session: SessionRecord): SessionSummary |
 	// 空 filePath 在显示管线走 unkeyedSessions 分支
 	// （getSummaryKey 对空串归一化为 undefined），不会与其他会话折叠成一行；
 	// 右键菜单按 hasFilePath 隐藏「复制路径/打开文件」类文件操作。
-	if (!session.filePath && session.backend !== "dsh" && session.backend !== "imagegen") return undefined;
+	// 判据与侧栏收集模型共用（utils/sessionRecordDisplay），两处不再各写一份。
+	if (!isDisplayableSessionRecord(session)) return undefined;
 	return {
 		id: session.id,
 		filePath: session.filePath ?? "",
@@ -66,6 +68,13 @@ export const sessionIdByRuntimeAgentIdAtomFamily = atomFamily((agentId: string) 
 	),
 );
 
-export const sessionRuntimeUiBySessionIdAtomFamily = atomFamily((sessionId: string) => atom((get) => get(sessionRuntimeUiByIdAtom)[sessionId]));
+/**
+ * 按会话取 runtime UI 状态（含桥落点表）。
+ *
+ * `selectAtom` + `Object.is`：`sessionRuntimeUiByIdAtom` 的外层 map 在**任何**会话推帧时
+ * 都会整体重建，但其它会话条目的引用不变 → 本会话订阅者不会因为别的会话推帧而重渲
+ * （AGENTS.md「多实例必须按 session 订阅」）。
+ */
+export const sessionRuntimeUiBySessionIdAtomFamily = atomFamily((sessionId: string) => selectAtom(sessionRuntimeUiByIdAtom, (map) => map[sessionId], Object.is));
 
 export const sessionHistoryMutationOverlayBySessionIdAtomFamily = atomFamily((sessionId: string) => atom((get) => get(sessionHistoryMutationOverlayByIdAtom)[sessionId]));

@@ -20,14 +20,16 @@ export function useQuickMessages() {
 	const [error, setError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 
-	/** 从文件重新读一次（主进程不缓存，所以这里永远拿到磁盘当前内容）。 */
+	/** 从文件重新读一次；返回本次快照供合并命令直接使用，失败返回 null，不能拿旧缓存冒充最新内置清单。 */
 	const refresh = useCallback(async () => {
 		try {
 			const next = await desktopApi.quickMessages.get();
 			setSnapshot(next);
 			setError(null);
+			return next;
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : String(cause));
+			return null;
 		}
 	}, [setSnapshot]);
 

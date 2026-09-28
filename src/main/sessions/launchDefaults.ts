@@ -1,4 +1,5 @@
 import type { ResolveLaunchDefaultsInput, ResolvedLaunchDefaults } from "../../shared/types";
+import { createSessionModelPreference } from "../../shared/modelDisplayName";
 
 /**
  * 会话「默认启动偏好」解析器：createDraft 缺省填充与引导页展示共用，保证
@@ -62,7 +63,7 @@ function strictModelPair(settings: unknown, models: unknown): ResolvedLaunchDefa
 	const provider = optionalString(settings, "defaultProvider");
 	const modelId = optionalString(settings, "defaultModel");
 	if (!provider || !modelId) return undefined;
-	return modelExistsInModelsConfig(models, provider, modelId) ? { provider, modelId } : undefined;
+	return modelPreferenceFromModelsConfig(models, provider, modelId);
 }
 
 /** 显式传入的 model（如欢迎页偏好）是否存在：不存在视为无效，调用方应回退解析默认。 */
@@ -77,7 +78,18 @@ function lastUsedModelOfModelsConfig(lastUsed: unknown, models: unknown): Resolv
 	const modelId = lastUsed.modelId;
 	if (typeof provider !== "string" || typeof modelId !== "string") return undefined;
 	if (!provider || !modelId) return undefined;
-	return modelExistsInModelsConfig(models, provider, modelId) ? { provider, modelId } : undefined;
+	return modelPreferenceFromModelsConfig(models, provider, modelId);
+}
+
+function modelPreferenceFromModelsConfig(models: unknown, provider: string, modelId: string): ResolvedLaunchDefaults["model"] {
+	if (!isRecord(models)) return undefined;
+	const providers = models.providers;
+	if (!isRecord(providers)) return undefined;
+	const providerEntry = providers[provider];
+	if (!isRecord(providerEntry) || !Array.isArray(providerEntry.models)) return undefined;
+	const model = providerEntry.models.find((candidate) => isRecord(candidate) && candidate.id === modelId);
+	if (!isRecord(model)) return undefined;
+	return createSessionModelPreference(provider, modelId, model.name);
 }
 
 /** 模型是否存在于 models.json（provider 键 + models 数组 id 精确匹配）。 */
@@ -96,8 +108,10 @@ function welcomeModelOfModelsConfig(welcome: unknown, models: unknown): Resolved
 	const provider = welcome.provider;
 	const modelId = welcome.modelId;
 	if (typeof provider !== "string" || typeof modelId !== "string") return undefined;
-	if (!provider || !modelId) return undefined;
-	return modelExistsInModelsConfig(models, provider, modelId) ? { provider, modelId } : undefined;
+	if (!provider || !modelId || !modelExistsInModelsConfig(models, provider, modelId)) return undefined;
+	// 引导页已在用户点选的瞬间保存名称快照。这里只做存在性校验，不能再次以当前
+	// models.json 的别名覆盖它，否则用户配置在两次操作之间更新会让底栏跳变。
+	return createSessionModelPreference(provider, modelId, welcome.modelName);
 }
 
 /** settings.enabledModels（pi 的 Ctrl+P 模型切换列表，glob 模式，格式同 --models）：
@@ -128,7 +142,7 @@ function matchEnabledModelPattern(pattern: string, models: unknown): ResolvedLau
 		for (const model of provider.models) {
 			if (!isRecord(model) || typeof model.id !== "string") continue;
 			if (globMatch(patternModelId, model.id)) {
-				return { provider: providerName, modelId: model.id };
+				return createSessionModelPreference(providerName, model.id, model.name);
 			}
 		}
 	}

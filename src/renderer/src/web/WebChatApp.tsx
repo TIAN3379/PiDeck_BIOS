@@ -16,6 +16,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import type { AvailableModel } from "../../../shared/types";
+import { createSessionModelPreference } from "../../../shared/modelDisplayName";
 import { t } from "@/i18n";
 import { WebSidebar } from "./WebSidebar";
 import { WebHeader, type WebHeaderStatus } from "./WebHeader";
@@ -57,7 +58,7 @@ export function WebChatApp() {
 	};
 	const [commandError, setCommandError] = useState<string | null>(null);
 	// 首页（无会话）时选择的模型/思考级别：暂存为待用偏好，随下一次新建会话生效
-	const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
+	const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string; modelName: string } | null>(null);
 	const [pendingThinkingLevel, setPendingThinkingLevel] = useState<string | null>(null);
 	// 手机端默认把聊天作为主画面，项目树通过抽屉按需打开，避免列表占满首屏。
 	const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -272,7 +273,7 @@ export function WebChatApp() {
 		}
 	};
 
-	const updateActiveSessionState = (patch: { model?: { provider: string; modelId: string }; thinkingLevel?: string }) => {
+	const updateActiveSessionState = (patch: { model?: { provider: string; modelId: string; modelName?: string }; thinkingLevel?: string }) => {
 		setState((current) => ({
 			...current,
 			sessions: current.sessions.map((session) => (session.id === activeSessionId ? { ...session, ...patch } : session)),
@@ -282,10 +283,11 @@ export function WebChatApp() {
 	const handleModelChange = async (model: AvailableModel) => {
 		if (!activeSessionId) {
 			// 首页无会话：选择暂存为待用偏好，新建会话时生效
-			setPendingModel({ provider: model.provider, modelId: model.id });
+			setPendingModel(createSessionModelPreference(model.provider, model.id, model.name));
 			return;
 		}
 		setCommandError(null);
+		const selectedModel = createSessionModelPreference(model.provider, model.id, model.name);
 		try {
 			if (activeRuntime) {
 				await setRuntimeModel(
@@ -294,15 +296,14 @@ export function WebChatApp() {
 						agentId: activeRuntime.agentId,
 						runtimeGeneration: activeRuntime.runtimeGeneration ?? 0,
 					},
-					model.provider,
-					model.id,
+					selectedModel.provider,
+					selectedModel.modelId,
+					selectedModel.modelName,
 				);
 			} else {
-				await updateSessionRecord(activeSessionId, {
-					model: { provider: model.provider, modelId: model.id },
-				});
+				await updateSessionRecord(activeSessionId, { model: selectedModel });
 			}
-			updateActiveSessionState({ model: { provider: model.provider, modelId: model.id } });
+			updateActiveSessionState({ model: selectedModel });
 		} catch (error) {
 			setCommandError(error instanceof Error ? error.message : String(error));
 		}
@@ -402,7 +403,7 @@ export function WebChatApp() {
 	const moreCount = activeMeta ? Math.max(0, activeMeta.total - messagesBySessionRef.current[activeSessionId]?.length) : 0;
 
 	return (
-		<div className="app web-app wechat-shell flex h-screen w-full min-w-0 overflow-hidden bg-background text-foreground">
+		<div className="app web-app wechat-shell flex h-screen w-full min-w-0 overflow-hidden bg-background text-foreground [[data-bg-image=on]_&]:bg-transparent">
 			<WebSidebar
 				state={state}
 				activeSessionId={activeSessionId}
@@ -418,7 +419,7 @@ export function WebChatApp() {
 				onCreateProject={handleCreateProject}
 				onDeleteProject={handleDeleteProject}
 			/>
-			<main className="chat-pane flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+			<main className="chat-pane flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-panel">
 				<WebHeader
 					title={activeSession?.title || t("web.chooseSession")}
 					status={headerStatus}

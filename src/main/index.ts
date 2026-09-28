@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray, Notification } from "electron";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
@@ -20,58 +21,83 @@ import { acquireVersionSingleInstance, type FocusPayload } from "./singleInstanc
 import { mainProcessJsFlags, rendererHeapAdditionalArguments } from "./v8HeapLimits";
 import { isDevToolsShortcut, toggleMainWindowDevTools } from "./devTools";
 import { isShortcutInput, refreshShortcutBindings } from "./appShortcuts";
+import { createWindowZoomShortcutHandler } from "./windowZoom";
 import { DEFAULT_DEV_USER_DATA_NAME, isSharedDevBranch, readDevGitBranch, resolveDevUserDataDirName, sanitizeDevBranchSegment } from "./devIsolation";
-import { resolvePackagedUserDataDir } from "./portableUserData";
+import { isPortablePackagedEnv, resolveAppUserDataDir, resolveChannelDevDataDir, resolvePackagedUserDataDir } from "./portableUserData";
+import { readDataEnvDecision, validateStartupDataEnv, writeDataEnvDecision } from "./dataEnv/dataEnvMarker";
+import { registerDataEnvIpc } from "./ipc/dataEnvIpc";
+import { ChannelSwitchService } from "./update/ChannelSwitchService";
+import { registerChannelSwitchIpc } from "./ipc/channelSwitchIpc";
+import { resolveUpdateChannel } from "./update/channelIdentity";
+import { APP_DEEP_LINK_SCHEME } from "./utils/deepLinkScheme";
 import { extractFocusTargetFromArgv } from "./utils/focusTarget";
 import type { Project, StartupWindowMode } from "../shared/types";
+import type { DataEnvMode } from "../shared/types/dataEnv";
 // 使用 ?asset 后缀导入图标，electron-vite 会在构建时将其复制到输出目录并提供正确的运行时路径
 // 这解决了打包后 build/ 目录不在 asar 中导致托盘图标丢失的问题
 import iconPath from "../../build/icon.png?asset";
 
-// 构建标记：npm run dist:win:dev 打包时由 vite define 注入 true（构建期替换，非运行时环境变量）。
+// 构建标记：npm run dist:*:dev 打包时由 vite define 注入 true（构建期替换，非运行时环境变量）。
 declare const __PIDECK_DEV_BUILD__: boolean;
 
-// 开发态（electron-vite dev）或 dev 构建（dist:win:dev）统一使用 -dev 配置目录，
-// 避免与正式版（pi-desktop / phids）的数据、单实例锁和通知归属互相污染。
+// dev 构建（PiDeck Dev 安装包）只影响通知归属（AUMID）与 deep link scheme（pideck-dev://），
+// userData 与正式版**共用** pi-desktop——双通道共用数据目录是刻意决策（2026-09）：
+// 用户在 stable / dev 安装包之间切换不丢 settings / 会话 / 扩展配置。
+// 未打包的 npm run dev 仍隔离到 pi-desktop-dev(±分支后缀)，避免开发调试误写坏真实数据。
 const isDevBuild = !app.isPackaged || __PIDECK_DEV_BUILD__;
 
 // E2E（Playwright 驱动）静默运行：窗口显示但不抢焦点、不最大化铺满屏，
 // 避免打断用户在其他软件的输入。fixture 通过 env PIDECK_E2E=1 标识。
 const isE2E = process.env.PIDECK_E2E === "1";
 
-// 开发态与正式版隔离 userData。
-// 否则 npm run dev 会与已安装的 PiDeck 共用数据/锁，表现为「开发启动被复用到正式版窗口」。
-// 未打包的 npm run dev：功能分支再按 git 分支名拆目录（pi-desktop-dev-<branch>），
-// 避免多个 worktree 同时启动共用 catalog / 单实例锁 / DSH home。main/dev 仍用历史目录。
-// 打包的 dist:win:dev 仍固定 pi-desktop-dev（与脚本约定一致，复用现有开发配置）。
+// userData 决策（三分支判定在 portableUserData.resolveAppUserDataDir，单测覆盖）：
+// - 未打包 npm run dev：功能分支再按 git 分支名拆目录（pi-desktop-dev-<branch>），
+//   避免多个 worktree 同时启动共用 catalog / 单实例锁 / DSH home；main/dev 仍用历史目录。
+// - 打包态（stable 与 dev 通道安装包）：共用历史 %APPDATA%/pi-desktop（便携版 exe 同级 data/）。
 // 必须在读取 settings / 版本单实例锁之前设置。
+let userDataNameMigrationResult: UserDataNameMigration | null = null;
 const isolateDevByGitBranch = !app.isPackaged;
 const devGitBranch = isolateDevByGitBranch ? readDevGitBranch() : undefined;
 const devUserDataDirName = isolateDevByGitBranch ? resolveDevUserDataDirName(devGitBranch) : DEFAULT_DEV_USER_DATA_NAME;
 const explicitUserDataDir = (isE2E ? process.env.PIDECK_E2E_USER_DATA_DIR?.trim() : undefined) || app.commandLine.getSwitchValue("user-data-dir") || process.argv.find((arg) => arg.startsWith("--user-data-dir="))?.slice("--user-data-dir=".length);
-if (isDevBuild) {
-	// 显式固定目录名：dev 构建的 productName 是 phidsDev，
-	// 默认 userData 会落在 %APPDATA%\PiDeckDev，必须指回 dev 配置目录以复用现有配置。
-	// 例外：命令行显式传入 --user-data-dir（e2e 隔离、多实例调试）时尊重该路径，
-	// 否则 e2e 会读到本机真实开发数据（settings/projects 全部污染测试断言）。
-	if (explicitUserDataDir) {
-		// Chromium accepts this switch independently, but Electron's app storage
-		// APIs need the same path before settings and single-instance state load.
-		app.setPath("userData", explicitUserDataDir);
-	} else {
-		app.setPath("userData", join(app.getPath("appData"), devUserDataDirName));
-	}
-} else if (isE2E && explicitUserDataDir) {
-	// 打包 E2E 必须在真实 app.isPackaged 分支运行，却不能抢占用户同版本实例锁。
-	// 仅测试标记下尊重显式临时 profile；生产发行物仍固定使用历史 pi-desktop 数据目录。
-	app.setPath("userData", explicitUserDataDir);
-} else {
-	// 正式版：安装包仍用历史 %APPDATA%/pi-desktop；Windows 便携 exe 改落到
-	// PORTABLE_EXECUTABLE_DIR/data，避免与安装版抢同一把版本单实例锁
-	// （次实例会 app.exit(0)，用户看到「启动没反应」）。
-	// 必须在读取 settings / 版本单实例锁之前设置。
-	app.setPath("userData", resolvePackagedUserDataDir({ appData: app.getPath("appData") }));
+// 显式目录仅在 dev 态或 E2E 下生效：生产发行物不受外部参数影响，数据目录保持稳定
+// （否则 e2e 会读到本机真实开发数据，settings/projects 全部污染测试断言）。
+const gatedExplicitUserDataDir = explicitUserDataDir && (isDevBuild || isE2E) ? explicitUserDataDir : undefined;
+// —— 数据环境决策（规格 §6 启动序列：ready 前只读不写，保持 setPath 时序）——
+// 只有 dev 通道读决策指针：stable 恒走共用目录，不碰 dev 独立目录。
+// 决策指针与独立数据目录同处（规格 §6）：读到 null = dev 首启未决策，本会话临时落共用目录运行。
+const updateChannel = resolveUpdateChannel();
+const channelDevDataDir = updateChannel === "dev" ? resolveChannelDevDataDir({ appDataDir: app.getPath("appData"), portableExeDir: process.env.PORTABLE_EXECUTABLE_DIR }) : "";
+const devDataMode: DataEnvMode | null = updateChannel === "dev" ? (readDataEnvDecision(channelDevDataDir)?.dataMode ?? null) : null;
+// 共用数据目录：既是 setPath 的 shared 分支，也是数据导入的源目录（与 fallbackSharedDir 同源，规格 §6 单向正式→dev）。
+// 安装版历史根已由 %APPDATA%/pi-desktop 更名为 %APPDATA%/PiDeck：老用户首启在这里做一次性迁移
+// （整目录改名 + 持久化绝对路径改写 + pi 会话 encoded 目录改名），迁移失败自动回退旧目录、下次启动重试。
+// Windows 便携 exe 落到 PORTABLE_EXECUTABLE_DIR/data，与安装版隔离（否则同版本单实例锁让第二次启动静默退出）。
+// 迁移只接管「打包且非显式目录」这条路径；未打包调试态有自己的 -dev 目录，不参与更名。
+const packagedAppDataDir = app.getPath("appData");
+const fallbackSharedDataDir = resolvePackagedUserDataDir({ appData: packagedAppDataDir });
+if (app.isPackaged && !gatedExplicitUserDataDir) {
+	// 必须在通道决策分流之前迁移：迁移结果本身决定共用目录的最终落点
+	// （改名成功 → PiDeck，失败 → 留在旧根，两者都喂给 resolveAppUserDataDir）。
+	userDataNameMigrationResult = runUserDataNameMigration({
+		appDataDir: packagedAppDataDir,
+		homeDir: app.getPath("home"),
+		portableOrExplicit: isPortablePackagedEnv(),
+	});
+	recordUserDataNameMigrationNotice(userDataNameMigrationResult);
 }
+app.setPath(
+	"userData",
+	resolveAppUserDataDir({
+		explicitDir: gatedExplicitUserDataDir,
+		unpackagedDevDir: join(app.getPath("appData"), devUserDataDirName),
+		isPackaged: app.isPackaged,
+		channel: updateChannel,
+		devDataMode,
+		channelDevDataDir,
+		fallbackSharedDir: userDataNameMigrationResult?.userDataPath ?? fallbackSharedDataDir,
+	}),
+);
 
 // Linux XWayland 兼容层：仅当桌面宠物启用时才强制 ozone-platform=x11（#108，
 // 强制 XWayland 在部分 GNOME/Wayland 环境会导致主窗口不可见）。
@@ -104,16 +130,20 @@ if (process.platform === "win32") {
 	app.setAppUserModelId(isDevBuild ? devAppId : "com.ayuayue.pi-desktop");
 }
 
-// 注册 pideck:// 自定义协议：系统通知点击（toast activationType="protocol"）通过该协议唤起应用，
+// 注册 deep link 自定义协议：系统通知点击（toast activationType="protocol"）通过该协议唤起应用，
 // 唤起实例的 argv 携带 pideck://session/<id> URL，主进程据此跳转对应会话。
 // 仅 packaged 应用注册：dev 模式跑的是 electron 二进制，注册会把协议关联劫持到 electron.exe，
 // 覆盖已安装正式版的关联；dev 模式下通知点击依赖 Electron 原生 click 事件聚焦即可。
 // 安装包内 electron-builder 的 protocols 配置也会在安装时写入注册表，此处是运行时兜底。
+// dev 通道构建注册 pideck-dev://（安装清单同 scheme）：注册表按 scheme 为键，
+// 两通道同 scheme 会互相抢占关联，点击通知会唤起错误的通道。
 if (app.isPackaged) {
-	app.setAsDefaultProtocolClient("pideck");
+	app.setAsDefaultProtocolClient(APP_DEEP_LINK_SCHEME);
 }
 
 // 按「应用版本」隔离的单实例：同版本复用窗口，不同版本可并行。
+// 双通道共用 userData（pi-desktop）的前提下，锁文件仍按版本分文件：
+// stable 与 dev 通道版本号不同即可并存；同版本（含同版本的两个通道包）会复用窗口。
 // 不用 Electron requestSingleInstanceLock：它按 userData 全局互斥，会导致 0.6.7 与 0.6.8 无法同开。
 // focus 回调稍后挂到 focusMainWindow（定义在文件后部），避免顶层 TDZ。
 // payload 携带次实例的 argv，可解析「点击系统通知」激活时携带的跳转目标。
@@ -187,11 +217,13 @@ import type {
 } from "../shared/types";
 import { msUntilNextThemeBoundary, resolveAppColorScheme } from "../shared/themeSchedule";
 import { ProjectStore } from "./projects/ProjectStore";
+import { runUserDataNameMigration, recordUserDataNameMigrationNotice, type UserDataNameMigration } from "./projects/userDataNameMigration";
 import { shouldAutoRegisterForeignCwd } from "./projects/projectPathPolicy";
 import { defaultPathCheck } from "./projects/projectPresence";
 import { FileSystemService } from "./fs/FileSystemService";
 import { AgentManager } from "./pi/AgentManager";
 import { PiProcess } from "./pi/PiProcess";
+import { getBridgeServer, stopBridgeServer } from "./pi/bridge/BridgeServer";
 import { PiModelCapabilityCache, watchPiConfigDirectory } from "./pi/PiModelCapabilityCache";
 // 生图消息不走 Agent 消息流，改名前需判断标题是否仍是占位名
 import { isDefaultAgentTitle } from "./pi/agentUtils";
@@ -214,6 +246,7 @@ import { resolvePiAuthHostLaunch } from "./pi/auth/piAuthHostLaunch";
 import { testPiProxy } from "./pi/PiProxyTester";
 import { SessionScanner } from "./sessions/SessionScanner";
 import { resolveLaunchDefaultOptions, isModelInModelsConfig } from "./sessions/launchDefaults";
+import { createSessionModelPreference } from "../shared/modelDisplayName";
 import { SessionCatalog, canAttachRuntimeMetadata } from "./sessions/SessionCatalog";
 import { aggregateDshProxyMode, buildHostProxyEnvPatch, resolveDshHostProxyMode, resolveEffectiveSessionProxyMode } from "./sessions/sessionProxyPolicy";
 import { SessionRuntimeCoordinator, type SessionRuntimeBinding } from "./sessions/SessionRuntimeCoordinator";
@@ -222,6 +255,7 @@ import { SessionCommandIpcError } from "./sessions/SessionCommandIpcError";
 import { appendSessionForkSuffix } from "./sessions/sessionForkTitle";
 import { CodexSessionImporter } from "./sessions/CodexSessionImporter";
 import { ClaudeSessionImporter } from "./sessions/ClaudeSessionImporter";
+import { QoderSessionImporter } from "./sessions/QoderSessionImporter";
 import { OpenCodeSessionImporter } from "./sessions/OpenCodeSessionImporter";
 import { ZCodeSessionImporter } from "./sessions/ZCodeSessionImporter";
 import { WorkBuddySessionImporter } from "./sessions/WorkBuddySessionImporter";
@@ -261,7 +295,7 @@ import { toWslLinuxPath, toWindowsHostPath } from "./wsl/WslPaths";
 import { registerProjectsIpc } from "./ipc/projectsIpc";
 import { registerUsageStatsIpc } from "./ipc/usageStatsIpc";
 import { UsageStatsService } from "./usageStats/UsageStatsService";
-import { constrainWindowBoundsToWorkArea, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, readLastWindowBounds, saveLastWindowBounds } from "./windowState";
+import { constrainWindowBoundsToWorkArea, type LastWindowBounds, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, readLastWindowBounds, saveLastWindowBounds } from "./windowState";
 import { createRendererCrashRecoveryGuard } from "./window/rendererCrashRecovery";
 import { registerBackgroundImageProtocol, registerBackgroundsIpc } from "./ipc/backgroundsIpc";
 import { registerGitIpc } from "./ipc/gitIpc";
@@ -280,6 +314,11 @@ import { ImageGenConfigStore } from "./imagegen/ImageGenConfigStore";
 import { registerVoiceTranscriptionIpc } from "./ipc/voiceTranscriptionIpc";
 import { VoiceTranscriptionConfigStore } from "./voice/VoiceTranscriptionConfigStore";
 import { VoiceTranscriptionService } from "./voice/VoiceTranscriptionService";
+import { createVolcStreamSocket } from "./voice/volcStreamSocket";
+import { fetchWhisperReleaseDigests, WhisperRuntimeManager } from "./voice/WhisperRuntimeManager";
+import { getWhisperModelDef } from "../shared/types/whisperRuntime";
+import { WhisperTranscriber } from "./voice/WhisperTranscriber";
+import { WhisperServerPool } from "./voice/WhisperServerPool";
 import { VisionBridgeConfigManager } from "./settings/visionBridgeConfig";
 import { registerSessionIpc, scheduleCatalogBackgroundScan } from "./ipc/sessionIpc";
 import { registerSystemIpc } from "./ipc/systemIpc";
@@ -327,7 +366,7 @@ let mainWindow: BrowserWindow | null = null;
 // 本文件不再出现紧凑模式的激活判断、屏幕几何计算与「关闭=返回工作台」的拦截逻辑。
 const quickTaskChrome = new QuickTaskWindowChrome({
 	getWindow: () => mainWindow,
-	saveWorkbenchBounds: (size) => saveLastWindowBounds(app.getPath("userData"), size),
+	saveWorkbenchBounds: (bounds) => saveLastWindowBounds(app.getPath("userData"), bounds),
 });
 let tray: Tray | null = null;
 /** 标记是否由用户主动退出（托盘菜单「退出」），区别于窗口关闭隐藏到托盘 */
@@ -344,6 +383,7 @@ let sessionRuntimeCoordinator: SessionRuntimeCoordinator;
 let idleAgentReleaser: IdleAgentReleaser | null = null;
 let codexSessionImporter: CodexSessionImporter;
 let claudeSessionImporter: ClaudeSessionImporter;
+let qoderSessionImporter: QoderSessionImporter;
 let openCodeSessionImporter: OpenCodeSessionImporter;
 let zcodeSessionImporter: ZCodeSessionImporter;
 let workbuddySessionImporter: WorkBuddySessionImporter;
@@ -414,6 +454,24 @@ let cleanupPasteFiles: (() => Promise<number>) | undefined;
 
 /** 退出清理登记表（C12）：常驻资源创建处登记，before-quit 统一顺序执行。 */
 const quitCleanup = new QuitCleanupRegistry();
+
+// 窗口整体缩放快捷键（Ctrl/Cmd+= 放大、Ctrl/Cmd+- 缩小）：按 shared/zoom 档位应用并持久化。
+// 主窗口与内置浏览器 webview guest 的 before-input-event 共用同一判定函数。
+const handleWindowZoomShortcut = createWindowZoomShortcutHandler({
+	getWindow: () => mainWindow,
+	getZoomFactor: () => settingsStore.get().zoomFactor,
+	// 持久化失败不影响本次缩放的观感（已 setZoomFactor），只记日志交由下次启动恢复
+	persistZoomFactor: (value) => {
+		void settingsStore.update({ zoomFactor: value }).catch((error) => {
+			void appLogger.warn("settings", "Failed to persist zoom factor", { error: error instanceof Error ? error.message : String(error) });
+		});
+	},
+	// 同步渲染层设置态：否则设置页「外观 → 窗口缩放」会一直显示快捷键改动前的旧百分比
+	notifyZoomFactor: (value) => {
+		if (!mainWindow || mainWindow.isDestroyed()) return;
+		mainWindow.webContents.send(ipcChannels.appZoomFactorChanged, value);
+	},
+});
 
 // ── DSH 外部会话同步（dshForeignSync 编排；本文件只做依赖装配）────────────
 // 清单来自磁盘只读扫描（不启动 host）；目标项目按会话自己的 cwd 建/挂，无 cwd 才兑底。
@@ -584,12 +642,13 @@ async function createAnonymousSession(input: CreateAnonymousSessionInput): Promi
 
 	// Resolve pi-configured defaults so the composer bar shows the effective
 	// model / thinking level even before the anonymous Agent is fully started.
-	let model = input.model;
+	let model: CreateAnonymousSessionInput["model"] = input.model ? createSessionModelPreference(input.model.provider, input.model.modelId, input.model.modelName) : undefined;
 	let thinkingLevel = input.thinkingLevel;
 	try {
 		const [settingsResult, modelsResult] = await Promise.all([configManager.getSettingsConfig(), configManager.getModelsConfig()]);
 		// 渲染层/引导页显式传入的模型（欢迎页偏好等）也可能指向已删除条目：
-		// 校验仍存在于 models.json，不存在则丢弃交给解析器兜底（lastUsed → 显式默认 → 第一个可用）。
+		// 校验仍存在于 models.json，不存在则交给 launchDefaults 按配置默认 →
+		// enabledModels → lastUsed 的顺序兜底。
 		if (model && !isModelInModelsConfig(modelsResult.parsed, model)) {
 			model = undefined;
 		}
@@ -644,12 +703,12 @@ async function activateAnonymousRuntime(session: SessionRecord, project: Project
 		const runtime = sessionRuntimeCoordinator.bindAnonymousRuntime(session.id, tab.id);
 		// Anonymous Agent 使用 --no-session 创建，不会经过普通 activateRuntime 的恢复流程；
 		// 因此在绑定后显式应用引导页选择，确保 pi 不再按自身默认优先级启动。
-		if (input.model) {
-			const result = await sessionRuntimeCoordinator.setRuntimeModel(runtime, input.model.provider, input.model.modelId);
+		if (session.model) {
+			const result = await sessionRuntimeCoordinator.setRuntimeModel(runtime, session.model.provider, session.model.modelId, session.model.modelName);
 			if (!result.ok) throw new Error(result.error.code);
 		}
-		if (input.thinkingLevel) {
-			const result = await sessionRuntimeCoordinator.setRuntimeThinking(runtime, input.thinkingLevel);
+		if (session.thinkingLevel) {
+			const result = await sessionRuntimeCoordinator.setRuntimeThinking(runtime, session.thinkingLevel);
 			if (!result.ok) throw new Error(result.error.code);
 		}
 		emitReplacementState(runtime, true);
@@ -932,7 +991,7 @@ const feishuSessionRuntimeBindings: SessionRuntimeBindingGateway = {
 			title: input.title,
 			environment,
 			source: "pi",
-			titleLocked: true,
+			titleOrigin: "manual",
 		});
 		return { sessionId: draft.id };
 	},
@@ -997,7 +1056,7 @@ const feishuSessionRuntimeBindings: SessionRuntimeBindingGateway = {
 				title: input.agent.title || "Feishu session",
 				environment,
 				source,
-				titleLocked: true,
+				titleOrigin: "manual",
 			});
 			sessionId = draft.id;
 		}
@@ -1441,7 +1500,7 @@ function configureBrowserPanelWebviewHost(window: BrowserWindow): void {
 		});
 
 		// webview guest 是独立 webContents，按键到不了主窗口的 before-input-event；
-		// 转发全局快捷键到主窗口：DevTools 开关、打开设置（唤起窗口并广播），
+		// 转发全局快捷键到主窗口：窗口缩放、DevTools 开关、打开设置（唤起窗口并广播），
 		// 键位按用户配置匹配（见 appShortcuts.ts / shared/shortcuts.ts）。
 		guest.on("before-input-event", (event, input) => {
 			if (isShortcutInput("openSettings", input)) {
@@ -1449,6 +1508,11 @@ function configureBrowserPanelWebviewHost(window: BrowserWindow): void {
 				if (!window || window.isDestroyed()) return;
 				if (!window.isVisible()) window.show();
 				window.webContents.send(ipcChannels.appOpenSettings);
+				return;
+			}
+			// 窗口缩放：命中后直接改主窗口 zoomFactor 并持久化；仅回推新比例同步设置态
+			if (handleWindowZoomShortcut(input)) {
+				event.preventDefault();
 				return;
 			}
 			if (!isShortcutInput("toggleDevTools", input)) return;
@@ -1489,14 +1553,17 @@ async function createWindow() {
 	const backgroundColor = isDark ? "#121212" : "#f8f8f5";
 
 	// 按外观设置的启动预设调整初始尺寸；隐藏态先 maximize/fullscreen，减少首帧跳动。
-	// startupWindowMode="last"：读上次关闭时的窗口大小；读不到（首次启动/记录损坏）顺延默认 maximized
+	// startupWindowMode="last"：读上次关闭时的窗口几何（位置/尺寸/是否最大化）；
+	// 读不到（首次启动/记录损坏）顺延默认 maximized。上次是最大化时先按记录的 normal 几何
+	// 建窗再 maximize，还原后回到原位置。
 	const requestedMode = settingsStore.get().startupWindowMode ?? "last";
 	let effectiveStartupMode = requestedMode;
-	let startupBounds: { width: number; height: number };
+	let startupBounds: LastWindowBounds;
 	if (requestedMode === "last") {
 		const last = readLastWindowBounds(app.getPath("userData"));
 		if (last) {
 			startupBounds = last;
+			if (last.maximized) effectiveStartupMode = "maximized";
 		} else {
 			effectiveStartupMode = "maximized";
 			startupBounds = resolveStartupWindowBounds("maximized");
@@ -1505,8 +1572,10 @@ async function createWindow() {
 		startupBounds = resolveStartupWindowBounds(requestedMode);
 	}
 
-	// x/y 未持久化时以主显示器为确定的恢复目标；纯逻辑同时收敛尺寸并在 workArea 内居中。
-	const startupWindowBounds = constrainWindowBoundsToWorkArea(startupBounds, screen.getPrimaryDisplay().workArea);
+	// 有记录位置时以该位置所在显示器为恢复目标（多屏下回到原来那块屏）；无位置（预设模式 /
+	// 旧版只存宽高的记录）以主显示器为确定目标并居中。纯逻辑负责裁尺寸、钳位置。
+	const targetDisplay = typeof startupBounds.x === "number" && typeof startupBounds.y === "number" ? screen.getDisplayMatching({ x: startupBounds.x, y: startupBounds.y, width: startupBounds.width, height: startupBounds.height }) : screen.getPrimaryDisplay();
+	const startupWindowBounds = constrainWindowBoundsToWorkArea(startupBounds, targetDisplay.workArea);
 
 	mainWindow = new BrowserWindow({
 		show: showMainWindowImmediately,
@@ -1572,6 +1641,21 @@ async function createWindow() {
 		mainWindow?.webContents.setZoomFactor(settingsStore.get().zoomFactor);
 		// 加载期排队的通知跳转目标补发一次（renderer 挂载后还会主动拉取，幂等兜底）
 		flushPendingFocusTargetOnLoad();
+		// —— 数据环境通知（规格 §6：首帧后与渲染层对齐目录归属）——
+		// dev 打包首启未决策 → 请渲染层弹数据模式选择（本会话临时落共用目录运行）；
+		// 未打包 dev 恒走开发隔离目录，不弹。
+		if (updateChannel === "dev" && app.isPackaged && devDataMode === null) {
+			mainWindow?.webContents.send(ipcChannels.dataEnvDecisionRequired);
+		}
+		// 目录标记与通道匹配校验（存量无标记 → ok 不打扰）：stable 包落在 channel-dev 目录才 mismatch。
+		const markerInDataDir = readDataEnvDecision(app.getPath("userData"));
+		if (markerInDataDir && validateStartupDataEnv(updateChannel, markerInDataDir) === "mismatch") {
+			mainWindow?.webContents.send(ipcChannels.dataEnvMismatchDetected, { dataModeInDir: markerInDataDir.dataMode });
+		}
+		// 共用目录存量标记补写（向后兼容：无标记视为 shared，首启补一次，之后只在缺失时写）。
+		if (updateChannel === "stable" && markerInDataDir === null) {
+			writeDataEnvDecision(app.getPath("userData"), "shared", app.getVersion());
+		}
 	});
 	mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
 		void appLogger.error("app", "Main window load failed", {
@@ -1682,6 +1766,11 @@ async function createWindow() {
 			mainWindow.webContents.send(ipcChannels.appOpenSettings);
 			return;
 		}
+		// 窗口缩放：主进程直接改 zoomFactor 并持久化，只回推新比例同步设置态
+		if (handleWindowZoomShortcut(input)) {
+			event.preventDefault();
+			return;
+		}
 		if (isShortcutInput("openNewSession", input)) {
 			event.preventDefault();
 			mainWindow.webContents.send(ipcChannels.appShortcutTriggered, "openNewSession");
@@ -1707,6 +1796,21 @@ async function createWindow() {
 		if (isShortcutInput("cycleThinking", input)) {
 			event.preventDefault();
 			mainWindow.webContents.send(ipcChannels.appShortcutTriggered, "cycleThinking");
+			return;
+		}
+		// 快捷消息浮层：目标是「当前聚焦会话」的输入框底栏，主进程只负责转发广播，
+		// 由渲染层按聚焦栏定位会话并唤出浮层（main 不持有会话上下文，见 renderer 的
+		// useQuickMessagePopover / ownsQuickMessageShortcut）。
+		// 注意本项不受「输入框聚焦时不触发」约束：它的用途就是打字途中插口令。
+		if (isShortcutInput("openQuickMessages", input)) {
+			event.preventDefault();
+			mainWindow.webContents.send(ipcChannels.appShortcutTriggered, "openQuickMessages");
+			return;
+		}
+		// 语音输入开关：与快捷消息同理，输入框聚焦时仍然生效——录音恰恰发生在打字现场。
+		if (isShortcutInput("toggleVoiceRecording", input)) {
+			event.preventDefault();
+			mainWindow.webContents.send(ipcChannels.appShortcutTriggered, "toggleVoiceRecording");
 			return;
 		}
 		if (isShortcutInput("toggleDevTools", input)) {
@@ -2341,6 +2445,55 @@ function registerIpc() {
 	registerUsageStatsIpc(ipcMain, usageStatsService);
 	// 供应商认证（/login）：同样只做校验/适配，进程与协议在 PiAuthService
 	registerPiAuthIpc(ipcMain, piAuthService);
+	// 数据环境（数据模式决策 / 目录归属校验）：业务在 dataEnvService，handler 只校验/适配。
+	// relaunchApp 复用 restartApp（先停常驻服务 + isQuitting，防止 closeToTray 吞掉 relaunch）；
+	// quitApp 先置 isQuitting，与托盘「退出」菜单同一写法，避免 closeToTray 把退出吞成隐藏到托盘。
+	registerDataEnvIpc({
+		getChannel: () => updateChannel,
+		getDecisionDir: () => channelDevDataDir,
+		getActiveDirectory: () => (devDataMode === "channel-dev" ? "channel-dev" : "shared"),
+		getAppVersion: () => app.getVersion(),
+		relaunchApp: restartApp,
+		quitApp: () => {
+			isQuitting = true;
+			app.quit();
+		},
+		// 数据导入（规格 §6 单向正式→dev）：源 = 共用目录（与 setPath 的 fallbackSharedDir 同源），目标 = dev 独立目录。
+		getSharedDataDir: () => fallbackSharedDataDir,
+		getChannelDevDataDir: () => channelDevDataDir,
+		sendProgress: (progress) => mainWindow?.webContents.send(ipcChannels.dataEnvImportProgress, progress),
+	});
+
+	// 频道切换（跨通道升级，规格 §3）：服务 electron-free，网络/临时目录/启动安装器/退出/推送在此装配。
+	// quitApp 先置 isQuitting，与 dataEnv/托盘「退出」同一写法，防 closeToTray 吞掉退出。
+	const channelSwitchService = new ChannelSwitchService({
+		currentChannel: () => updateChannel,
+		netFetch: (url, init) => net.fetch(url, init),
+		getTempDir: () => app.getPath("temp"),
+		spawnInstaller: (filePath) => {
+			// win：NSIS 安装器 detached 脱离父进程运行，PiDeck 退出后安装流程继续；mac/linux 由系统接管。
+			if (process.platform === "win32") {
+				spawn(filePath, [], { detached: true, stdio: "ignore" }).unref();
+				return;
+			}
+			void shell.openPath(filePath);
+		},
+		quitApp: () => {
+			isQuitting = true;
+			app.quit();
+		},
+		sendToRenderer: (snapshot) => {
+			const win = mainWindow;
+			if (win && !win.isDestroyed()) {
+				win.webContents.send(ipcChannels.channelSwitchStateChanged, snapshot);
+			}
+		},
+		registerQuitCleanup: (name, cleanup) => {
+			quitCleanup.register(name, cleanup);
+		},
+	});
+	// 安装包目录白名单直接用服务的 getInstallerDir()，同源不拼第二份路径。
+	registerChannelSwitchIpc({ service: channelSwitchService, getInstallerDir: () => channelSwitchService.getInstallerDir() });
 
 	if (automationStore && automationScheduler && automationRunCoordinator) {
 		registerAutomationIpc({
@@ -2411,19 +2564,66 @@ function registerIpc() {
 		log: (message, ...args) => appLogger.info("vision", message, ...args),
 	});
 
+	const whisperRuntimeRoot = join(app.getPath("userData"), "voice-runtime");
+	const whisperRuntimeManager = new WhisperRuntimeManager({
+		platform: process.platform,
+		arch: process.arch,
+		layout: { runtimeRoot: whisperRuntimeRoot, modelsRoot: join(whisperRuntimeRoot, "models"), tempRoot: join(whisperRuntimeRoot, "tmp") },
+		download: createNetDownloader((scope, message, detail) => void appLogger.warn(scope, message, detail)),
+		fetchReleaseDigests: fetchWhisperReleaseDigests,
+		log: (scope, message, detail) => void appLogger.info(scope, message, detail),
+	});
+	const whisperServerPool = new WhisperServerPool({
+		resolveServerPath: (input) => whisperRuntimeManager.resolveServerPath(input),
+		getEnv: () => (piLocator ? piLocator.createProcessEnv() : undefined),
+		log: (message, details) => void appLogger.info("voice-whisper-server", message, details),
+	});
+	// C12：退出清理登记（before-quit 统一 runAll）——常驻推理进程必须随应用回收，
+	// 否则残留的 whisper-server 会一直占着几百 MB 模型内存和监听端口。
+	quitCleanup.register("whisper-server", async () => {
+		whisperServerPool.abortAll();
+		await whisperServerPool.shutdown("quit");
+	});
+	const whisperTranscriber = new WhisperTranscriber({
+		manager: whisperRuntimeManager,
+		server: whisperServerPool,
+		getTempRoot: () => join(whisperRuntimeRoot, "tmp"),
+		// piLocator 在启动装配后段才就绪（本注册在其之前），转写发生在运行期，闭包懒取即可。
+		getEnv: () => (piLocator ? piLocator.createProcessEnv() : undefined),
+		log: (message, details) => void appLogger.info("voice-whisper", message, details),
+	});
 	const voiceTranscriptionConfigStore = new VoiceTranscriptionConfigStore({
 		getConfigPath: () => join(app.getPath("userData"), "voice-transcription.json"),
 		isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
 		protect: (plainText) => safeStorage.encryptString(plainText),
 		unprotect: (encrypted) => safeStorage.decryptString(Buffer.from(encrypted)),
 		log: (message, details) => void appLogger.info("voice-transcription", message, details),
+		isLocalReady: (config) => {
+			const status = whisperRuntimeManager.getStatus({ cliPath: config.cliPath, localModelId: undefined });
+			const selected = getWhisperModelDef(config.localModelId);
+			return status.cliReady && Boolean(selected && whisperRuntimeManager.isModelInstalled(selected.id));
+		},
 	});
 	registerVoiceTranscriptionIpc({
 		configStore: voiceTranscriptionConfigStore,
 		service: new VoiceTranscriptionService({
+			getPublicConfig: () => voiceTranscriptionConfigStore.getPublicConfig(),
 			getCredentials: () => voiceTranscriptionConfigStore.getCredentials(),
+			transcribeLocal: (input) => whisperTranscriber.transcribe(input),
+			cancelLocal: (requestId) => whisperTranscriber.cancel(requestId),
+			// 流式 2.0：主进程只负责建连与转发帧，握手/序号/收尾都在 VolcengineStreamSession 里。
+			createStreamSocket: createVolcStreamSocket,
+			emitStreamPartial: (partial) => {
+				if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ipcChannels.voiceTranscriptionStreamPartial, partial);
+			},
 			log: (message, details) => void appLogger.info("voice-transcription", message, details),
 		}),
+		runtimeManager: whisperRuntimeManager,
+		// 删模型/换二进制前先放下常驻进程：Windows 的文件锁会让删除直接失败。
+		beforeRuntimeMutation: () => whisperServerPool.shutdown("runtime-mutation"),
+		emitRuntimeProgress: (progress) => {
+			if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ipcChannels.voiceTranscriptionRuntimeProgress, progress);
+		},
 	});
 
 	// 生图：凭据来自独立 userData/imagegen.json，不读 pi models.json
@@ -2473,7 +2673,8 @@ function registerIpc() {
 				if (firstLine) {
 					// 自动命名只取首行，不在存储层硬截断；标题展示由侧栏窗口负责钳制，
 					// hover 时滚动展示全文。否则 "(fork)" 或英文单词可能被写成残片。
-					await sessionCatalog.applyAutomaticTitle(sessionId, firstLine);
+					// 生图没有扩展模型命名链路，首行提示词只算 fallback 所有权。
+					await sessionCatalog.applyAutomaticTitle(sessionId, firstLine, "fallback");
 					mainWindow?.webContents.send(ipcChannels.sessionsCatalogRefreshed, { projectId: entry.projectId });
 				}
 			}
@@ -2564,6 +2765,7 @@ function registerIpc() {
 		configManager,
 		codexSessionImporter,
 		claudeSessionImporter,
+		qoderSessionImporter,
 		openCodeSessionImporter,
 		zcodeSessionImporter,
 		workbuddySessionImporter,
@@ -2826,6 +3028,8 @@ function registerIpc() {
 	installAtomgitNoCacheBypass(() => session.fromPartition(UPDATER_PARTITION_NAME, { cache: false }));
 	const updateServiceBase = {
 		settingsStore,
+		// 更新通道（dev/stable，启动时已判定）：dev 强制 GitHub 源 + allowPrerelease（见 UpdateService.applyUpdateSource）。
+		channel: updateChannel,
 		checkPiUpdate: () => extensionManager.checkPiUpdate(),
 		// 模型目录：复用设置页同一检查链路（GitHub main 分支 manifest 比对），结果并入更新快照。
 		checkCatalogUpdate: () => catalogUpdater.checkRemote(),
@@ -2843,7 +3047,7 @@ function registerIpc() {
 	// quitAndInstall 会调用 app.quit；该标记让 closeToTray 放行真正的退出。
 	let updateInstallSetQuitting = false;
 	if (process.platform === "darwin") {
-		const checkMacManualUpdate = createMacManualUpdateChecker();
+		const checkMacManualUpdate = createMacManualUpdateChecker({ channel: updateChannel });
 		updateService = new UpdateService({
 			...updateServiceBase,
 			deliveryMode: "manual",
@@ -3153,6 +3357,7 @@ app
 		sessionScanner = new SessionScanner(mainCopy);
 		codexSessionImporter = new CodexSessionImporter(mainCopy);
 		claudeSessionImporter = new ClaudeSessionImporter(mainCopy);
+		qoderSessionImporter = new QoderSessionImporter(mainCopy);
 		openCodeSessionImporter = new OpenCodeSessionImporter(mainCopy);
 		zcodeSessionImporter = new ZCodeSessionImporter(mainCopy);
 		workbuddySessionImporter = new WorkBuddySessionImporter(mainCopy);
@@ -3206,6 +3411,19 @@ app
 		});
 		appLogger = new AppLogger();
 		setAppLogger(appLogger);
+		// userData 更名迁移（pi-desktop → PiDeck）在 setPath 前同步执行，当时还没有日志器；
+		// 结果在此补记，失败/回退路径必须可从日志诊断。
+		if (userDataNameMigrationResult?.kind === "migrated") {
+			void appLogger.info("migration", "userData directory renamed to PiDeck", {
+				from: userDataNameMigrationResult.oldPath,
+				to: userDataNameMigrationResult.userDataPath,
+				sessionDirs: userDataNameMigrationResult.migratedSessionDirs.length,
+			});
+		} else if (userDataNameMigrationResult?.kind === "failed") {
+			void appLogger.warn("migration", "userData rename failed; continuing on legacy dir, retry next launch", {
+				reason: userDataNameMigrationResult.reason,
+			});
+		}
 		rpcLogger = new RpcLogger();
 		// 用量统计：pi-tracker 的 <agentDir>/analytics/usage.jsonl
 		// + dsh-bill 的 <DSH_HOME>/dsh-bill/records.jsonl（采集由插件负责，此处只读）。
@@ -3370,6 +3588,17 @@ app
 				}
 				return project.path;
 			},
+			{
+				getProjectTrustDecision: async (project) => {
+					const settings = settingsStore.get();
+					const cwd = process.platform === "win32" && project.environment === "wsl" && settings.wslEnabled && settings.wslDistro ? toWslLinuxPath(project.path, { distro: settings.wslDistro }) : project.path;
+					return configManager.getProjectTrustDecision(cwd);
+				},
+				getGlobalDisabledResourceNames: () => {
+					const settings = settingsStore.get();
+					return { skills: settings.disabledSkills, prompts: settings.disabledPrompts };
+				},
+			},
 		);
 		resourceImportManager = new ResourceImportManager(
 			configManager,
@@ -3443,6 +3672,8 @@ app
 		);
 		// C12：退出清理登记（before-quit 统一 runAll，新增资源不再改 before-quit）
 		quitCleanup.register("pi-agents", () => agentManager?.stopAll());
+		// GUI 扩展桥端点：关掉监听，释放端口（桥随 pi 子进程一起结束）
+		quitCleanup.register("gui-bridge", () => stopBridgeServer());
 		// 开发诊断必须在 registerIpc 之前创建：systemIpc 闭包捕获这个实例。
 		diagnosticsMonitor = new DiagnosticsMonitor({
 			logger: appLogger,
@@ -3681,8 +3912,7 @@ app
 					projectId: input.projectId,
 					title: input.title?.trim() || mainCopy("session.newTitle"),
 					environment: settingsStore.get().wslEnabled ? "wsl" : "native",
-					titleLocked: false,
-					model: input.model,
+					model: input.model ? createSessionModelPreference(input.model.provider, input.model.modelId, input.model.modelName) : undefined,
 					thinkingLevel: input.thinkingLevel,
 				});
 			},
@@ -3704,6 +3934,7 @@ app
 				}
 				return sessionCatalog.update(sessionId, {
 					...patch,
+					...(patch.model ? { model: createSessionModelPreference(patch.model.provider, patch.model.modelId, patch.model.modelName) } : {}),
 					title: title || undefined,
 				});
 			},
@@ -3799,7 +4030,7 @@ app
 			getRewindCheckpointDiff: (target, checkpointId) => sessionRuntimeCoordinator.getRewindCheckpointDiff(target, checkpointId),
 			restoreRewindCheckpoint: (target, checkpointId, scope) => sessionRuntimeCoordinator.restoreRewindCheckpoint(target, checkpointId, scope),
 			prepareSessionRuntimeResend: (target, messageId) => sessionRuntimeCoordinator.prepareRuntimeResend(target, messageId),
-			setSessionRuntimeModel: (target, provider, modelId) => sessionRuntimeCoordinator.setRuntimeModel(target, provider, modelId),
+			setSessionRuntimeModel: (target, provider, modelId, modelName) => sessionRuntimeCoordinator.setRuntimeModel(target, provider, modelId, modelName),
 			setSessionRuntimeThinking: (target, level) => sessionRuntimeCoordinator.setRuntimeThinking(target, level),
 			setSessionRuntimePermission: (target, preset) => sessionRuntimeCoordinator.setRuntimePermission(target, preset),
 			cloneSessionRuntime: async (target) => {
@@ -3978,13 +4209,17 @@ app
 		// 只有 PiDeck 自动命名扩展的专用 marker 才能领取 fresh placeholder。
 		// pi /name、JSONL session_info 与重启 get_state 都不会经过这里，catalog 因而
 		// 始终是侧栏和 Tab 的显示标题权威。
-		agentManager.setAutomaticTitleChangedHandler((agentId, title) => {
+		// source 决定所有权（#266）：扩展模型标题 "auto" 可升级首条消息的 "fallback"；
+		// 反向不可（迟到的首条消息不得压住已生成的模型标题）。
+		agentManager.setAutomaticTitleChangedHandler((agentId, title, source) => {
 			const sessionId = sessionRuntimeCoordinator?.getSessionId(agentId);
 			if (!sessionId) return;
 			const entry = sessionCatalog.get(sessionId);
-			if (!entry || entry.title === title) return;
+			// 文本相同仍可能是「fallback → auto」的所有权升级（扩展标题与首条消息恰好一致）：
+			// 只有来源已确认且非 fallback 时才是真正的 no-op。
+			if (!entry || (entry.title === title && entry.titleOrigin !== "fallback")) return;
 			void sessionCatalog
-				.applyAutomaticTitle(sessionId, title)
+				.applyAutomaticTitle(sessionId, title, source)
 				.then(() => {
 					if (mainWindow && !mainWindow.isDestroyed()) {
 						mainWindow.webContents.send(ipcChannels.sessionsCatalogRefreshed, {
@@ -4056,6 +4291,18 @@ app
 
 		// 先注册 IPC 并创建窗口：WSL 探测 / pi settings / 代理 / Web 服务都可能卡住或抛错，
 		// 不能挡在 createWindow 前面（打包便携版表现为「启动没反应」，dev 因热路径较短不易复现）。
+		// GUI 扩展桥端点：只绑 127.0.0.1，起不来就静默跳过（桥不工作，pi 与 PiDeck 照常）。
+		// 必须在任何 Agent spawn 之前启动，否则首个 agent 拿不到 PIDECK_BRIDGE_URL。
+		// 放在 registerIpc 之前：端点与 IPC 注册无依赖，早启动早就绪。
+		void getBridgeServer()
+			.start()
+			.then((info) => {
+				if (!info) return;
+				void appLogger?.info("app", "GUI bridge endpoint ready", { baseUrl: info.baseUrl });
+			})
+			.catch((error: unknown) => {
+				void appLogger?.warn("app", "GUI bridge endpoint startup failed", error);
+			});
 		registerIpc();
 		registerFeishuIpc();
 		// 配置备份（手动模式）：仅在备份目录为空（首次使用）时自动建一份 first-run，

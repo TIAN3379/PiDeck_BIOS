@@ -2,8 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { loadTsCommonJs } from "./helpers/loadTsCommonJs.mjs";
 
-const { applyPiProxyMode, aggregateDshProxyMode, buildHostProxyEnvPatch, applyProxyEnvPatch, PROXY_ENV_KEYS, resolveModelProxyMode, resolveListedProxyMode, resolveEffectiveSessionProxyMode, resolveDshHostProxyMode, applyPiProxyModeWithProvider, computeGenProxyKey, buildPiProxyEnvPatch } =
-	loadTsCommonJs("src/main/sessions/sessionProxyPolicy.ts");
+const {
+	applyPiProxyMode,
+	aggregateDshProxyMode,
+	buildHostProxyEnvPatch,
+	applyProxyEnvPatch,
+	PROXY_ENV_KEYS,
+	PIDECK_PI_PROXY_SCOPE,
+	PIDECK_PI_PROXY_SCOPE_MODEL_ONLY,
+	resolveModelProxyMode,
+	resolveListedProxyMode,
+	resolveEffectiveSessionProxyMode,
+	resolveDshHostProxyMode,
+	applyPiProxyModeWithProvider,
+	computeGenProxyKey,
+	buildPiProxyEnvPatch,
+} = loadTsCommonJs("src/main/sessions/sessionProxyPolicy.ts");
 
 // 注：loadTsCommonJs 跨 vm realm 加载，对象原型与本地不同，deepEqual 会因 prototype
 // 不等而失败；统一用逐字段断言。
@@ -192,6 +206,7 @@ test("buildPiProxyEnvPatch: 开启代理必须带 NODE_USE_ENV_PROXY=1（否则 
 	assert.ok(patch, "开启且 URL 非空时必须返回 patch");
 	// 回归核心：这一项缺失 = 用户的代理设置对 pi 的模型请求完全无效。
 	assert.equal(patch.NODE_USE_ENV_PROXY, "1");
+	assert.equal(patch[PIDECK_PI_PROXY_SCOPE], PIDECK_PI_PROXY_SCOPE_MODEL_ONLY);
 	// 标准代理键大小写双份（覆盖 win/mac/linux 工具链）
 	for (const key of PROXY_ENV_KEYS) assert.equal(patch[key], "http://127.0.0.1:7890");
 	// 未配 bypass 时不注入 NO_PROXY，避免空值把系统既有绕过规则清掉

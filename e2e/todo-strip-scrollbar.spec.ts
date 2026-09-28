@@ -158,3 +158,135 @@ test("in-progress todo row keeps the strip list scrollbar-free (no scrollHeight 
 	expect(widths.card).toBeCloseTo(widths.composerBox, 0);
 	expect(widths.card).toBeCloseTo(widths.messageLog, 0);
 });
+
+/**
+ * 待办列表溢出时的行高回归（2027-01 排版事故）。
+ *
+ * 根因：ul 是「flex 列 + max-h-[180px]」容器，flex 子项默认 flex-shrink:1，而行上的
+ * overflow-hidden 会把 flex 自动最小尺寸（min-height:auto）清零 → 内容超过 180px 时
+ * 每行都能被继续压缩。条目少时（≤6 条）内容装得下不触发；13 条实测从 20px 被线性压到
+ * 6.47px —— 文字被行 overflow-hidden 切成横条、相邻行叠在一起，且 scrollHeight 收缩到
+ * 与 clientHeight 相等 → 滚动条根本不出现，用户滚不动（用户截图实况）。
+ *
+ * 断言方式：13 条待办（远超 180px）展开后，每行必须保持 20px 固有高度、文字不被行高
+ * 切断，且列表必须真实溢出（scrollHeight > clientHeight、出现滚动条、可滚到底部）。
+ */
+const overflowSeedProject = makeSeedProject("todo-strip-overflow-seed");
+// 单元素数组可直传（>=2 元素才会被 Playwright 当 [value, options] 元组，见 mock-pi-fixture）
+const overflowSessionFile = {
+	projectPath: overflowSeedProject.path,
+	entries: [
+		{
+			type: "session",
+			version: 3,
+			id: "f1",
+			parentId: null,
+			name: "待办溢出回归",
+			cwd: overflowSeedProject.path,
+			timestamp: new Date(Date.now() - 60_000).toISOString(),
+		},
+		{
+			type: "message",
+			id: "f2",
+			parentId: "f1",
+			timestamp: new Date(Date.now() - 59_000).toISOString(),
+			message: { role: "user", content: [{ type: "text", text: "待办溢出回归前置轮" }] },
+		},
+		{
+			type: "message",
+			id: "f3",
+			parentId: "f2",
+			timestamp: new Date(Date.now() - 58_000).toISOString(),
+			message: { role: "assistant", content: [{ type: "text", text: "前置轮回复，用于让会话进入有内容的常规态。" }] },
+		},
+		{
+			type: "custom",
+			id: "f4",
+			parentId: "f3",
+			timestamp: new Date(Date.now() - 57_000).toISOString(),
+			customType: "pi-deck-todo",
+			data: {
+				version: 3,
+				activePlan: {
+					id: 1,
+					todos: [
+						{ id: 1, text: "审查昨天与会话历史滚动相关的提交和当前工作区", status: "completed" },
+						{ id: 2, text: "添加可复现长会话上滚、预加载锚点与滚动条消失问题的回归测试", status: "completed" },
+						{ id: 3, text: "实现聚焦修复并保留原有预加载与自动跟随行为", status: "completed" },
+						{ id: 4, text: "运行格式化、针对性测试和 TypeScript 类型检查，复核改动", status: "completed" },
+						{ id: 5, text: "补充回归测试与代码注释说明根因与业务规则", status: "completed" },
+						{ id: 6, text: "复核 e2e 用例与滚动指纹采样脚本", status: "completed" },
+						{ id: 7, text: "更新 AGENTS.md 记录本次修复经验", status: "completed" },
+						{ id: 8, text: "确认 compact 窗口同样不受影响", status: "completed" },
+						{ id: 9, text: "Linux 下滚动条宽度差异核对", status: "completed" },
+						{ id: 10, text: "整理 elf 解析与回退路径", status: "pending" },
+						{ id: 11, text: "归档本轮回滚方案", status: "pending" },
+						{ id: 12, text: "补充第二语言文案", status: "pending" },
+						{ id: 13, text: "最后一条：确认溢出时滚动可到底", status: "pending" },
+					],
+				},
+			},
+		},
+	],
+};
+
+test.describe("todo strip overflow layout", () => {
+	test.use({
+		seedProjects: [overflowSeedProject],
+		seedSessionFiles: [overflowSessionFile],
+	});
+
+	test("many todo rows keep 20px height and the list scrolls instead of compressing", async ({ app, window }) => {
+		test.setTimeout(120_000);
+		await app.evaluate(({ BrowserWindow }) => {
+			const target = BrowserWindow.getAllWindows()[0];
+			if (!target) return;
+			if (target.isMinimized()) target.restore();
+			if (!target.isVisible()) target.showInactive();
+		});
+		// 打开种子历史会话（与上述用例同一项目导航路径，会话名不同）
+		await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+		await window.getByRole("tab", { name: "项目" }).click();
+		const projectRow = window.locator(".conversation", { hasText: "todo-strip-overflow-seed" }).first();
+		await expect(projectRow).toBeVisible({ timeout: 30_000 });
+		await projectRow.click();
+		const historyRow = window.locator(".conversation", { hasText: "待办溢出回归" }).first();
+		// 项目点开后要等 SessionScanner 扫完 .pi/sessions（冷启动常 >10s，给足余量）
+		await expect(historyRow).toBeVisible({ timeout: 30_000 });
+		await historyRow.click();
+		const list = await expandTodoStrip(window);
+
+		const rows = list.locator("li");
+		await expect(rows).toHaveCount(13);
+		const layout = await list.evaluate((ul: HTMLElement) => {
+			const rowEls = [...ul.querySelectorAll("li")];
+			return {
+				rowHeights: rowEls.map((row) => +row.getBoundingClientRect().height.toFixed(2)),
+				// 文字盒不得高出行盒：压缩态文字会溢出行、再被行 overflow-hidden 切成横条
+				textOverflowsRow: rowEls.some((row) => {
+					const text = row.querySelector("span:last-child");
+					return text ? text.getBoundingClientRect().height > row.getBoundingClientRect().height + 0.5 : false;
+				}),
+				scrollHeight: ul.scrollHeight,
+				clientHeight: ul.clientHeight,
+				scrollbarPx: ul.offsetWidth - ul.clientWidth,
+			};
+		});
+
+		for (const height of layout.rowHeights) {
+			expect(height, `every row must keep its 20px intrinsic height, got: ${JSON.stringify(layout.rowHeights)}`).toBe(20);
+		}
+		expect(layout.textOverflowsRow, "todo text must not overflow its row (compressed rows slice the glyphs)").toBe(false);
+		expect(layout.scrollHeight, `list must really overflow so it can scroll (scrollHeight ${layout.scrollHeight} vs clientHeight ${layout.clientHeight})`).toBeGreaterThan(layout.clientHeight);
+		expect(layout.scrollbarPx, "an overflowing list must show its scrollbar so users can reach hidden rows").toBeGreaterThan(0);
+
+		// 滚到底部后末行必须完整可见：压缩态下 scrollTop 恒为 0，用户根本滚不动
+		await list.evaluate((ul: HTMLElement) => ul.scrollTo(0, ul.scrollHeight));
+		const bottom = await list.evaluate((ul: HTMLElement) => {
+			const last = ul.querySelector("li:last-child") as HTMLElement;
+			return { scrollTop: ul.scrollTop, lastRowFullyVisible: last.getBoundingClientRect().bottom <= ul.getBoundingClientRect().bottom + 1 };
+		});
+		expect(bottom.scrollTop).toBeGreaterThan(0);
+		expect(bottom.lastRowFullyVisible).toBe(true);
+	});
+});

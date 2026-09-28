@@ -98,6 +98,15 @@ export const remarkLinkifyPaths = () => {
 					});
 					last = match.end;
 				}
+				// 最后一个命中之后仍有正文时必须原样补回：父节点会用 __segs **整体替换**本
+				// 文本节点，少了这一段，路径之后的全部文字（含换行后的后续行）会从回复里
+				// 整段消失——用户看到的现象就是「/ 后面的文本不显示」。
+				// 回归来历：fb6b5667 把 while 循环重写成 for-of 时漏掉这段尾部回填，
+				// 2026-09-23 经会话 jsonl 实测暴露（91 条回复 47 条丢文本）。
+				// 链接文本本身等于原文路径，因此补回尾段不会改变链接已产出的部分。
+				if (last < text.length) {
+					segs.push({ type: "text", value: text.slice(last) });
+				}
 				node.__segs = segs;
 				return;
 			}

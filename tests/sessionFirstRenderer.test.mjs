@@ -47,7 +47,10 @@ test("App routes project and Session selection through the command owner", () =>
 	assert.match(appSource, /selectSessionCommand\(session\.projectId, session\.id, false\)/);
 	assert.match(appSource, /selectSessionCommand\(projectId, targetSessionId, true\)/);
 	assert.match(appSource, /sessionRecordByIdAtomFamily\(target\.sessionId\)/);
-	assert.match(appSource, /select: \(projectId\) => \{\s*selectProjectCommand\(projectId\);[\s\S]*?const loadState = store\.get\(sessionCatalogLoadStateAtom\)\[projectId\];[\s\S]*?loadState\?\.status !== "loading" && loadState\?\.status !== "ready"/);
+	// select 口只负责选中 + 交给统一的按需加载入口，「什么时候该扫、什么时候该跳过」
+	// 的规则留在 ensureProjectCatalogLoaded 一处，不在 select 口重复一份（防止规则漂移）。
+	assert.match(appSource, /select: \(projectId\) => \{\s*selectProjectCommand\(projectId\);[\s\S]*?ensureProjectCatalogLoaded\(projectId\);/);
+	assert.match(appSource, /ensureProjectCatalogLoaded = useCallback\(\s*\(projectId: string, silent = false\) => \{\s*const loadState = store\.get\(sessionCatalogLoadStateAtom\)\[projectId\];\s*if \(loadState\?\.status === "loading" \|\| loadState\?\.status === "ready"\) return;/);
 	assert.doesNotMatch(appSource, /setCurrentSessionId\(/);
 });
 

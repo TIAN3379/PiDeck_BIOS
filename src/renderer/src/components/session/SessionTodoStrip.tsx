@@ -240,9 +240,17 @@ export function SessionTodoStrip(props: { sessionId: string }) {
 					{/* 行内 overflow-hidden：旋转方盒的「变换后包围盒（AABB）」不得外溢到列表
 					    scrollHeight（旋转 svg 的 AABB ≈ 22.6px > 20px 行高，会让外层 ul 的
 					    scrollHeight 反复越界 → 原生滚动条闪）。行高 20px、图标墨迹 16px，
-					    居中留 2px 余量，裁切不会切到可见像素。 */}
+					    居中留 2px 余量，裁切不会切到可见像素。
+
+					    ⚠️ li 必须 shrink-0：ul 是「flex 列 + max-h-[180px]」容器，flex 子项
+					    默认 flex-shrink:1，而行上的 overflow-hidden 会把 flex 的自动最小尺寸
+					    （min-height:auto，通常等于内容高）清零 → 内容超过 180px 时每行都能被
+					    继续压缩。于是 Chromium 把 13 行实测从 20px 线性压到 6.47px：文字被行
+					    overflow-hidden 切成横条、相邻行叠在一起，且 scrollHeight 收缩到与
+					    clientHeight 相等 → 滚动条根本不出现，用户滚不动（2027-01 排版事故）。
+					    shrink-0 让行保持固有高度，超出部分交还给 overflow-y-auto 滚动。 */}
 					{items.map((item) => (
-						<li key={item.id} className="flex min-w-0 items-center gap-2.5 overflow-hidden text-[13px] leading-5 text-text-secondary">
+						<li key={item.id} className="flex min-w-0 items-center gap-2.5 overflow-hidden shrink-0 text-[13px] leading-5 text-text-secondary">
 							<span className="grid size-4 shrink-0 place-items-center" aria-hidden="true">
 								<StatusGlyph status={item.status} />
 							</span>

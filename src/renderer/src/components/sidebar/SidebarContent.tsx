@@ -23,6 +23,7 @@ import { Dock, DockItem } from "../motion/dock";
 import { UpdateDotHint } from "./UpdateDotHint";
 import { AnnouncementCenter } from "./AnnouncementCenter";
 import { AutomationDockButton } from "../automation/AutomationDockButton";
+import { BridgeGuiSlot } from "../bridge/BridgeSlot";
 import { MorphingSearch, type MorphingSearchItem } from "../motion/morphing-search";
 import { parseSidebarNavTab } from "../../utils/sidebarNavTab";
 import { displayProjectDirectoryName, isChatProject } from "../../rendererUtils";
@@ -40,7 +41,7 @@ export type SidebarActions = {
 		reorder: (sourceProjectId: string, targetProjectId: string) => Promise<void>;
 		reveal: (project: Project) => Promise<void>;
 		openWithEditor: (project: Project) => void;
-		importSessions: (project: Project, source: "codex" | "claude" | "opencode" | "zcode" | "workbuddy" | "cursor") => void;
+		importSessions: (project: Project, source: "codex" | "claude" | "qoder" | "opencode" | "zcode" | "workbuddy" | "cursor") => void;
 		/** 导入其他目录的会话：源目录现选，用于目录移动/改名后找回历史。 */
 		importDirectorySessions: (project: Project) => void;
 		manageResources: (project: Project) => void;
@@ -54,7 +55,8 @@ export type SidebarActions = {
 		changeChatPath?: (project: Project) => Promise<void>;
 	};
 	sessions: {
-		/** 单击默认 preview；双击传 permanent。侧栏拖拽分屏也会走 open。 */
+		simpleNavigation?: boolean;
+		/** 单击模式由App决定；仅标签模式支持双击晋升常驻。 */
 		open: (projectId: string, sessionId: string, tabMode?: "preview" | "permanent") => Promise<void>;
 		/**
 		 * 按需预加载会话 catalog：活动页「最近会话」要跨项目数据，而 catalog 平时只在
@@ -117,6 +119,7 @@ export type SidebarActions = {
 };
 
 export type SidebarContentProps = {
+	simple?: boolean;
 	controller: SidebarController;
 	actions: SidebarActions;
 	currentProjectId?: string;
@@ -257,7 +260,7 @@ export function SidebarContent(props: SidebarContentProps) {
 			// 行操作按钮是 absolute 浮层：hover 时行文本通过 padding-right 压缩让位
 			// （pr 留出按钮空间 + 截断，三棵树统一策略，不再按侧栏宽度分断点），
 			// 宽度不用穿透到树组件
-			className="chat-list-pane v3-braun flex h-full min-w-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
+			className={cn("chat-list-pane v3-braun flex h-full min-w-0 flex-col overflow-hidden text-sidebar-foreground", props.simple ? "bg-(--simple-shell-surface)" : "bg-sidebar")}
 			aria-label={t("app.search")}
 		>
 			{/* 品牌区提到 body 外：贴侧栏顶边，不被 sidebar-body 的 px/py 顶开（logo 怼左上）。 */}
@@ -267,7 +270,7 @@ export function SidebarContent(props: SidebarContentProps) {
             新建会话 → 打开初始引导页（居中输入框 + 项目下拉切换后可直接对话）；
             搜索 → 打开 MorphingSearch 命令面板。把搜索从整行输入框收敛成单个动作项，
             消除与下方胶囊分段的样式重复。底部细分割线与下方分组区分，避免与分段栏粘连。 */}
-				<div className="flex shrink-0 flex-col gap-0.5 border-b border-border/40 pt-1 pb-2">
+				<div className={cn("flex shrink-0 flex-col gap-0.5 pt-1 pb-2", !props.simple && "border-b border-border/40")}>
 					<button type="button" className="group flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body text-foreground transition-colors hover:bg-muted/60" aria-label={t("app.newSession")} title={t("app.newSession")} onClick={() => props.onOpenNewSession?.()}>
 						<CirclePlus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
 						<span className="min-w-0 flex-1 truncate font-medium">{t("app.newSession")}</span>
@@ -316,29 +319,31 @@ export function SidebarContent(props: SidebarContentProps) {
             这层包层，包层自身仍是内容宽，所以侧栏拉宽时右侧会留一段空轨（下方 Dock 用
             w-full justify-between 分发才显得自适应）。用后代选择器把包层设为 flex-1，三档
             平分轨道；包层 min-w-0 + 文案 truncate 作窄侧栏/英文长标签的溢出兜底。 */}
-				<Tabs
-					value={controller.navTab}
-					onValueChange={(value) => {
-						const tab = parseSidebarNavTab(value);
-						if (tab) controller.setNavTab(tab);
-					}}
-					variant="pill"
-				>
-					<TabsList className="w-full rounded-full bg-muted/70 p-0.5 [&>div]:min-w-0 [&>div]:flex-1">
-						<TabsTrigger value="active" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "active" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
-							<Activity className="size-3.5 shrink-0" aria-hidden="true" />
-							<span className="truncate">{t("app.sidebarActive")}</span>
-						</TabsTrigger>
-						<TabsTrigger value="chats" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "chats" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
-							<MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
-							<span className="truncate">{t("app.sidebarChats")}</span>
-						</TabsTrigger>
-						<TabsTrigger value="projects" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "projects" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
-							<Folder className="size-3.5 shrink-0" aria-hidden="true" />
-							<span className="truncate">{t("app.sidebarProjects")}</span>
-						</TabsTrigger>
-					</TabsList>
-				</Tabs>
+				{!props.simple && (
+					<Tabs
+						value={controller.navTab}
+						onValueChange={(value) => {
+							const tab = parseSidebarNavTab(value);
+							if (tab) controller.setNavTab(tab);
+						}}
+						variant="pill"
+					>
+						<TabsList className="w-full rounded-full bg-muted/70 p-0.5 [&>div]:min-w-0 [&>div]:flex-1">
+							<TabsTrigger value="active" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "active" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
+								<Activity className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarActive")}</span>
+							</TabsTrigger>
+							<TabsTrigger value="chats" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "chats" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
+								<MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarChats")}</span>
+							</TabsTrigger>
+							<TabsTrigger value="projects" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "projects" && "text-foreground")} indicatorClassName="bg-background shadow-sm dark:bg-bg-active">
+								<Folder className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarProjects")}</span>
+							</TabsTrigger>
+						</TabsList>
+					</Tabs>
+				)}
 
 				{/* G9：DSH 全文搜索结果（搜索词非空时展示；结果按 dshSessionId 映射回 catalog） */}
 				{controller.search.trim() && (
@@ -353,7 +358,13 @@ export function SidebarContent(props: SidebarContentProps) {
 				{/* 单一滚动区承载项目与展开内容，避免项目导航/详情双滚动和重复标题。
             scrollbar-gutter: stable：滚动条出现/消失时列表宽度不跳变（与抽屉一致）。 */}
 				<section className="conversation-list min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
-					<ProjectTree controller={controller} actions={actions} currentProjectId={currentRootProject?.id} currentSessionId={props.currentSessionId} worktreesByProject={props.worktreesByProject} branchByProject={props.branchByProject} removingWorktreePaths={props.removingWorktreePaths} />
+					<ProjectTree simple={props.simple} controller={controller} actions={actions} currentProjectId={currentRootProject?.id} currentSessionId={props.currentSessionId} worktreesByProject={props.worktreesByProject} branchByProject={props.branchByProject} removingWorktreePaths={props.removingWorktreePaths} />
+					{/* GUI 扩展桥：侧边栏面板/分区落点（ctx.gui.setSidebarPanel / setSidebarSection）。
+					    **旁插**在 ProjectTree 之后 —— 不改侧边栏原有结构（§7.4 只追加）。
+					    侧边栏是应用级 chrome，桥状态按「当前聚焦会话」取（桥的运行时状态本就是按
+					    runtimeGeneration 存的，detach 即清）；无贡献时返回 null，不占位。 */}
+					<BridgeGuiSlot sessionId={props.currentSessionId} slot="sidebar.panel" className="flex flex-col gap-2 px-2 py-2" />
+					<BridgeGuiSlot sessionId={props.currentSessionId} slot="sidebar.section" className="flex flex-col gap-2 px-2 py-2" />
 				</section>
 			</div>
 			{/* 底栏 dock（beUI Dock）：设置/公告/反馈/主题切换收进浮动卡片，铺满底栏宽度
@@ -467,6 +478,10 @@ export function SidebarContent(props: SidebarContentProps) {
 					}}
 					onImportClaudeSessions={() => {
 						actions.projects.importSessions(menuProject, "claude");
+						controller.closeMenu();
+					}}
+					onImportQoderSessions={() => {
+						actions.projects.importSessions(menuProject, "qoder");
 						controller.closeMenu();
 					}}
 					onImportOpenCodeSessions={() => {

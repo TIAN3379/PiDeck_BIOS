@@ -50,7 +50,8 @@ export function useSessionRuntimeBridge(callbacks: RuntimeBridgeCallbacks = {}):
 				};
 				const text = notice.i18nKey ? t(notice.i18nKey as TranslationKey) : notice.message;
 				if (text) {
-					// 异常（error）常驻不自动消失；info/warning 保持主进程指定的短时反馈
+					// 异常（error）常驻不自动消失；其余时长由设置项 toastDurationMs 全局决定，
+					// 主进程带的 duration 不再单独尊重。
 					const kind = notice.kind ?? "info";
 					// 「禁用扩展启动」提示带动作：一键打开 设置 → 开发设置 并滚到启动参数，
 					// 否则用户只能自己去找该开关（能力静默缺失就是这么来的）。
@@ -65,7 +66,7 @@ export function useSessionRuntimeBridge(callbacks: RuntimeBridgeCallbacks = {}):
 							: undefined;
 					showNotice(
 						text,
-						kind === "error" ? Number.POSITIVE_INFINITY : (notice.duration ?? 2500),
+						kind === "error" ? Number.POSITIVE_INFINITY : undefined,
 						kind,
 						undefined,
 						actions,

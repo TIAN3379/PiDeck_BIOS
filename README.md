@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.7.7--beta-blue)
+![Version](https://img.shields.io/badge/version-0.7.7-blue)
 
 国内 AtomGit 托管：https://atomgit.com/ayuayue/PiDeck
 <!-- 预留 AtomGit G-Star 徽章位（替换占位链接后启用）
@@ -61,7 +61,7 @@
   - [📑 目录](#-目录)
   - [✨ 核心亮点](#-核心亮点)
   - [📋 更新日志](#-更新日志)
-    - [v0.7.6 更新亮点](#v076-更新亮点)
+    - [v0.7.7 更新亮点](#v077-更新亮点)
   - [🧩 功能总览](#-功能总览)
     - [工作区与项目](#工作区与项目)
     - [会话与对话](#会话与对话)
@@ -100,9 +100,9 @@
 
 ## 📋 更新日志
 
-> **最新版本 v0.7.7-beta**（2026-09-21）
+> **最新版本 v0.7.7**（2026-09-22）
 
-### v0.7.7-beta 更新亮点
+### v0.7.7 更新亮点
 - 🚀 **工作区文件按名称搜索（#215）**
 - 🚀 **从其他目录导入会话（项目移动 / 改名后找回历史）**
 - 🚀 **外部资源导入（MCP / 技能 / 提示词）**

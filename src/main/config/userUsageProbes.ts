@@ -335,9 +335,9 @@ async function readUserUsageProbesNormalized(configDir: string): Promise<{
  * 校验并规范化单条 provider 配置。返回 { config } 或 { error }（人话描述，不含密钥）。
  * 规则：
  * - enabled：布尔（缺省 = 自动判定）；
- * - template：声明式 id（general/newapi）或内置候选 templateId；未知 id 非法；
+ * - template：声明式 id（general/newapi/cookie/volcengine）或内置候选 templateId；未知 id 非法；
  * - baseUrl：必须 http(s):// 开头（可选覆盖）；
- * - apiKey/accessToken/userId：非空字符串（可选/模板强制项在模板构建时校验）；
+ * - apiKey/accessToken/userId/accessKeyId/secretAccessKey：非空字符串（可选/模板强制项在模板构建时校验）；
  * - timeoutSecs：1-300；intervalMinutes：0-1440。
  */
 export function normalizeProviderConfig(input: unknown): { config: UsageProbeProviderConfig } | { error: string } {
@@ -353,7 +353,7 @@ export function normalizeProviderConfig(input: unknown): { config: UsageProbePro
 		if (typeof input.template !== "string") return { error: "template 必须是字符串" };
 		const id = input.template.trim();
 		const isBuiltin = Object.prototype.hasOwnProperty.call(USAGE_PROBE_CATEGORY_BY_TEMPLATE_ID, id);
-		if (!isBuiltin && id !== "general" && id !== "newapi" && id !== "cookie") {
+		if (!isBuiltin && id !== "general" && id !== "newapi" && id !== "cookie" && id !== "volcengine") {
 			return { error: `未知模板：${id}` };
 		}
 		config.template = id;
@@ -389,6 +389,13 @@ export function normalizeProviderConfig(input: unknown): { config: UsageProbePro
 	if (valuePath) config.valuePath = valuePath;
 	const currencyPath = optionalString(input.currencyPath);
 	if (currencyPath) config.currencyPath = currencyPath;
+
+	// 火山方舟 AK/SK：凭据形如 AKTP... / 32 位 base64，无格式强校验（复制粘贴带空格由
+	// trim 兜底），但必须非空；模板构建时缺任一项即报「需要 Access Key ID / Secret Access Key」。
+	const accessKeyId = optionalString(input.accessKeyId);
+	if (accessKeyId) config.accessKeyId = accessKeyId;
+	const secretAccessKey = optionalString(input.secretAccessKey);
+	if (secretAccessKey) config.secretAccessKey = secretAccessKey;
 
 	if (input.timeoutSecs !== undefined) {
 		if (typeof input.timeoutSecs !== "number" || !Number.isInteger(input.timeoutSecs) || input.timeoutSecs < 1 || input.timeoutSecs > 300) {

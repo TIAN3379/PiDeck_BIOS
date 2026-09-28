@@ -11,6 +11,8 @@ const fs = require("node:fs");
 const { finished } = require("node:stream");
 const path = require("node:path");
 const asar = require("@electron/asar");
+const { dirSize, rmDir } = require("./after-pack-file-utils");
+const { assertNodePtyRuntimeArtifact, cleanNodePtyCompileTimeDirectories } = require("./after-pack-node-pty");
 const { patchSharpIndexCjs } = require("./patch-sharp-index");
 
 /** 要保留的语言包列表（小写，无 .pak 后缀） */
@@ -140,35 +142,6 @@ const ARCH_NAMES = {
 	3: "arm64",
 	4: "universal",
 };
-
-/** 递归删除目录 */
-async function rmDir(dir) {
-	try {
-		await fs.promises.rm(dir, { recursive: true, force: true });
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** 递归获取目录总大小 */
-async function dirSize(dir) {
-	let total = 0;
-	try {
-		const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-		for (const entry of entries) {
-			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				total += await dirSize(full);
-			} else if (entry.isFile()) {
-				total += (await fs.promises.stat(full)).size;
-			}
-		}
-	} catch {
-		/* 忽略 */
-	}
-	return total;
-}
 
 /**
  * @param {import("electron-builder").AfterPackContext} context
@@ -354,22 +327,11 @@ exports.default = async function (context) {
 			}
 		}
 
-		// --- 3b2. 删除 asar 内 node-pty 非当前平台的 prebuild（.node 文件被 electron-builder 自动解包到 asar.unpacked，
-		//    但 asar 内仍保留了所有平台的副本，平台过滤只在 afterPack 上一步做了 asar.unpacked 的清理）---
+		// --- 3b2. 清理 asar 内 node-pty 的编译期目录，保留目标平台唯一的 native fallback ---
 		const nodePtyExtract = path.join(extractDir, "node_modules", "node-pty");
+		totalRemoved += await cleanNodePtyCompileTimeDirectories(nodePtyExtract, CURRENT_PLATFORM, "asar 内");
+
 		const nodePtyPrebuildDir = path.join(nodePtyExtract, "prebuilds");
-		// asarUnpack 是影子目录：asar 内仍有 src/ third_party/ build/ 副本，不删会白占 asar 体积。
-		// 运行时加载的是 unpacked 镜像里的 prebuilds，这里只清 asar 里的源码树。
-		if (fs.existsSync(nodePtyExtract)) {
-			for (const extra of ["src", "third_party", "build", "deps", "scripts"]) {
-				const extraDir = path.join(nodePtyExtract, extra);
-				if (!fs.existsSync(extraDir)) continue;
-				const size = await dirSize(extraDir);
-				await rmDir(extraDir);
-				totalRemoved += size;
-				console.log(`  [afterPack] asar 内已删除 node-pty ${extra}/ (${(size / 1024 / 1024).toFixed(1)} MB)`);
-			}
-		}
 		if (fs.existsSync(nodePtyPrebuildDir)) {
 			try {
 				const entries = await fs.promises.readdir(nodePtyPrebuildDir, { withFileTypes: true });
@@ -463,27 +425,15 @@ exports.default = async function (context) {
 	}
 
 	// ====================================
-	// 5. node-pty 源码/构建产物清理（asar.unpacked）
-	//    运行时只加载 lib/ + 当前平台 prebuilds（含 conpty/OpenConsole.exe + conpty.dll）。
-	//    loadNativeModule 顺序是 build/Release → build/Debug → prebuilds/<platform>-<arch>，
-	//    删掉 build/ 会落到 prebuilds，这正是打包态要用的路径。src/ third_party/ deps/
-	//    scripts/ 都是编译期材料，运行时不 require。
+	// 5. node-pty 编译期目录 / source map 清理（asar.unpacked）
+	//    Windows/macOS 有官方 prebuild，build/ 可删除；node-pty 1.1.0 的 Linux
+	//    没有 prebuild，build/Release/pty.node 是唯一运行时 addon，必须保留。
 	// ====================================
 	const nodePtyUnpacked = path.join(appOutDir, "resources", "app.asar.unpacked", "node_modules", "node-pty");
 	if (fs.existsSync(nodePtyUnpacked)) {
 		let mapFiles = 0;
 		let mapBytes = 0;
-		let extraBytes = 0;
-
-		// 源码/构建树：必须整目录删。prebuilds 与 lib 一律保留。
-		for (const extra of ["src", "third_party", "build", "deps", "scripts"]) {
-			const extraDir = path.join(nodePtyUnpacked, extra);
-			if (!fs.existsSync(extraDir)) continue;
-			const size = await dirSize(extraDir);
-			await rmDir(extraDir);
-			extraBytes += size;
-			console.log(`  [afterPack] node-pty 已删除 ${extra}/ (${(size / 1024 / 1024).toFixed(1)} MB)`);
-		}
+		const extraBytes = await cleanNodePtyCompileTimeDirectories(nodePtyUnpacked, CURRENT_PLATFORM, "unpacked 镜像");
 
 		async function walk(dir) {
 			try {
@@ -527,5 +477,12 @@ exports.default = async function (context) {
 			fs.writeFileSync(sharpIndexCjs, patched);
 			console.log(`[afterPack] sharp index.cjs: 已打 resourcesPath 补丁`);
 		}
+	}
+
+	// Electron 只有看到 leaf entry 的 unpacked 标记才会把 require() 映射到磁盘镜像。
+	// 合成测试夹具可显式关闭；真实 electron-builder context 永远走这条硬门禁。
+	if (context.verifyNodePtyRuntime !== false && fs.existsSync(asarPath)) {
+		const artifact = assertNodePtyRuntimeArtifact(asarPath, CURRENT_PLATFORM);
+		console.log(`[afterPack] node-pty runtime: 已验证 ${artifact.relativePath}`);
 	}
 };

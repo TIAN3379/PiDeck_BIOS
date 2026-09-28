@@ -32,6 +32,7 @@ PiDeck is an open-source project and everyone is welcome to contribute.
 - [**juzijun233**](https://github.com/juzijun233) — Stability and security hardening series: login-shell PATH probing moved to async warm-up, late streaming events rejected, event payload triples, subscribed-channel allowlist, oversized diff truncation, PiRpcClient line-buffer cap, per-session subscription isolation for split panes
 - [**xiaYuTian11**](https://github.com/xiaYuTian11) — Current Git branch in the sidebar project tree (#232), timeline scroll jitter and jump-to-top/bottom fixes (#224), session tab width cap and font size (#226), skill rename routed by skill type (#227)
 - [**Q-xuan**](https://github.com/Q-xuan) — Inline-code file references are clickable again (#228)
+- [**cmyk-xing**](https://github.com/cmyk-xing) — Feature-module visibility switches in appearance settings (#254); guide-page bootstrap messages no longer leak into newly created sessions (#256); Windows reopen at their last position/size/maximized state (#259)
 
 ## How to Contribute
 

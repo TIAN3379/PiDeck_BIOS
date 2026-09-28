@@ -83,14 +83,30 @@ test("紧凑模式关窗时保存的是工作台几何，不是 720×760 的小�
 	await chrome.applyLaunchTarget({ quickTaskPath: process.cwd() });
 	assert.equal(win.getBounds().width, 720, "进入紧凑模式后窗口应变窄");
 	chrome.saveWorkbenchBoundsOnClose(win);
-	assertJsonEqual(saved.at(-1), { width: 1280, height: 900 });
+	assertJsonEqual(saved.at(-1), { x: 200, y: 100, width: 1280, height: 900, maximized: false });
 });
 
-test("未激活紧凑模式时按最大化/全屏语义取 normal bounds", () => {
+test("紧凑模式关窗时 maximized 取进入前的工作台状态，不取当前小窗口", async () => {
+	const win = windowStub({ maximized: true });
+	const { chrome, saved } = createChrome(win);
+	await chrome.applyLaunchTarget({ quickTaskPath: process.cwd() });
+	assert.equal(win.isMaximized(), false, "紧凑模式应已还原最大化");
+	chrome.saveWorkbenchBoundsOnClose(win);
+	assertJsonEqual(saved.at(-1), { x: 200, y: 100, width: 1280, height: 900, maximized: true });
+});
+
+test("未激活紧凑模式时按最大化/全屏语义取 normal bounds，并记录 maximized", () => {
 	const win = windowStub({ maximized: true });
 	const { chrome, saved } = createChrome(win);
 	chrome.saveWorkbenchBoundsOnClose(win);
-	assertJsonEqual(saved.at(-1), { width: 1280, height: 900 });
+	assertJsonEqual(saved.at(-1), { x: 200, y: 100, width: 1280, height: 900, maximized: true });
+});
+
+test("普通窗口关窗时保存当前位置与尺寸", () => {
+	const win = windowStub({ normal: { x: 640, y: 80, width: 1251, height: 965 } });
+	const { chrome, saved } = createChrome(win);
+	chrome.saveWorkbenchBoundsOnClose(win);
+	assertJsonEqual(saved.at(-1), { x: 640, y: 80, width: 1251, height: 965, maximized: false });
 });
 
 test("窗口已销毁时不写几何", () => {
@@ -154,11 +170,11 @@ test("窗口引用是现取的：换窗口后重新捕获那一侧的工作台�
 
 	await chrome.applyLaunchTarget({ quickTaskPath: process.cwd() });
 	chrome.saveWorkbenchBoundsOnClose(holder.window);
-	assertJsonEqual(saved.at(-1), { width: 1280, height: 900 });
+	assertJsonEqual(saved.at(-1), { x: 200, y: 100, width: 1280, height: 900, maximized: false });
 
 	holder.window = second;
 	await chrome.applyLaunchTarget({ quickTaskPath: process.cwd() });
 	chrome.saveWorkbenchBoundsOnClose(holder.window);
-	assertJsonEqual(saved.at(-1), { width: 1600, height: 1000 });
+	assertJsonEqual(saved.at(-1), { x: 0, y: 0, width: 1600, height: 1000, maximized: false });
 	assert.notEqual(saved.at(-1).width, 1280, "第二个窗口必须重新捕获几何，不能沿用第一个窗口的 saved bounds");
 });

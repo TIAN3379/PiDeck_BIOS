@@ -38,7 +38,18 @@ function loadResolver() {
 		{
 			module,
 			exports: module.exports,
-			require: () => ({}),
+			require: (specifier) => {
+				if (specifier === "../../shared/modelDisplayName") {
+					return {
+						createSessionModelPreference: (provider, modelId, modelName) => ({
+							provider,
+							modelId,
+							modelName: typeof modelName === "string" && modelName.trim() ? modelName.trim() : modelId,
+						}),
+					};
+				}
+				return {};
+			},
 		},
 		{ filename: "launchDefaults.ts" },
 	);
@@ -47,7 +58,13 @@ function loadResolver() {
 
 const resolve = loadResolver();
 // vm 独立 realm 原型不同，deepEqual 会误报；JSON 往返归一到宿主 realm。
-const plain = (value) => (value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value);
+// 本文件验证选择优先级，名称快照由 launchDefaults.test.mjs 单独验证。
+const plain = (value) => {
+	const normalized = value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value;
+	if (!normalized || typeof normalized !== "object" || !("modelName" in normalized)) return normalized;
+	const { modelName: _modelName, ...identity } = normalized;
+	return identity;
+};
 
 const MODELS = {
 	providers: {

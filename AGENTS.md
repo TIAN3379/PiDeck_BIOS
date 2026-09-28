@@ -20,6 +20,16 @@ PiDeck 是一个面向本地开发工作的 Electron 桌面应用，用于在多
 - 代码归属：pi SDK 入口/node 解析在 `src/main/pi/auth/piAuthHostLaunch.ts`（WSL 下明确不支持，UI 提示改用终端 `/login`）；进程生命周期与 NDJSON 协议在 `src/main/pi/auth/PiAuthService.ts`；助手本体是 `resources/pi-auth-host.mjs`（协议 v1，stdout 只放协议数据，日志走 stderr）。
 - 打包：`resources/pi-auth-host.mjs` 必须列进 `package.json` 的 `extraResources`，漏了打包版会报「应用缺少认证助手文件」。
 
+**第二条例外：GUI 扩展桥（`pi-deck-gui-bridge`，边界不得扩大）**
+
+- 为什么需要例外：pi 的 `ctx.ui` 声明式方法在 **RPC 模式下被降级成空实现**（`setFooter` / `setHeader` / `setWidget(组件)` / `setWorking*` / `setHiddenThinkingLabel` / `setEditorComponent` 等既不生效也不发事件，见 pi 官方 `docs/rpc-extension-ui.md`）。RPC 客户端无法从 stdio 事件里恢复这些 UI，要接回它们只能在 **pi 进程内**拦截共享的 `ctx.ui`。
+- 允许的做法：主进程起一个只绑 `127.0.0.1` 的端点（`src/main/pi/bridge/BridgeServer.ts`，每 agent 一份 token，spawn 时注入 `PIDECK_BRIDGE_URL` / `PIDECK_BRIDGE_TOKEN`）；pi 侧由随包分发、经 `-e` 注入的桥扩展（`resources/extensions/pi-deck-gui-bridge*.ts`）把声明式 UI 帧推给 PiDeck、把交互事件取回去。渲染层只用 `agents:ui-request` 既有通道，不新开 IPC 域。
+- 边界：这条通道**只允许声明式 UI 帧与交互事件**，禁止扩成通用 pi API 桥（不要拿它去调会话 / 工具 / 模型 / 文件系统）；线格式以 `src/shared/types/bridge.ts` 为宿主侧唯一来源，桥侧 `resources/extensions/pi-deck-gui-bridge-types.ts` 必须逐字段对齐，改动由 `tests/guiBridge*.test.mjs` 的字段断言兜底。
+- 已知耦合（唯一一处）：`resources/extensions/pi-deck-gui-bridge-tui.ts` 用宿主注入的 `PIDECK_BRIDGE_PI_PATH` + `createRequire` 解析 **pi 内部的 pi-tui**（要的是与 pi 同一份模块实例，不能自己装一份）。pi 升级若挪动 pi-tui 位置，只影响桥的组件适配层，且必须降级为「该组件渲染不出」而不是报错。
+- fail-safe：端点起不来 → 不注入 env → 桥静默不工作；桥扩展抛错 → 最多让某个落点缺席；两种情况都**不得影响 pi 会话与 PiDeck 其余功能**。
+- 生命周期配对：`BridgeServer` 的会话表必须与 agent 同生共死（`registerAgent` ↔ `unregisterAgent`），stop / restart / 会话删除 / 应用退出路径都要注销（统一走 `AgentManager.unregisterBridgeSession`）。
+- 卸载/回退：桥在扩展设置页表现为普通内置扩展，用户可整体关掉它（`removedBuiltInExtensions` → 不再 `-e` 注入），关掉后 pi 与 PiDeck 行为回到「没有桥」。
+
 ## 代码结构与跨层契约
 
 本项目只维护项目根目录这一份 `AGENTS.md`；除非用户明确要求，不要再在子目录生成同名规则文件。规则冲突时以本文件和实际类型/API 为准。
@@ -107,6 +117,15 @@ src/
 - **渲染层不允许手写 `data:${mimeType};base64,${data}`**：历史图的 `data` 是 undefined，会渲染成一张白图且不报错。所有 `<img src>` 走 `shared/imageContentSrc.ts` 的 `imageContentSrc()`（内联 → data URL；ref → `pideck-img://blob/<ref>`）；复制 / 保存 / 重发带回参考图才用 `loadImageBase64()` / `hydrateImageContents()` 走 `imagegen:read-image-blob` 按需取回。
 - `pideck-img://` 是自定义协议（`main/imagegen/ImageGenImageProtocol.ts`）：`registerSchemesAsPrivileged` 在 ready 前声明、`protocol.handle` 在 ready 后注册，`img-src` 已在 `src/renderer/index.html` 的 CSP 里放行。内容寻址 ⇒ ref 与内容一一对应，可长缓存。**别把 ref 回读成 base64 塞回消息对象**，那等于把 200 MB 字符串搬回渲染进程堆。
 - 孤儿 blob 回收（`pruneOrphanBlobs`）带 1 小时宽限期（`put` 落盘与引用写进 JSONL 之间有窗口），且**扫描失败整体放弃**（fail-closed：宁可留垃圾也不删掉读不到会话所引用的图）。
+
+### 会话 Markdown 渲染管线（MarkdownStream / streamdown 唯一引擎）
+
+- 唯一引擎是 `src/renderer/src/components/session/MarkdownStream.tsx`（streamdown 2.x + gfm/codeMeta/remarkLinkifyPaths）。公告详情、diff 预览、便签等静态 markdown 场景复用同一套管线（公告走 light 模式），**禁止再引一套 marked/react-markdown**，也禁止 `dangerouslySetInnerHTML` 绕过 sanitize。
+- **流式与 settle 是两条渲染路径**：流式期间不跑 remark 插件（`NO_STREAM_REMARK_PLUGINS`），只做 marked 核心解析；`isStreaming` 转 false 后先保持轻量渲染，`requestIdleCallback` 空闲才切全量（高亮/mermaid/表格）。所以在流式输出里看不到的问题，很可能在 settle 后才暴露——**复现问题要看最终态，别只盯流式过程**。
+- **mdast 插件用「临时属性 + 父节点整体替换 children」协议时，必须补回 `last → text.length` 的尾段**。`MarkdownLinkCore.ts` 的 `remarkLinkifyPaths` 把裸路径文本节点拆成 `[text, link, …]` 写进 `node.__segs`，父节点随后整体替换原文本节点；漏掉尾段，路径之后的全部正文（含 mdast 里同一 text 节点携带的换行后续行）会整段消失——用户看到的现象是「/ 后面的文本不显示、后一行整行不见」。
+- **事故教训（2026-09-23，用户报「斜杠后文本不显示」）**：尾段回填在 `fb6b5667`（feat(markdown): 文件链接存在性校验，失效路径降级纯文本）把 `while` 改成 `for-of` 时被丢掉；表格 cell / API 路径场景下一个 text 节点几乎必以路径结尾，而日常只在段中命中路径，样例永远测不出来。用真实会话 jsonl 实测：91 条回复 47 条丢文本。判据是解析产物可见文本与原文一致，而不是「链接能点」。
+- **回归测试必须跑真实层级**：表格行（cell 内 text）、跨换行正文（`\n` 之后仍是同一个 text 节点）、inline code `__fileLink` 分支、路径正好在末尾（不留空 text 节点）。写法见 `tests/markdownPathTailTruncation.test.mjs`（unified + remark-parse 二次解析对比可见文本，不依赖 cwd/真实项目）。
+- **考古别只看最近几笔提交**：渲染丢文本这类回归可能潜伏数周，用 `git log --oneline -- <文件>` / `git log -S <片段>` 回到底，确认是「谁引入、为什么当时测不出」，再把这两件事写进注释与测试。
 
 ## 架构规则（硬性）
 
@@ -299,6 +318,7 @@ src/
 6. **半吊子 utility 比没写更糟**：组件上写了 `min-h-11`/`rounded-xl`/Button 默认 `h-9`，分层后会真生效并冲掉旧观感。改 UI 时 utility 必须「新学旧」对齐原视觉，再删掉同属性的冗余 legacy 声明。
 7. **排障**：utility「看不见」时用 DevTools 看胜出规则来自哪一层——unlayered / `!important` / 同属性旧选择器；先处理冲突源，再改 class。
 8. **`accent` 是「面」不是「字」**：Tailwind 主题里 `--color-accent` = `--color-bg-active`（悬停浅面色，对齐 shadcn 官方 accent 语义），所以 `text-accent` 与 `hover:bg-accent` 解析成同一个值——亮色（#dfe3e8 字 / #dfe3e8 底）、暗色（#333 字 / #333 底）都是「悬停后变色块、文字消失」。面上的正文一律 `text-accent-foreground`；要主题强调色的文字用 `text-primary`（= foundation 的 `--color-accent`）；legacy CSS 里的 `var(--color-accent)` 仍是强调色，不受此影响。回归守卫：`tests/storeSuggestionChipContrast.test.mjs`（扫全渲染层 `text-<面色 token>`）。
+9. **flex 列 + 限高容器里，子项必须先想清楚「会不会被压扁」**（2027-01 待办条排版事故）：`overflow-y-auto` + `max-h-*` 的 flex 列容器，子项默认 `flex-shrink:1`；子项一旦带 `overflow:hidden`，它的**自动最小尺寸**（`min-height:auto`，正常等于内容高）就被清零 → 内容超高时每行被线性压缩（实测 13 行 × 20px 压到 6.47px），文字被 `overflow-hidden` 切成横条、相邻行重叠，且 `scrollHeight` 收缩到与 `clientHeight` 相等 → 滚动条不出现、用户滚不动。解法是把溢出交还滚动容器：子项加 `shrink-0`（见 `SessionTodoStrip` 的行）。相邻同类容器（`SessionFilesStrip` / `SessionSubagentsStrip` 的限高 `ul`）行上没有 `overflow-hidden`，`min-height:auto` 仍保护行高，不受影响；但只要给它们加 `overflow-hidden`（例如为了裁旋转图标 AABB）就必须同步 `shrink-0`。回归守卫：`tests/sessionTodoStrip.test.mjs` + `e2e/todo-strip-scrollbar.spec.ts`。
 
 ### beUI 组件迁移（硬性）
 

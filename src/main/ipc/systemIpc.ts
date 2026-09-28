@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { ipcChannels } from "../../shared/ipc";
+import { resolveUpdateChannel } from "../update/channelIdentity";
 import { UPDATE_REPO, UPDATE_REPO_OWNER } from "../update/releaseRepo";
 import { probeAllMirrors, type MirrorHealthResult } from "../update/mirrorHealth";
 import { ChangelogService, type ChangelogLanguage } from "../update/ChangelogService";
@@ -20,6 +21,7 @@ import { promisify } from "node:util";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { installPiRuntimeNode, piRuntimeNodeExePath, probeNodeVersion, detectPiRuntimeNode } from "../pi/runtimeNodeInstall";
+import { runPiGlobalInstall } from "../pi/piGlobalInstall";
 import type { NpmAvailabilityResult, PiInstallExecResult, PiInstallStatus, PiRuntimeNodeInstallResult, PiRuntimeNodeStatus, WebServiceStatusInfo } from "../../shared/types";
 import type { AppInfo, AppLogLevel, AppLogQuery, AppSettings, AvailableModel, ChangelogPayload, CreatePiSkillInput, ModelListReport, ModelsVerifyResult, SessionCommandResult, SessionRuntimeTarget } from "../../shared/types";
 import type { PiLocator } from "../pi/PiLocator";
@@ -861,44 +863,43 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 				// 国内镜像：只追加 --registry 参数，不改全局配置，用户终端环境零污染。
 				npmArgs.push("--registry=https://registry.npmmirror.com");
 			}
-			// --prefix：pi 装进 <userData>/pi-runtime/pi-global，不写系统 npm 全局目录，
+			// 安装前缀：pi 装进 <userData>/pi-runtime/pi-global，不写系统 npm 全局目录，
 			// 无需提权（mac/Linux 免 sudo）；PiLocator 搜索目录已包含该路径，装完即可检测到。
-			const prefixArg = `--prefix=${join(userData, "pi-runtime", "pi-global")}`;
+			const prefixDir = join(userData, "pi-runtime", "pi-global");
 			void appLogger.info("pi", "Runtime pi install started", {
 				npm: npmCommand,
+				usePortable,
 				useMirror: mirrorArg,
-				prefix: prefixArg,
+				prefix: prefixDir,
 			});
-			// 数组形式传参（安全约束）：不经 shell 拼接，用户输入无法注入命令。
-			const result = await new Promise<PiInstallExecResult>((resolve) => {
-				execFile(
-					npmCommand,
-					[...npmArgs, prefixArg],
-					{
-						// PATH 前置搜索目录：便携 bin + PiLocator 扫描目录，保证便携 npm
-						// 能解析到同目录 node；便携 npm 跑脚本时也要能找到 node。
-						env: piLocator.createProcessEnv(),
-						cwd: app.getPath("home"),
-						timeout: 300_000,
-						encoding: "utf8",
-						windowsHide: true,
-					},
-					(error: unknown, stdout: string, stderr: string) => {
-						const execError = error as { code?: number | string } | null;
-						resolve({
-							success: !error,
-							exitCode: typeof execError?.code === "number" ? execError.code : execError ? -1 : 0,
-							stdout: stdout || "",
-							stderr: stderr || "",
-						});
-					},
-				);
+			// 启动规格交给 PiLocator 解析：Windows 的 npm 是 .cmd 垫片，execFile 直启必 ENOENT
+			// （详见 runPiGlobalInstall 注释），只有经它解析（node 直启 / cmd.exe）才真正跑得起来。
+			const outcome = await runPiGlobalInstall({
+				npmCommand,
+				npmArgs,
+				prefixDir,
+				launcher: {
+					createInvocation: (command, args) => piLocator.createInvocation(command, args),
+					// 参数顺序陷阱：createProcessEnv 首个参数是代理设置，pathPrefix 在第二位。
+					createProcessEnv: (pathPrefix) => piLocator.createProcessEnv(undefined, pathPrefix),
+				},
+				cwd: app.getPath("home"),
+				// 包一层而不是直接把 execFile 传进去：Node 的 execFile 是重载签名，
+				// 显式适配后模块契约只需覆盖「数组传参 + utf8 回调」这一种形态。
+				execFileImpl: (command, args, options, callback) => execFile(command, args, options, callback),
 			});
+			const { launchCommand, launchChannel, launchFallbackReason, ...result } = outcome;
 			void appLogger.info("pi", "Runtime pi install completed", {
 				success: result.success,
 				exitCode: result.exitCode,
 				stdoutLength: result.stdout.length,
 				stderrLength: result.stderr.length,
+				launch: launchCommand,
+				launchChannel,
+				launchFallbackReason,
+				// 仅 spawn 层失败时带片段：这时 npm 一行没执行，stderr 只会是 Node 自己的报错，
+				// 没有 npm 输出也没有 registry 凭据面；缺了它日志里只剩 stdout/stderr=0 无从诊断。
+				stderrPreview: result.exitCode === -1 ? result.stderr.slice(0, 200) : undefined,
 			});
 			return result;
 		} catch (error) {
@@ -985,6 +986,12 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 	ipcMain.handle(ipcChannels.appCheckUpdate, async () => {
 		await updateService?.checkNow();
 	});
+	// 当前更新通道（编译期判定）：version 与 getAppInfo 同源（都是 app.getVersion()），
+	// 不复用 appInfoPromise —— 那份缓存含 pi --version spawn，只为取版本不值得连带。
+	ipcMain.handle(ipcChannels.appGetChannel, () => ({
+		channel: resolveUpdateChannel(),
+		currentVersion: app.getVersion(),
+	}));
 	ipcMain.handle(ipcChannels.appDownloadUpdate, async () => {
 		await updateService?.downloadNow();
 	});
@@ -1938,7 +1945,9 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 			return { success: false, error: "Invalid provider name" };
 		}
 		const template = typeof input.template === "string" ? input.template.trim() : undefined;
-		if (template && template !== "general" && template !== "newapi" && template !== "cookie") {
+		// 白名单：声明式模板 id + 内置候选 templateId。火山方舟是声明式但不在候选表里
+		// （它没有内置默认 provider），必须显式放行，否则弹窗「测试」会被判成未知模板。
+		if (template && template !== "general" && template !== "newapi" && template !== "cookie" && template !== "volcengine") {
 			// 内置模板 id 也接受（识别命中后的「测试」按钮走这条路径）。
 			const knownBuiltin = USAGE_PROBE_CANDIDATES.some((c) => c.templateId === template);
 			if (!knownBuiltin) {
@@ -1958,6 +1967,9 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 			...(typeof input.cookiePath === "string" ? { cookiePath: input.cookiePath } : {}),
 			...(typeof input.valuePath === "string" ? { valuePath: input.valuePath } : {}),
 			...(typeof input.currencyPath === "string" ? { currencyPath: input.currencyPath } : {}),
+			// 火山方舟 AK/SK：必填透传（缺任一项模板构建即报错，测试按钮才能给出人话提示）。
+			...(typeof input.accessKeyId === "string" ? { accessKeyId: input.accessKeyId } : {}),
+			...(typeof input.secretAccessKey === "string" ? { secretAccessKey: input.secretAccessKey } : {}),
 			...(typeof input.timeoutSecs === "number" ? { timeoutSecs: input.timeoutSecs } : {}),
 		});
 		void appLogger.info("config", "Usage probe tested", {

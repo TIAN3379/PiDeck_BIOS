@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, sep } from "node:path";
 import type { DisabledExtensionEntry } from "../../shared/types";
-import { listActiveBuiltInExtensionPaths, type BuiltInExtensionPathRoots } from "./builtInExtensions";
+import { INTERNAL_BUILT_IN_EXTENSIONS, listActiveBuiltInExtensionPaths, type BuiltInExtensionPathRoots } from "./builtInExtensions";
 import { applyPatterns, readSettingsObject, readStringArray, resolveFromBase, splitResourceEntries } from "../resourceWhitelist";
 import { readProjectResourceOverrides } from "../projects/projectResourceOverrides";
 import { resolveConfiguredPackageResources } from "../packageResourceResolver";
@@ -92,7 +92,11 @@ export function resolveEnabledExtensionPaths(options: EnabledExtensionResolverOp
 	}
 
 	for (const path of listActiveBuiltInExtensionPaths(options.builtInRoots, options.removedBuiltInExtensions)) {
-		if (!inheritedDisabled.includes(basename(path)) && isEnabled("user", basename(path))) addPath(path);
+		const name = basename(path);
+		const isInternal = (INTERNAL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name);
+		// 内部适配器不是用户可见扩展，必须始终跟随 RPC 加载；否则用户手动写入
+		// disabledExtensions / 项目覆盖时会悄悄关闭代理隔离保护。
+		if (isInternal || (!inheritedDisabled.includes(name) && isEnabled("user", name))) addPath(path);
 	}
 	return paths;
 }
