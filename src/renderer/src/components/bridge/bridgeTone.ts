@@ -26,6 +26,3 @@ export function bridgeToneClass(tone: string | undefined | null): string {
 	if (!tone) return "";
 	return TONE_TEXT_CLASS[tone] ?? "";
 }
-
-/** 状态栏 / 流式行的兜底色：亮色下与原先的 `text-muted-foreground` 完全一致。 */
-export const BRIDGE_DEFAULT_TEXT_CLASS = "text-muted-foreground";

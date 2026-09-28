@@ -679,12 +679,20 @@ describe("bridge tone: 真彩色量化成语义色档", () => {
 	});
 });
 
-// ── 8. 宿主渲染：tone → 语义 class + 状态栏通栏整行 ─────────────
+// ── 8. 宿主渲染：tone → 语义 class + 状态栏退役守卫 ─────────────
 
-describe("host: tone 渲染与状态栏结构契约", () => {
+describe("host: tone 渲染与状态栏退役契约", () => {
 	const loadRenderer = createTsSandbox();
 	const toneMod = loadRenderer("src/renderer/src/components/bridge/bridgeTone.ts");
 	const bridgeSlotSource = readFileSync("src/renderer/src/components/bridge/BridgeSlot.tsx", "utf8");
+	const composerAreaSource = readFileSync("src/renderer/src/components/session/ComposerArea.tsx", "utf8");
+	const rendererSources = [
+		["BridgeSlot.tsx", bridgeSlotSource],
+		["ComposerArea.tsx", composerAreaSource],
+		["ComposerStatsLine.tsx", readFileSync("src/renderer/src/components/session/ComposerStatsLine.tsx", "utf8")],
+		["renderBridgeNode.tsx", readFileSync("src/renderer/src/components/bridge/renderBridgeNode.tsx", "utf8")],
+		["renderBridgeControls.tsx", readFileSync("src/renderer/src/components/bridge/renderBridgeControls.tsx", "utf8")],
+	];
 
 	it("tone → 语义色 class（accent 走 text-primary，暗色自适应）", () => {
 		assert.equal(toneMod.bridgeToneClass("accent"), "text-primary");
@@ -702,8 +710,30 @@ describe("host: tone 渲染与状态栏结构契约", () => {
 		const hookBodies = bridgeSlotSource.match(/function useSessionBridgeTargets[\s\S]*?\n\}/)?.[0] ?? "";
 		const uiHook = bridgeSlotSource.match(/function useSessionBridgeUi[\s\S]*?\n\}/)?.[0] ?? "";
 		assert.match(hookBodies, /sanitizeBridgeNode\(targets\)/, "落点树必须在渲染前过兜底");
-		assert.match(uiHook, /sanitizeBridgeNode\(scoped\)/, "状态栏/流式行文案必须在渲染前过兜底");
-		// tone 是独立字段：兜底只剥字符串，不会吃掉颜色（剥完仍读 tones map）
-		assert.match(bridgeSlotSource, /bridgeStatusTone/);
+		assert.match(uiHook, /sanitizeBridgeNode\(scoped\)/, "桥 UI 文案必须在渲染前过兜底");
+		// tone 是独立字段：兜底只剥字符串，不会吃掉颜色 —— 仍在渲染的流式行必须吃 tone
+		assert.match(bridgeSlotSource, /bridgeToneClass\(working\.tone\)/, "保色链路不能随状态栏一起退役");
+	});
+
+	/**
+	 * 守卫：桥状态栏是**产品决定退役**的（2026-09，方案 ②：输入框下方只留 PiDeck
+	 * 自己的统计行）。这条测试防「将来有人无意把它加回来」——加回时它会红，
+	 * 提醒先去确认产品意图；恢复步骤写在 `BridgeSlot.tsx` 的退役说明里。
+	 */
+	it("★ 桥状态栏不再有渲染挂载点（防无意加回；要加回先确认产品决定）", () => {
+		// 先剥注释再扫：退役说明里写着「恢复步骤」的代码样例（含组件名与 data 锚点），
+		// 那是文档不是挂载点 —— 守卫只认**真代码**里的挂载。
+		const stripComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[\t ]*\/\/.*$/gm, "");
+		for (const [name, source] of rendererSources) {
+			const code = stripComments(source);
+			assert.doesNotMatch(code, /<BridgeStatusBar/, `${name} 不得再挂载桥状态栏`);
+			assert.doesNotMatch(code, /data-bridge-status[=\s]/, `${name} 不得再有状态栏条目锚点`);
+			assert.doesNotMatch(code, /bridgeStatusBar\s*[=:{]/, `${name} 不得再透传状态栏 prop`);
+		}
+		// 数据侧必须保留：桥仍收 state.status，渲染层仍存 bridgeStatus / bridgeStatusTone，
+		// 这样「接回来」是零成本的（或做成设置开关）。
+		const atomsSource = stripComments(readFileSync("src/renderer/src/atoms/session-atoms.ts", "utf8"));
+		assert.match(atomsSource, /bridgeStatus\?:[\s\S]{0,60}?Record<string, string>/, "桥状态数据仍要收在 state 里（只是不渲染）");
+		assert.match(atomsSource, /bridgeStatusTone\?:[\s\S]{0,60}?Record<string, BridgeTone>/, "tone 也要保留（恢复渲染时直接可用）");
 	});
 });

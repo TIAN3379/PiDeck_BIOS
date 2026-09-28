@@ -18,7 +18,7 @@ import { sessionRuntimeUiBySessionIdAtomFamily } from "../../atoms/session-selec
 import { useBridgeEventSink } from "../../hooks/useBridgeEventSink";
 import { useBridgeResync } from "../../hooks/useBridgeResync";
 import { renderBridgeNode, type BridgeEventSink } from "./renderBridgeNode";
-import { BRIDGE_DEFAULT_TEXT_CLASS, bridgeToneClass } from "./bridgeTone";
+import { bridgeToneClass } from "./bridgeTone";
 import { sanitizeBridgeNode } from "../../../../shared/bridgeText";
 import { BRIDGE_TARGET, type BridgeGuiSlot as BridgeGuiSlotName, type BridgeUINode } from "../../../../shared/types/bridge";
 
@@ -126,30 +126,53 @@ export function BridgeWidgetSlot({ sessionId, placement }: { sessionId: string |
 }
 
 /**
- * 状态栏：桥的 setStatus 多 key 条目（§8.2 A 组 status 是新建项）。
+ * 桥状态栏**已退役**：`ctx.ui.setStatus` 的条目不再渲染（2026-09 产品决定，方案 ②）。
  *
- * **配色走语义 tone**（方案 B）：桥侧把扩展的 ANSI 配色量化成 `tone` 字段下发，
- * 这里投影成 Tailwind 语义 class（`bridgeToneClass`）；无 tone 时保持原先的
- * `text-muted-foreground`（亮/暗色都由 token 自适应，不写死色值）。
+ * **这是决定，不是漏挂** —— 别再把它当 bug 修回来（守卫测试
+ * `tests/guiBridgeAnsiLeak.test.mjs` 会在有人加回挂载点时变红，提醒先确认产品意图）。
+ *
+ * 为什么要隐藏：PiDeck 自己那行统计（`N 轮 | 首 token… | 缓存命中 | 输入输出`）
+ * 已经在输入框正下方，桥的 status 条目（`🔌 MCP: 3 servers enabled` 等）挤在同一区域
+ * 属于重复噪声。
+ *
+ * **代价（明确记录，免得以后误以为「没有扩展在用」）**：所有只经 `setStatus` 输出信息的
+ * 扩展在 GUI 里就看不见了，已知的有 ——
+ * - `pi-mcp-adapter`：`🔌 MCP: N servers enabled` 连接概况；
+ * - `pi-tracker`：用量/额度行；
+ * - `pi-mcp-adapter` 的 `mcp-auth`：`Authenticating <server>…` 授权进度；
+ * - `pi-deck-plan-mode` / 待办类扩展写进 status 的进度。
+ * 需要重新可见时按下面的步骤接回来。
+ *
+ * **数据侧全部保留**：桥照旧收集 `state.status` 与 `statusTone`、照旧推
+ * `{type:"status", text, tone}`，渲染层照旧写进 `bridgeStatus / bridgeStatusTone`
+ * —— 恢复渲染是零成本的（数据一直在），将来也可以做成「显示桥状态」设置开关。
+ *
+ * 恢复步骤（三步）：
+ * 1. 在本文件加回一个导出组件，读数据并按 tone 上色：
+ *    ```tsx
+ *    export function BridgeStatusBar({ sessionId }: { sessionId: string | undefined }): ReactNode {
+ *      const ui = useSessionBridgeUi(sessionId);
+ *      const entries = ui?.bridgeStatus ? Object.entries(ui.bridgeStatus) : [];
+ *      if (entries.length === 0) return null;
+ *      return (
+ *        <BridgeSlotBoundary>
+ *          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+ *            {entries.map(([key, text]) => (
+ *              <span key={key} className={`text-[11px] ${bridgeToneClass(ui?.bridgeStatusTone?.[key]) || "text-muted-foreground"}`} data-bridge-status={key}>
+ *                {text}
+ *              </span>
+ *            ))}
+ *          </div>
+ *        </BridgeSlotBoundary>
+ *      );
+ *    }
+ *    ```
+ *    （`bridgeToneClass` 仍在 `./bridgeTone`，被流式行与节点样式使用，别删。）
+ * 2. `components/session/ComposerArea.tsx`：加回 `bridgeStatusBar?: ReactNode` 入参、
+ *    在 `{props.statsLine}` 之后渲染 `{props.bridgeStatusBar}`，并在挂载处传
+ *    `<BridgeStatusBar sessionId={props.sessionId} />`。
+ * 3. 删掉守卫测试里「渲染层不得挂载桥状态栏」那一条。
  */
-export function BridgeStatusBar({ sessionId, className }: { sessionId: string | undefined; className?: string }): ReactNode {
-	const sessionUi = useSessionBridgeUi(sessionId);
-	const status = sessionUi?.bridgeStatus;
-	const tones = sessionUi?.bridgeStatusTone;
-	const entries = status ? Object.entries(status) : [];
-	if (entries.length === 0) return null;
-	return (
-		<BridgeSlotBoundary>
-			<div className={className ?? "flex flex-wrap items-center gap-x-3 gap-y-0.5"}>
-				{entries.map(([key, text]) => (
-					<span key={key} className={`text-[11px] ${bridgeToneClass(tones?.[key]) || BRIDGE_DEFAULT_TEXT_CLASS}`} data-bridge-status={key} data-bridge-tone={tones?.[key] ?? ""}>
-						{text}
-					</span>
-				))}
-			</div>
-		</BridgeSlotBoundary>
-	);
-}
 
 /** 流式状态行：桥的 setWorkingMessage / setWorkingVisible / setWorkingIndicator（§8.2 A 组）。 */
 export function BridgeWorkingLine({ sessionId }: { sessionId: string | undefined }): ReactNode {

@@ -22,7 +22,7 @@ import type { EnqueuePromptSnapshot } from "../../hooks/useSessionSend";
 import { VoiceTranscriptionControls } from "./VoiceTranscriptionControls";
 import { SessionCommitSuggestionStrip } from "./SessionCommitSuggestionStrip";
 import type { AgentRunItem } from "./timeline/types";
-import { BridgeGuiSlot, BridgeStatusBar, BridgeWidgetSlot } from "../bridge/BridgeSlot";
+import { BridgeGuiSlot, BridgeWidgetSlot } from "../bridge/BridgeSlot";
 
 export type ComposerAreaProps = {
 	sessionId: string;
@@ -65,8 +65,6 @@ type ComposerExtrasProps = {
 	bridgeWidgetsAbove?: ReactNode;
 	/** GUI 扩展桥：输入框下方挂件（belowEditor）。 */
 	bridgeWidgetsBelow?: ReactNode;
-	/** GUI 扩展桥：状态栏条目。 */
-	bridgeStatusBar?: ReactNode;
 };
 
 /**
@@ -97,8 +95,12 @@ function ComposerMeasuredExtras(props: ComposerExtrasProps) {
 				<div className="flex w-full min-w-0 shrink-0 flex-col">
 					{props.composerBox}
 					{props.statsLine}
-					{/* GUI 扩展桥：状态栏条目 + 输入框下方挂件（belowEditor）。无内容时都不占位。 */}
-					{props.bridgeStatusBar}
+					{/* 桥状态栏**已按产品决定退役**（2026-09，方案 ②）：输入框下方只留 PiDeck
+					    自己的统计行，桥 `setStatus` 的条目不再渲染 —— 这是决定，不是漏挂。
+					    代价：pi-tracker 用量行 / `mcp-auth` 授权进度 / plan-mode 进度等只走
+					    setStatus 的信息在 GUI 里看不见了；数据侧仍在 bridgeStatus /
+					    bridgeStatusTone 里，恢复步骤见 BridgeSlot.tsx 的退役说明。 */}
+					{/* GUI 扩展桥：输入框下方挂件（belowEditor）。无内容时不占位。 */}
 					{props.bridgeWidgetsBelow}
 				</div>
 			</>
@@ -161,10 +163,10 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 								) : null
 							}
 							statsLine={<ComposerStatsLine state={composer.runtime?.state} turnCount={props.turnCount} />}
-							// GUI 扩展桥的四个落点：全部「无内容不占位」（组件内部返回 null）
+							// GUI 扩展桥的两个 widget 落点：全部「无内容不占位」（组件内部返回 null）。
+							// 桥状态栏（setStatus 条目）已按产品决定退役，不再有挂载点。
 							bridgeWidgetsAbove={<BridgeWidgetSlot sessionId={props.sessionId} placement="aboveEditor" />}
 							bridgeWidgetsBelow={<BridgeWidgetSlot sessionId={props.sessionId} placement="belowEditor" />}
-							bridgeStatusBar={<BridgeStatusBar sessionId={props.sessionId} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 pt-1" />}
 							composerBox={
 								<div
 									// overflow-visible：保留命令面板/建议浮层；面板 minSize 已保证底栏不被裁切
