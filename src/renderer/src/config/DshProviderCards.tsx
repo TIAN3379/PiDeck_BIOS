@@ -28,6 +28,8 @@ import { ProviderMigrationButton } from "./ProviderMigrationButton";
 import { ConfirmDialog } from "../components/ui-shadcn/ConfirmDialog";
 import { AddDshProviderDialog } from "./AddDshProviderDialog";
 import { buildDshProviderFromDraft, type DshProviderDraft } from "./dshProviderDraft";
+import { DshHeadersEditor } from "./DshHeadersEditor";
+import { useDshProviderHeaders } from "./useDshProviderHeaders";
 import { applyProviderOrder } from "../utils/providerOrder";
 import { useProviderReorder } from "../hooks/useProviderReorder";
 
@@ -289,6 +291,7 @@ export function PiAiProvidersCard(props: {
 	const [addPageDirty, setAddPageDirty] = useState(false);
 	/** 密钥草稿：providerKey → 输入的新密钥（保存时统一 credentials.set）。 */
 	const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
+	const { headersDirty, readHeaders, updateHeaders, removeHeaderDraft, clearHeaderDrafts, headerMutations } = useDshProviderHeaders();
 	/**
 	 * 待删除的 provider 路由（点删除后本地隐藏，保存时才真正删除）。
 	 * 必须单独记录：settings.update 是 merge，patch 里删 key 不会让 host 删掉
@@ -300,8 +303,8 @@ export function PiAiProvidersCard(props: {
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	/** 脏状态：settings 草稿、任一密钥草稿或待删除 provider 非空。 */
-	const dirty = Object.keys(draft).length > 0 || Object.values(keyDrafts).some((value) => value.trim()) || pendingRemovals.length > 0 || addPageDirty;
+	/** 请求头整表草稿独立于 merge patch，否则改名/清空无法落盘。 */
+	const dirty = Object.keys(draft).length > 0 || headersDirty || Object.values(keyDrafts).some((value) => value.trim()) || pendingRemovals.length > 0 || addPageDirty;
 	useEffect(() => {
 		sectionApi?.onDirtyChange(instanceId, dirty);
 		// 卸载时清掉本实例的脏来源，避免收起/切换后残留黄点
@@ -351,7 +354,12 @@ export function PiAiProvidersCard(props: {
 					// 同删除路径：静默写凭证，避免与末尾 onSave 的刷新叠加（保存闪两下）。
 					await desktopApi.sessions.setDshCredential(ref, trimmed);
 				}
+				if (headerMutations.length > 0) {
+					await desktopApi.sessions.mutateDshSettings(namespace.ns, headerMutations, namespace.revision);
+				}
+				// mutate-only 也刷新 namespace；失败时保留全部草稿，重试 set/unset 是幂等的。
 				await props.onSave(pruneEmptyObjects(saveDraft) as Record<string, unknown>);
+				clearHeaderDrafts();
 				setDraft({});
 				setKeyDrafts({});
 				setPendingRemovals([]);
@@ -368,7 +376,7 @@ export function PiAiProvidersCard(props: {
 				setSaving(false);
 			}
 		},
-		[dirty, keyDrafts, draft, pendingRemovals, namespace.ns, namespace.revision, namespace.value, ops.credentials, props.onSave],
+		[dirty, keyDrafts, draft, pendingRemovals, headerMutations, clearHeaderDrafts, namespace.ns, namespace.revision, namespace.value, ops.credentials, props.onSave],
 	);
 	const addPageSaveRef = useRef<(() => Promise<boolean>) | null>(null);
 	const registerAddPageSave = useCallback((save: (() => Promise<boolean>) | null) => {
@@ -451,6 +459,7 @@ export function PiAiProvidersCard(props: {
 		const key = removingKey;
 		if (!key) return;
 		setRemovingKey(null);
+		removeHeaderDraft(key);
 		setPendingRemovals((prev) => (prev.includes(key) ? prev : [...prev, key]));
 		setDraft((prev) => {
 			const next = structuredClone(prev) as Record<string, unknown>;
@@ -503,7 +512,7 @@ export function PiAiProvidersCard(props: {
 				<span className="text-caption font-semibold text-foreground">{namespace.ns}</span>
 				<span className="rounded-full border border-border-subtle px-2 py-0.5 text-micro text-muted-foreground">{t("config.dsh.providersCount", { count: orderedEntries.length })}</span>
 				{error && (
-					<span className="max-w-64 truncate text-micro text-danger" title={error}>
+					<span className="max-w-64 truncate text-micro text-danger" title={error} data-testid="dsh-save-error">
 						{error}
 					</span>
 				)}
@@ -623,6 +632,8 @@ export function PiAiProvidersCard(props: {
 										{visibleProfileFields.map((field) => (
 											<DshSchemaField key={field.name} schema={schema} ref={field.ref} path={[field.name]} value={entryValue(entry.key, [field.name])} secrets={namespace.secrets} onChange={(path, next) => updateEntry(entry.key, path, next)} writable={writable} />
 										))}
+										{/* 整表覆盖单独保存，不能走 updateEntry 的 merge 语义。 */}
+										<DshHeadersEditor value={readHeaders(entry.key, entryValue(entry.key, ["headers"]))} writable={writable && !saving} onChange={(next) => updateHeaders(entry.key, next)} />
 									</CustomSettings>
 									<DshModelsEditor models={models} savedModels={savedModels} catalog={providerCatalog} writable={writable} providerKey={entry.key} settingsNs={namespace.ns} baseURL={baseURL} api={api} apiKeyDraft={keyDrafts[entry.key]} onChange={(nextModels) => setProviderModels(entry.key, nextModels)} />
 								</div>

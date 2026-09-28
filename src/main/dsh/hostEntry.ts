@@ -24,6 +24,7 @@ import { agentPresetsRow, dshSubagentModelSelectionSettingsRow, dshWebAgentPlane
 import { PIDECK_PLUGIN_BRIDGE_PATH, handlePluginBridgeFetch } from "./pideckPluginBridge";
 import { PIDECK_COMMANDS_BRIDGE_PATH, handleCommandsBridgeFetch } from "./pideckCommandsBridge";
 import { PIDECK_SESSION_BRIDGE_PATH, handleSessionBridgeFetch } from "./pideckSessionBridge";
+import { loadDshOpenCodeHeaders } from "./dshOpenCodeHeaders";
 
 // utilityProcess 的 parentPort：electron 包类型里有（Electron.ParentPort）。
 import type { ParentPort } from "electron";
@@ -336,7 +337,16 @@ async function main(): Promise<void> {
 		"pideck-dsh",
 		configPath,
 		patches,
-		(hostCtx: import("@deepseek-ai/cordis").Context) => {
+		async (hostCtx: import("@deepseek-ai/cordis").Context) => {
+			// prepare 早于所有 config-tree 插件挂载；用 runtime adapter 的依赖，
+			// 不用 app 顶层 pi-ai。随 host fiber 清理，不改安装包/共享 profile。
+			try {
+				const dispose = await loadDshOpenCodeHeaders(require.resolve("@deepseek-ai/dsh-llm-pi-ai"));
+				hostCtx.effect(() => dispose, "pideck-opencode-headers");
+			} catch (error) {
+				// runtime API 变化最多让兼容头缺席，不能阻断其它供应商与 host 启动。
+				hostCtx.logger("pideck-opencode-headers").warn("Request header compatibility unavailable: %s", error instanceof Error ? error.message : String(error));
+			}
 			provideCmdline(hostCtx, {
 				args: [],
 				exit: (code: number) => {
