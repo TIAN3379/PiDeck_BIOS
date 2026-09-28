@@ -22,7 +22,7 @@ import type { EnqueuePromptSnapshot } from "../../hooks/useSessionSend";
 import { VoiceTranscriptionControls } from "./VoiceTranscriptionControls";
 import { SessionCommitSuggestionStrip } from "./SessionCommitSuggestionStrip";
 import type { AgentRunItem } from "./timeline/types";
-import { BridgeGuiSlot, BridgeWidgetSlot } from "../bridge/BridgeSlot";
+import { BridgeWidgetSlot } from "../bridge/BridgeSlot";
 
 export type ComposerAreaProps = {
 	sessionId: string;
@@ -301,10 +301,7 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 											/>
 										}
 									/>
-									{/* GUI 扩展桥：输入框工具栏落点（ctx.gui.setComposerToolbar）。
-									    **旁插**在底栏之后、输入卡之内 —— 不改 ComposerBottomBar 的既有 props 契约（§7.4 只追加）。
-									    无贡献时返回 null，不占位。 */}
-									<BridgeGuiSlot sessionId={props.sessionId} slot="composer.toolbar" className="flex flex-wrap items-center gap-1 px-2 pb-1" />
+									{/* GUI 扩展桥：输入框工具栏落点已禁用（扩展在此区域渲染文本会造成 UI 干扰） */}
 								</div>
 							}
 						/>
