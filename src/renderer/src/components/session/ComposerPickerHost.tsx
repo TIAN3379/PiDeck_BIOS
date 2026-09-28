@@ -23,6 +23,8 @@ export type ComposerPickerHostProps = {
 	/** DSH 部署默认模型/思考档位（settings.yaml agent-default-model）：草稿期高亮与过滤用。 */
 	defaultModel?: { provider?: string; modelId?: string; modelName?: string };
 	defaultThinkingLevel?: string;
+	/** pi settings.modelThinkingLevels 快照（引导页预选默认的一部分）：按当前模型反查每模型默认档位。 */
+	modelThinkingLevels?: Record<string, string>;
 };
 
 /**
@@ -37,6 +39,7 @@ export function ComposerPickerHost(props: ComposerPickerHostProps) {
 		thinkingPickerOpen: props.picker === "thinking",
 		defaultModel: props.defaultModel,
 		defaultThinkingLevel: props.defaultThinkingLevel,
+		modelThinkingLevels: props.modelThinkingLevels,
 		// 选择器点选后关闭：快捷键循环走的也是这条路径，此时 picker 本来就是 null，幂等。
 		onApplied: props.onClose,
 	});

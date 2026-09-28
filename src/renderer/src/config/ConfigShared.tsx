@@ -87,12 +87,14 @@ export function ConfigSelect(props: {
 	 * 内联场景（如兼容性组的「严格工具采样」与复选框并排）传 `w-auto` 按内容定宽。
 	 */
 	triggerClassName?: string;
+	/** 只读展示当前值（如 Pi 权威回答「该模型无可用档位」时不允许编辑默认档位）。 */
+	disabled?: boolean;
 }) {
 	// 老 settings.json 可能残留枚举外的取值（如自定义传输协议）；此时补一条「自定义」
 	// item 兜底，否则 Radix Select 因 value 无匹配 item 而显示空白、且无法回选。
 	const hasCustom = props.value !== "" && !isKnownComboboxValue(props.options, props.value);
 	return (
-		<Select value={props.value === "" ? SENTINEL : props.value} onValueChange={(value) => props.onChange(value === SENTINEL ? "" : value)}>
+		<Select value={props.value === "" ? SENTINEL : props.value} onValueChange={(value) => props.onChange(value === SENTINEL ? "" : value)} disabled={props.disabled}>
 			{/* trigger 必须带 w-full：shadcn 基础类自带 w-fit（utilities 层）会压过 legacy 的
 			    .config-select-trigger{width:100%}，不加则下拉收缩成内容宽度（值多的行长条很丑）。
 			    内联场景由调用方用 triggerClassName 传 w-auto 覆盖（cn 走 twMerge，后者胜出）。 */}

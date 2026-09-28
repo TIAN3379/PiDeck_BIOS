@@ -29,6 +29,8 @@ import { useProviderReorder } from "../hooks/useProviderReorder";
 import { ModelsTable } from "./ModelsTable";
 import { ModelsExportPanel } from "./ModelsExportPanel";
 import { ModelsImportPanel } from "./ModelsImportPanel";
+import { useAvailableThinkingLevels } from "./useAvailableThinkingLevels";
+import { modelThinkingLevelsKey } from "../../../shared/modelThinkingLevels";
 import type { MutableRefObject } from "react";
 
 /** 把现有 provider 配置转成编辑弹窗的预填值（名字/字段/模型列表）。 */
@@ -114,6 +116,10 @@ export function ModelsTab(props: {
 	onUpdateModelUserAgent?: (providerName: string, index: number, value: string) => void;
 	/** 读取某模型当前的 UA 覆盖值（可选；与上一个回调成对出现才渲染操作列的 UA 按钮）。 */
 	getModelUserAgentOverride?: (providerName: string, index: number) => string;
+	/** 每模型默认思考档位（settings.json 的 modelThinkingLevels），可选：成对出现才渲染编辑入口。 */
+	onUpdateModelThinkingLevelDefault?: (providerName: string, index: number, value: string) => void;
+	/** 读取某模型当前的默认思考档位（空串 = 跟随全局设置）。 */
+	getModelThinkingLevelDefault?: (providerName: string, index: number) => string;
 	onDeleteModel: (providerName: string, index: number) => void;
 	onDeleteModels: (providerName: string, indexes: number[]) => void;
 	/** 重置为自适应：显式刷新 endpoint /models 后按模板清空并重填能力字段。 */
@@ -131,6 +137,9 @@ export function ModelsTab(props: {
 	onChangeProvider: (name: string, field: string, value: unknown) => void;
 }) {
 	const { data, expandedProvider, saving } = props;
+	// Pi 已确认的可用思考档位目录（只读事实）：每模型默认档位的编辑入口据此给选项/禁用，
+	// 与欢迎页/会话内选择器同源（capability snapshot）。
+	const availableThinkingLevels = useAvailableThinkingLevels();
 	const providerNames = Object.keys(data.providers);
 	// 隐藏开关：主列表只显示未隐藏项，隐藏项进页面底部「已隐藏」折叠区（设置页隐藏开关）
 	// 自定义排序只作用于展示：先按用户拖拽/上移下移结果重排完整列表，再切分可见/隐藏。
@@ -700,6 +709,14 @@ export function ModelsTab(props: {
 													onUpdateModelThinkingLevel={(i, key, value) => props.onUpdateModelThinkingLevel(name, i, key, value)}
 													onUpdateModelUserAgent={props.onUpdateModelUserAgent && props.getModelUserAgentOverride ? (i, value) => props.onUpdateModelUserAgent!(name, i, value) : undefined}
 													getModelUserAgentOverride={props.onUpdateModelUserAgent && props.getModelUserAgentOverride ? (i) => props.getModelUserAgentOverride!(name, i) : undefined}
+													onUpdateModelThinkingLevelDefault={props.onUpdateModelThinkingLevelDefault && props.getModelThinkingLevelDefault ? (i, value) => props.onUpdateModelThinkingLevelDefault!(name, i, value) : undefined}
+													getModelThinkingLevelDefault={props.onUpdateModelThinkingLevelDefault && props.getModelThinkingLevelDefault ? (i) => props.getModelThinkingLevelDefault!(name, i) : undefined}
+													getModelAvailableThinkingLevels={(i) => {
+														// 键为空（未填 id 的新行）时查不到 → 未知，与「未识别模型」同一展示。
+														const model = provider.models[i];
+														if (!model?.id) return undefined;
+														return availableThinkingLevels.get(modelThinkingLevelsKey(name, model.id));
+													}}
 													onDeleteModel={(i) => {
 														clearModelBatch();
 														props.onDeleteModel(name, i);
