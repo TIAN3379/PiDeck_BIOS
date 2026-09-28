@@ -2,14 +2,14 @@
 import { readFileSync } from "node:fs";
 import { findPackageJSON } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Models, ProviderHeaders } from "@earendil-works/pi-ai";
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 
 type OpenCodeRoute = { provider: string; baseUrl?: string };
-type RequestOptions = {
-	sessionId?: string;
-	transformHeaders?: (headers: ProviderHeaders) => ProviderHeaders | Promise<ProviderHeaders>;
-};
-type StreamMethods = Pick<Models, "streamSimple">;
+type RequestOptions = { sessionId?: string; headers?: ProviderHeaders };
+type AppliedAuthResult = { requestModel: OpenCodeRoute; requestOptions: RequestOptions };
+// applyAuth 不是公开类型契约；入参与结果保持 unknown，只有验证后的返回结构才能补头。
+type RuntimeApplyAuth = (this: RuntimeModels, model: unknown, options?: unknown) => Promise<unknown>;
+type RuntimeModels = { applyAuth: RuntimeApplyAuth };
 type Installation = { users: number; restore: () => void };
 const installations = new WeakMap<object, Installation>();
 
@@ -33,50 +33,68 @@ export function addOpenCodeHeaders(headers: ProviderHeaders, sessionId?: string)
 	return next;
 }
 
-/** 在 pi-ai 合并 model/auth/request headers 之后兜底，避免自动值反盖手动配置。 */
-function requestOptions<T extends RequestOptions>(model: OpenCodeRoute, options: T): T {
-	if (!isOpenCodeRoute(model)) return options;
-	const transform = options.transformHeaders;
-	return {
-		...options,
-		transformHeaders: transform ? async (headers: ProviderHeaders) => addOpenCodeHeaders(await transform(headers), options.sessionId) : (headers: ProviderHeaders) => addOpenCodeHeaders(headers, options.sessionId),
-	};
+/** 动态依赖先检查 runtime seam；不假定 app 内置 pi-ai 与 DSH runtime 是同一份。 */
+function hasApplyAuth(value: unknown): value is RuntimeModels {
+	return typeof value === "object" && value !== null && "applyAuth" in value && typeof value.applyAuth === "function";
 }
 
-/** 动态依赖先检查公开方法形状；不假定 app 内置 pi-ai 与 DSH runtime 是同一份。 */
-function hasStreamMethods(value: unknown): value is StreamMethods {
-	return typeof value === "object" && value !== null && "streamSimple" in value && typeof value.streamSimple === "function";
+/** runtime 升级若改变结果结构，原样透传而不是让可选兼容头阻断请求。 */
+function isAppliedAuthResult(value: unknown): value is AppliedAuthResult {
+	if (!isRecord(value) || !isRecord(value.requestModel) || !isRecord(value.requestOptions)) return false;
+	const { provider, baseUrl } = value.requestModel;
+	const { sessionId, headers } = value.requestOptions;
+	return typeof provider === "string" && (baseUrl === undefined || typeof baseUrl === "string") && (sessionId === undefined || typeof sessionId === "string") && (headers === undefined || (isRecord(headers) && Object.values(headers).every((header) => typeof header === "string" || header === null)));
 }
 
 /**
- * 安装到实际 runtime 的 Models.streamSimple（DSH adapter 的唯一流入口），
- * 覆盖其后创建的配置快照；其它 pi-ai API 不动。DSH 的 llm/stream 事件只暴露冻结的业务 options，不提供 HTTP 头 hook；这里使用
- * pi-ai 的 transformHeaders 扩展点，保留原有惰性流、取消与鉴权，不碰私有 adapter 字段。
- * 每次请求闭包捕获自身 sessionId，不能以共享 profile.headers 承载并发会话身份。
+ * 在 pi-ai 完成鉴权后、调用供应商前补头。
+ * public transformHeaders 拿不到鉴权后的目标地址；这里必须以最终 requestModel 判断，
+ * 避免把 OpenCode 元数据发送给已被鉴权切换到其它地址的别名路由，同时保留已合并的显式头。
+ */
+function decorateAppliedAuth(result: AppliedAuthResult): AppliedAuthResult {
+	if (!isOpenCodeRoute(result.requestModel)) return result;
+	return {
+		...result,
+		requestOptions: {
+			...result.requestOptions,
+			headers: addOpenCodeHeaders(result.requestOptions.headers ?? {}, result.requestOptions.sessionId),
+		},
+	};
+}
+
+/**
+ * 安装到实际 DSH runtime 的 Models.applyAuth 出口，覆盖其后创建的配置快照。
+ * 这是唯一私有接入点：公开 transformHeaders 缺少最终路由，不能重复解析鉴权来猜测端点。
+ * 只装饰已完成的结果，不重写鉴权/惰性流/取消；方法或返回形状变化时降级为不补头。
+ * sessionId 来自本次请求，不能以共享 profile.headers 承载并发会话身份。
  */
 export function installDshOpenCodeHeaders(piAiModule: unknown): () => void {
 	if (typeof piAiModule !== "object" || piAiModule === null || !("createModels" in piAiModule) || typeof piAiModule.createModels !== "function") {
 		throw new Error("DSH pi-ai does not expose createModels");
 	}
 	const models: unknown = piAiModule.createModels();
-	if (!hasStreamMethods(models)) throw new Error("DSH pi-ai Models stream API is unavailable");
+	if (!hasApplyAuth(models)) throw new Error("DSH pi-ai Models auth hook is unavailable");
 	const prototype: unknown = Object.getPrototypeOf(models);
-	if (!hasStreamMethods(prototype) || models.streamSimple !== prototype.streamSimple) {
-		throw new Error("DSH pi-ai Models stream API layout has changed");
+	if (!hasApplyAuth(prototype) || models.applyAuth !== prototype.applyAuth) {
+		throw new Error("DSH pi-ai Models auth hook layout has changed");
 	}
 	let installation = installations.get(prototype);
 	if (!installation) {
-		const originalSimple = prototype.streamSimple;
-		const streamSimple: Models["streamSimple"] = function (this: Models, model, context, options) {
-			return originalSimple.call(this, model, context, requestOptions(model, options ?? {}));
+		const originalApplyAuth = prototype.applyAuth;
+		let active = true;
+		const applyAuth: RuntimeApplyAuth = async function (model, options) {
+			const result = await originalApplyAuth.call(this, model, options);
+			// await 后再检查，保证鉴权等待期间卸载也不会继续注入。
+			return active && isAppliedAuthResult(result) ? decorateAppliedAuth(result) : result;
 		};
 		// 只写一个方法：若未来 runtime 冻结原型，安装失败也不会留下半安装状态。
-		prototype.streamSimple = streamSimple;
+		prototype.applyAuth = applyAuth;
 		installation = {
 			users: 0,
 			restore: () => {
-				// 不反盖后来安装的其它 wrapper；host 销毁与测试清理都可安全重复调用。
-				if (prototype.streamSimple === streamSimple) prototype.streamSimple = originalSimple;
+				// 先停用闭包，再尝试物理恢复；其它插件保留旧 wrapper 时也不能继续注入。
+				active = false;
+				if (prototype.applyAuth === applyAuth) prototype.applyAuth = originalApplyAuth;
 			},
 		};
 		installations.set(prototype, installation);

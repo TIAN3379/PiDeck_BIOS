@@ -20,7 +20,7 @@ beforeEach(async () => {
 afterEach(() => dispose());
 
 /** 用真实 DSH adapter → pi-ai provider 调用链捕获请求参数；不启动 host、不发网络请求。 */
-function createHarness({ provider = "opencode-go", baseUrl = "https://opencode.ai/zen/go", headers, modelHeaders, authHeaders } = {}) {
+function createHarness({ provider = "opencode-go", baseUrl = "https://opencode.ai/zen/go", headers, modelHeaders, authHeaders, authBaseUrl } = {}) {
 	const requests = [];
 	const model = {
 		id: "test-model",
@@ -56,7 +56,7 @@ function createHarness({ provider = "opencode-go", baseUrl = "https://opencode.a
 		id: provider,
 		models: [model],
 		api: { stream, streamSimple: stream },
-		auth: { apiKey: { name: "test", resolve: async () => ({ auth: { apiKey: "test-key", headers: authHeaders }, source: "test" }), login: async () => ({ type: "api_key", key: "test-key" }) } },
+		auth: { apiKey: { name: "test", resolve: async () => ({ auth: { apiKey: "test-key", headers: authHeaders, baseUrl: authBaseUrl }, source: "test" }), login: async () => ({ type: "api_key", key: "test-key" }) } },
 	});
 	const profile = Object.freeze({
 		provider,
@@ -180,6 +180,24 @@ test("其它供应商和伪装 URL 不泄露会话头，已有普通头保持不
 	assert.equal(isOpenCodeRoute({ provider: "other", baseUrl: "https://OPENCODE.AI:443/zen/go" }), true);
 });
 
+test("鉴权将别名路由改到非 OpenCode 地址后不注入会话头", async () => {
+	// OAuth 能在模型配置之后重定向端点；请求级捕获必须以最终目标为准。
+	const harness = createHarness({ provider: "custom-alias", authBaseUrl: "https://other.example/v1", headers: { "X-Custom": "keep" } });
+	const headers = await harness.call("private-session");
+	assert.equal(harness.requests[0].model.baseUrl, "https://other.example/v1");
+	assert.equal(headers["x-opencode-session"], undefined);
+	assert.equal(headers["x-opencode-client"], undefined);
+	assert.equal(headers["X-Custom"], "keep");
+});
+
+test("鉴权将别名路由改到 OpenCode 地址后仍自动携带会话头", async () => {
+	const harness = createHarness({ provider: "custom-alias", baseUrl: "https://other.example/v1", authBaseUrl: "https://opencode.ai/zen/go" });
+	const headers = await harness.call("resolved-opencode-session");
+	assert.equal(harness.requests[0].model.baseUrl, "https://opencode.ai/zen/go");
+	assert.equal(headers["x-opencode-session"], "resolved-opencode-session");
+	assert.equal(headers["x-opencode-client"], "pideck");
+});
+
 test("已有异步 transformHeaders 保留且优先，不修改冻结的 request options", async () => {
 	const piAi = await import(pathToFileURL(resolveDshPiAiEntry(adapterEntry)).href);
 	const models = piAi.createModels();
@@ -200,22 +218,114 @@ test("已有异步 transformHeaders 保留且优先，不修改冻结的 request
 test("重复安装不会叠加 wrapper，最后一个 host 释放时恢复原方法", async () => {
 	dispose();
 	const piAi = await import(pathToFileURL(resolveDshPiAiEntry(adapterEntry)).href);
-	const original = piAi.createModels().streamSimple;
+	const original = piAi.createModels().applyAuth;
 	const first = installDshOpenCodeHeaders(piAi);
-	const wrapped = piAi.createModels().streamSimple;
+	const wrapped = piAi.createModels().applyAuth;
 	const second = installDshOpenCodeHeaders(piAi);
 	try {
 		assert.notEqual(wrapped, original);
-		assert.equal(piAi.createModels().streamSimple, wrapped);
+		assert.equal(piAi.createModels().applyAuth, wrapped);
 		first();
 		first();
-		assert.equal(piAi.createModels().streamSimple, wrapped);
+		assert.equal(piAi.createModels().applyAuth, wrapped);
 		assert.equal((await createHarness().call("still-installed"))["x-opencode-session"], "still-installed");
 	} finally {
 		first();
 		second();
 	}
-	assert.equal(piAi.createModels().streamSimple, original);
+	assert.equal(piAi.createModels().applyAuth, original);
+});
+
+test("后装 wrapper 保留时卸载仍停用注入，再安装只启用当前一层", async () => {
+	dispose();
+	const piAi = await import(pathToFileURL(resolveDshPiAiEntry(adapterEntry)).href);
+	const prototype = Object.getPrototypeOf(piAi.createModels());
+	const original = prototype.applyAuth;
+	const first = installDshOpenCodeHeaders(piAi);
+	const retained = prototype.applyAuth;
+	// 模拟其它插件保存并转发我们的 wrapper，不能用覆盖其方法的方式卸载。
+	const later = function (...args) {
+		return retained.apply(this, args);
+	};
+	prototype.applyAuth = later;
+	let second;
+	try {
+		first();
+		assert.equal(prototype.applyAuth, later);
+		const afterDispose = await createHarness().call("after-dispose");
+		assert.equal(afterDispose["x-opencode-session"], undefined);
+		assert.equal(afterDispose["x-opencode-client"], undefined);
+		second = installDshOpenCodeHeaders(piAi);
+		assert.equal((await createHarness().call("reinstalled"))["x-opencode-session"], "reinstalled");
+		second();
+		assert.equal(prototype.applyAuth, later);
+		const afterReinstallDispose = await createHarness().call("after-reinstall-dispose");
+		assert.equal(afterReinstallDispose["x-opencode-session"], undefined);
+		assert.equal(afterReinstallDispose["x-opencode-client"], undefined);
+	} finally {
+		second?.();
+		first();
+		prototype.applyAuth = original;
+	}
+});
+
+test("鉴权等待期间卸载，恢复后不再注入且保留原有 transformHeaders", async () => {
+	const piAi = await import(pathToFileURL(resolveDshPiAiEntry(adapterEntry)).href);
+	const models = piAi.createModels();
+	const harness = createHarness();
+	models.setProvider(harness.piProvider);
+	// 用显式握手停在鉴权的最后一步，不依赖定时器或真实 OAuth/网络。
+	const started = Promise.withResolvers();
+	const resume = Promise.withResolvers();
+	const stream = models.streamSimple(
+		harness.model,
+		{ messages: [] },
+		{
+			sessionId: "disposed-while-authenticating",
+			transformHeaders: async (headers) => {
+				started.resolve();
+				await resume.promise;
+				return { ...headers, "X-Custom": "transformed" };
+			},
+		},
+	);
+	try {
+		await started.promise;
+		dispose();
+	} finally {
+		resume.resolve();
+	}
+	await stream.result();
+	const headers = harness.requests[0].options.headers;
+	assert.equal(headers["x-opencode-session"], undefined);
+	assert.equal(headers["x-opencode-client"], undefined);
+	assert.equal(headers["X-Custom"], "transformed");
+});
+
+test("runtime 返回结构变化时透传原结果，不阻断请求", async () => {
+	// 模拟升级后的私有 seam，未知数据必须 fail-open，而不是强转后解引用。
+	class ChangedModels {
+		async applyAuth(result) {
+			return result;
+		}
+	}
+	const module = { createModels: () => new ChangedModels() };
+	const release = installDshOpenCodeHeaders(module);
+	try {
+		for (const result of [
+			undefined,
+			null,
+			{},
+			{ requestModel: { provider: "opencode-go" }, requestOptions: null },
+			{ requestModel: { provider: "opencode-go", baseUrl: 42 }, requestOptions: {} },
+			{ requestModel: { provider: "opencode-go" }, requestOptions: { sessionId: 42 } },
+			{ requestModel: { provider: "opencode-go" }, requestOptions: { headers: { "X-Custom": 42 } } },
+		]) {
+			assert.equal(await module.createModels().applyAuth(result), result);
+		}
+	} finally {
+		release();
+	}
 });
 
 test("未知 runtime API 明确拒绝，不能悄悄装到错误对象", () => {
