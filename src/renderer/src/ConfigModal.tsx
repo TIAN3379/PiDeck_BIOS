@@ -42,7 +42,8 @@ import { globalPromptOverrideKey, globalSkillOverrideKey, isGlobalSkillSourceId 
 import { emptyDiscoveryData, emptyProjectResourceData, GLOBAL_SKILL_SOURCES, isGlobalSkill, isProjectExtension, isProjectPrompt, isProjectSkill, PROJECT_SKILL_SOURCES } from "./config/resourceScopeModel";
 import { getModelUserAgentOverride, getProviderHeaders, KNOWN_PROVIDER_ENDPOINTS, setModelUserAgentOverride } from "./config/providerHeaders";
 import { TOKENDANCE_PROVIDER } from "../../shared/tokendance";
-import { ALL_CONFIG_DIRTY_KEYS, dirtyKeysClearedByReload, dirtyKeysPreservedOnReload, reconcileConfigDirty } from "./config/configDirtyMarks";
+import { ALL_CONFIG_DIRTY_KEYS, dirtyKeysClearedByReload, dirtyKeysPreservedOnReload, orderDirtyKeysForSave, reconcileConfigDirty } from "./config/configDirtyMarks";
+import { modelThinkingLevelOf, withModelThinkingLevelDefault } from "../../shared/modelThinkingLevels";
 import { formatConfigUnsavedMessage, summarizeConfigUnsavedChanges, type ConfigUnsavedItem } from "./config/configUnsavedChangesSummary";
 import { DirtyMarker } from "./components/app/settings/SettingRows";
 import { isValidProviderName } from "../../shared/providerName";
@@ -517,6 +518,11 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	const [modelsData, setModelsData] = useState<ModelsFile>({ providers: {} });
 	const [authData, setAuthData] = useState<AuthFile>({});
 	const [settingsData, setSettingsData] = useState<SettingsFile>({});
+	/**
+	 * settings.json 是否已真实读入内存。模型页也要读写 settings（每模型默认思考档位），
+	 * 但在它读成功前不能渲染该编辑入口——否则会把空对象当磁盘内容保存，覆盖 settings.json。
+	 */
+	const [settingsLoaded, setSettingsLoaded] = useState(false);
 	/** 自动发现的模型：auth-only 供应商通过已知端点获取的模型列表 */
 	const [discoveredModels, setDiscoveredModels] = useState<Record<string, Array<{ id: string; name?: string }>>>({});
 	const [trustData, setTrustData] = useState<Record<string, boolean>>({});
@@ -814,11 +820,22 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 				const skipMcp = preserved.has("config:mcp");
 				const skipRaw = preserved.has("config:raw");
 				if (target === "models") {
-					const res = await api.config.getModels();
+					// 模型页也要 settingsData：每模型默认思考档位写的就是 settings.json 的
+					// modelThinkingLevels（与全局默认档位同一条写入链路）。
+					// settings 读失败只降级（本页主数据是 models.json），settingsLoaded 保持 false
+					// 让编辑入口不渲染，避免空对象被当成磁盘内容保存。
+					const [res, settingsRes] = await Promise.all([api.config.getModels(), api.config.getSettings().catch(() => null)]);
 					if (!skipModels) {
 						const parsed = normalizeModelsFile(res.parsed);
 						setModelsData(parsed);
 						baselineModelsRef.current = deepClone(parsed);
+					}
+					if (settingsRes) {
+						if (!skipSettings) {
+							setSettingsData(settingsRes.parsed as SettingsFile);
+							baselineSettingsRef.current = deepClone(settingsRes.parsed as SettingsFile);
+						}
+						setSettingsLoaded(true);
 					}
 					if (!skipRaw) {
 						setRawContent(res.raw);
@@ -845,6 +862,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 						setSettingsData(settingsRes.parsed as SettingsFile);
 						baselineSettingsRef.current = deepClone(settingsRes.parsed as SettingsFile);
 					}
+					setSettingsLoaded(true);
 					if (!skipAuth) {
 						setAuthData(authRes.parsed as AuthFile);
 						baselineAuthRef.current = deepClone(authRes.parsed as AuthFile);
@@ -1414,6 +1432,19 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		markDirty("config:models");
 	};
 
+	/**
+	 * 每模型默认思考档位：写 pi settings.json 的 modelThinkingLevels（键 `provider/modelId`），
+	 * 与 Settings 页的全局默认档位共用同一条草稿保存链路（脏标记记在 config:settings 上）。
+	 * 值不做白名单裁剪——档位最终由 pi 按该模型可用档位收敛；空值 = 删键（跟随全局默认）。
+	 */
+	const handleUpdateModelThinkingLevelDefault = (providerName: string, index: number, level: string) => {
+		const model = modelsData.providers[providerName]?.models[index];
+		// 键由模型 id 拼成，空 id（未填完的新行）无法定位。
+		if (!model?.id) return;
+		setSettingsData((previous) => withModelThinkingLevelDefault(previous, providerName, model.id, level));
+		markDirty("config:settings");
+	};
+
 	const handleDeleteModel = (providerName: string, index: number) => {
 		const provider = modelsData.providers[providerName];
 		if (!provider) return;
@@ -1633,6 +1664,18 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	const handleSaveSettings = async (): Promise<boolean> => {
 		const ok = await saveAndReload(() => api.config.saveSettings(settingsData), undefined, "config:settings");
 		await loadConfig("settings", { force: true });
+		return ok;
+	};
+
+	/**
+	 * 只落 settings.json 并把该草稿标记为干净，**不**整页重载。
+	 * 模型页保存顺带提交 settings 草稿时用它：handleSaveSettings 的 force 重载会连带拉取
+	 * models/auth/raw，把它们的未保存草稿静默冲掉。
+	 */
+	const saveSettingsDraftOnly = async (): Promise<boolean> => {
+		const ok = await saveAndReload(() => api.config.saveSettings(settingsData), undefined, "config:settings");
+		// 基准同步到刚写下的内容，否则脏检测（数据 vs 基准）会把刚清掉的黄点又标回来。
+		if (ok) baselineSettingsRef.current = deepClone(settingsData);
 		return ok;
 	};
 
@@ -2284,7 +2327,14 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 					providerPageSaveRef.current?.();
 					return true;
 				}
-				return handleSaveModels();
+				{
+					const ok = await handleSaveModels();
+					// 模型页的「每模型默认思考档位」写的是 settings.json：同一次保存顺带落盘该草稿，
+					// 否则用户在本页点保存后 settings 黄点仍在、也不知道还要去设置页再存一次。
+					// 只走「只写不重载」路径，避免冲掉 auth/raw 等其它页的未保存草稿。
+					if (ok && dirtyTabsRef.current.has("config:settings")) return saveSettingsDraftOnly();
+					return ok;
+				}
 			case "config:auth":
 				return handleSaveAuth();
 			case "config:settings":
@@ -2361,7 +2411,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 				for (const key of dirtyTabs) {
 					roots.add(key.startsWith("dsh:") ? "dsh" : key);
 				}
-				for (const key of roots) {
+				for (const key of orderDirtyKeysForSave(roots)) {
 					const ok = await saveByKey(key);
 					if (!ok) return false;
 				}
@@ -2395,13 +2445,14 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	/**
 	 * 关闭确认框选择保存并关闭：汇总**全部**脏来源逐个保存（不是只存当前 tab），
 	 * dsh:<nav> 归并到 dsh 一个保存入口；任一保存失败则留下重试（错误已展示在内容区）。
+	 * 顺序由 orderDirtyKeysForSave 保证 settings 最后（它的重载会连带刷新 models/auth/raw）。
 	 */
 	const handleSaveAndClose = async () => {
 		const roots = new Set<string>();
 		for (const key of dirtyTabs) {
 			roots.add(key.startsWith("dsh:") ? "dsh" : key);
 		}
-		for (const key of roots) {
+		for (const key of orderDirtyKeysForSave(roots)) {
 			const ok = await saveByKey(key);
 			if (!ok) return;
 		}
@@ -2619,6 +2670,8 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 												const model = provider?.models[index];
 												return model ? getModelUserAgentOverride(provider.modelOverrides, model.id) : "";
 											}}
+											onUpdateModelThinkingLevelDefault={settingsLoaded ? handleUpdateModelThinkingLevelDefault : undefined}
+											getModelThinkingLevelDefault={settingsLoaded ? (providerName, index) => modelThinkingLevelOf(settingsData, providerName, modelsData.providers[providerName]?.models[index]?.id) ?? "" : undefined}
 											onDeleteModel={handleDeleteModel}
 											onDeleteModels={handleDeleteModels}
 											onResetModel={handleResetModelToAdaptive}

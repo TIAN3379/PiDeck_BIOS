@@ -21,6 +21,7 @@ import { DshLogo, PiLogo } from "./SessionSourceBadge";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "../ui-shadcn/select";
 import { computeModelDisplay, formatModelRef, resolveComposerLiveModel, resolveGuideDisplayModel, type ModelPending } from "../../utils/modelPendingDisplay";
 import { resolveComposerThinkingLevel } from "../../utils/thinkingDisplay";
+import { modelThinkingLevelOfMap } from "../../../../shared/modelThinkingLevels";
 import { WELCOME_DSH_MODEL_KEY, WELCOME_MODEL_KEY, isWelcomeModelLost, readWelcomeDshModelPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, shouldClearWelcomePreference } from "../../utils/chatSessionBootstrap";
 import { useBackendModelCatalog } from "../../hooks/useBackendModelCatalog";
 import { CommandPickerGroup, CommandPickerPanel, type CommandPickerFilter } from "../ui-shadcn/command-picker";
@@ -264,6 +265,9 @@ export function ComposerBottomBar(props: {
 	 */
 	defaultModel?: { provider?: string; modelId?: string; modelName?: string };
 	defaultThinkingLevel?: string;
+	/** pi settings.modelThinkingLevels 快照：按当前展示的模型反查每模型默认档位
+	 * （显式点选 > 每模型默认 > 配置默认，与主进程创建时的解析同序）。 */
+	modelThinkingLevels?: Record<string, string>;
 	/** 当前会话后端（pi 缺省）。 */
 	backend?: AgentBackend;
 	/** 切换后端：UI 层面先停 runtime 再写 catalog。 */
@@ -348,6 +352,12 @@ export function ComposerBottomBar(props: {
 		welcomeModel: effectiveWelcomeModel,
 		defaultModel: props.defaultModel,
 	});
+	// 当前展示的模型（会话记录 / 引导页默认）；其声明必须早于思考档位——每模型默认
+	// 思考档位要按它查表（见下），否则引导页改选模型后底栏显示的档位与创建时分叉。
+	const liveModel = resolveComposerLiveModel({
+		record: props.record?.model,
+		fallback: guideDefaultModel,
+	});
 	// 用量查询链路随会话后端：DSH 会话走 dsh（$DSH_HOME 配置 + 凭据库），其余走 pi。
 	// 圆球面板必须与 DSH 卡片/选择器同一 backend，否则查的是另一条 usage-probes.json。
 	const usageBackend: UsageProbeBackend = isDsh ? "dsh" : "pi";
@@ -355,8 +365,10 @@ export function ComposerBottomBar(props: {
 	// Composer 的选择文字只取记录或引导页偏好，不能由 runtime state 改写。
 	const currentThinkingLevel = resolveComposerThinkingLevel({
 		record: props.record?.thinkingLevel,
-		// 引导页显式点选优先；未选择时才回退主进程解析的配置默认档位。
-		fallback: welcomeThinking ?? props.defaultThinkingLevel,
+		// 引导页显式点选优先；未选择时才回退「当前模型的每模型默认 > 主进程解析的配置默认档位」。
+		// 每模型默认按 liveModel 查表：用户可在引导页改选模型，创建时（createDraft）
+		// 同样按最终模型查同一张表，次序一致才保证「底栏显示的就是首轮实际套用的」。
+		fallback: welcomeThinking ?? modelThinkingLevelOfMap(props.modelThinkingLevels, liveModel.provider, liveModel.modelId) ?? props.defaultThinkingLevel,
 	});
 	const thinkingLevelLabel = (level: string) => {
 		const labelKey = THINKING_LEVELS.find((item) => item.value === level)?.labelKey;
@@ -375,10 +387,6 @@ export function ComposerBottomBar(props: {
 		value: props.composerAgentMode,
 		disabled: props.disabled,
 		onChange: props.onChangeMode,
-	});
-	const liveModel = resolveComposerLiveModel({
-		record: props.record?.model,
-		fallback: guideDefaultModel,
 	});
 	const modelDisplay = computeModelDisplay(liveModel.modelId ? liveModel : undefined, props.modelPending);
 	const modelFrom = modelDisplay.from;

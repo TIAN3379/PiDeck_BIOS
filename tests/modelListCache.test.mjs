@@ -261,7 +261,9 @@ test("welcome page explicit model/thinking selections persist and are promoted i
 	assert.match(picker, /localStorage\.setItem\(\s*isDshSession \? WELCOME_DSH_MODEL_KEY : WELCOME_MODEL_KEY/);
 	assert.match(picker, /localStorage\.setItem\(WELCOME_THINKING_KEY, level\)/);
 	assert.match(components, /readWelcomeThinkingPreference\(\)\?\.thinkingLevel/);
-	assert.match(components, /fallback: welcomeThinking \?\? props\.defaultThinkingLevel/);
+	// 每模型默认插在显式点选与全局默认之间，必须按当前展示的模型查表；
+	// 锁住完整顺序，防止新增默认来源反过来覆盖用户本次的显式选择。
+	assert.match(components, /fallback:\s*welcomeThinking\s*\?\?\s*modelThinkingLevelOfMap\(\s*props\.modelThinkingLevels,\s*liveModel\.provider,\s*liveModel\.modelId\s*\)\s*\?\?\s*props\.defaultThinkingLevel/);
 	assert.match(app, /const welcomeThinking = readWelcomeThinkingPreference\(\)\?\.thinkingLevel/);
 	assert.match(app, /welcomeThinking \? \{ thinkingLevel: welcomeThinking \} : \{\}/);
 	// 通用新建会话 action 只接收调用方显式 preferences，不应暗中读取欢迎页 localStorage。

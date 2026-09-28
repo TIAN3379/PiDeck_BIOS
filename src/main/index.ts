@@ -247,6 +247,7 @@ import { testPiProxy } from "./pi/PiProxyTester";
 import { SessionScanner } from "./sessions/SessionScanner";
 import { resolveLaunchDefaultOptions, isModelInModelsConfig } from "./sessions/launchDefaults";
 import { createSessionModelPreference } from "../shared/modelDisplayName";
+import { modelThinkingLevelOf } from "../shared/modelThinkingLevels";
 import { SessionCatalog, canAttachRuntimeMetadata } from "./sessions/SessionCatalog";
 import { aggregateDshProxyMode, buildHostProxyEnvPatch, resolveDshHostProxyMode, resolveEffectiveSessionProxyMode } from "./sessions/sessionProxyPolicy";
 import { SessionRuntimeCoordinator, type SessionRuntimeBinding } from "./sessions/SessionRuntimeCoordinator";
@@ -664,7 +665,10 @@ async function createAnonymousSession(input: CreateAnonymousSessionInput): Promi
 			model = defaults.model;
 		}
 		if (!thinkingLevel) {
-			thinkingLevel = defaults.thinkingLevel;
+			// 与 createDraft 同序：每模型默认档位（pi settings.modelThinkingLevels）优先于
+			// 全局默认，且按最终生效的模型查——匿名会话同样要「显示的默认 = 实际套用」。
+			const perModelThinkingLevel = model && typeof model.provider === "string" && typeof model.modelId === "string" ? modelThinkingLevelOf(settingsResult.parsed, model.provider, model.modelId) : undefined;
+			thinkingLevel = perModelThinkingLevel ?? defaults.thinkingLevel;
 		}
 	} catch {
 		// Config read is best-effort.

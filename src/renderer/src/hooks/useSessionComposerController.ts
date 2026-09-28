@@ -1898,6 +1898,10 @@ export function useSessionComposerController(options: UseSessionComposerControll
 		 *  resolveGuideDisplayModel 在本值之上叠加，次序与主进程 resolveLaunchDefaultOptions 一致。 */
 		bootstrapDefaultModel: bootstrapDefaults?.model,
 		bootstrapDefaultThinkingLevel: bootstrapDefaults?.thinkingLevel,
+		/** 每模型默认思考档位表（pi settings.modelThinkingLevels）：引导页改选模型后，
+		 *  底栏/选择器按当前展示的模型反查，与 createDraft 按最终模型查表同序。
+		 *  非 DSH 后端才会带上（主进程已按后端裁剪）。 */
+		bootstrapModelThinkingLevels: bootstrapDefaults?.modelThinkingLevels,
 		draft,
 		attachments,
 		mode,

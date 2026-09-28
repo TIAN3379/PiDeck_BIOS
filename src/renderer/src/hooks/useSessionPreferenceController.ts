@@ -84,6 +84,8 @@ export function useSessionPreferenceController(options: {
 	/** DSH 部署默认模型（草稿期高亮） */
 	defaultModel?: { provider?: string; modelId?: string; modelName?: string };
 	defaultThinkingLevel?: string;
+	/** pi settings.modelThinkingLevels 快照：引导页按当前模型反查每模型默认档位用。 */
+	modelThinkingLevels?: Record<string, string>;
 	/** 应用成功后关闭选择器（选择器点击路径需要；快捷键路径幂等） */
 	onApplied: () => void;
 }): SessionPreferenceController {
@@ -103,6 +105,7 @@ export function useSessionPreferenceController(options: {
 		cycleArmed,
 		defaultModel: options.defaultModel,
 		defaultThinkingLevel: options.defaultThinkingLevel,
+		modelThinkingLevels: options.modelThinkingLevels,
 	});
 	const { record, runtime, isDshSession, models, favoriteModels, favoritesLoaded, hiddenProviders, hiddenModels, modelPending, currentModel: resolvedLiveModel, thinkingLevels, currentThinkingLevel } = state;
 	// 与 Tab 栏「重启」共用 App.restartActiveAgent：置 restartingAgentId，

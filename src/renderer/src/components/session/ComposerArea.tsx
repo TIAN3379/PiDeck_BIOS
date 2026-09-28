@@ -240,6 +240,7 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 										record={composer.record}
 										defaultModel={composer.dshDefaultModel ?? composer.bootstrapDefaultModel}
 										defaultThinkingLevel={composer.dshDefaultThinkingLevel ?? composer.bootstrapDefaultThinkingLevel}
+										modelThinkingLevels={composer.bootstrapModelThinkingLevels}
 										backend={composer.backend}
 										onChangeBackend={composer.changeBackend}
 										feishuIndicator={feishuIndicator}
@@ -317,6 +318,7 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 						onInsertSkillContent={composer.pickers.insertSkillContent}
 						defaultModel={composer.dshDefaultModel ?? composer.bootstrapDefaultModel}
 						defaultThinkingLevel={composer.dshDefaultThinkingLevel ?? composer.bootstrapDefaultThinkingLevel}
+						modelThinkingLevels={composer.bootstrapModelThinkingLevels}
 					/>
 					{composer.previewImage ? <ImagePreviewModal image={composer.previewImage} onClose={composer.modals.closePreview} /> : null}
 					{composer.sessionReference ? (

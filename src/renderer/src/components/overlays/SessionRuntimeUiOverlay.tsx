@@ -3,7 +3,6 @@ import { Check, ClipboardList } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useAtom } from "jotai";
 import { EASE_OUT, SPRING_LAYOUT } from "../../lib/ease";
-import { ActionSwapRollText } from "../motion/action-swap-roll";
 import { DrawCheck } from "../motion/draw-check";
 import type { AgentUiBatchQuestion, AgentUiRequest, AgentUiResponse, SessionUiResponseInput } from "../../../../shared/types";
 import type { SessionRuntimeUiState, SessionRuntimeViewState } from "../../atoms/session-atoms";
@@ -33,6 +32,7 @@ import { Button } from "../ui-shadcn/button";
 import { Input } from "../ui-shadcn/input";
 import { Textarea } from "../ui-shadcn/textarea";
 import { ApprovalCard } from "../ui-shadcn/approval-card";
+import { PromptTooltip } from "../ui-shadcn/prompt-tooltip";
 
 /**
  * ask 选项选中态的 utility 表达（锚点类 `selected` 保留，供测试与 DOM 查询使用）。
@@ -287,23 +287,21 @@ function BatchAskInlineBar(props: {
 					const answered = isBatchAnswered(answers[question.id]);
 					const active = index === currentTab;
 					return (
-						<Button
-							key={question.id}
-							variant="ghost"
-							role="tab"
-							aria-selected={active}
-							className={`ask-batch-tab inline-flex h-[24px] flex-none items-center gap-1 rounded-md border border-border-subtle bg-transparent px-1.5 font-sans text-micro whitespace-nowrap text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-55${answered ? ` ${ASK_TAB_ANSWERED_CLASS}` : ""}${active ? ` ${ASK_TAB_ACTIVE_CLASS}` : ""}`}
-							disabled={props.responding}
-							onClick={() => changeBatch((current) => ({ ...current, currentTab: index }))}
-						>
-							<span className="min-w-[14px] text-center font-mono font-semibold">{index + 1}</span>
-							{/* 单行截断：tab 只做摘要，完整问题在下方详情区展示；
-							    多行会突破胶囊固定高度溢出到下方内容（min-w-0 让 truncate 在 flex 里生效） */}
-							<span className="max-w-[14ch] min-w-0 truncate text-left" title={question.question}>
-								{question.question}
-							</span>
-							{answered ? <Check size={11} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
-						</Button>
+						<PromptTooltip key={question.id} text={question.question}>
+							<Button
+								variant="ghost"
+								role="tab"
+								aria-selected={active}
+								className={`ask-batch-tab inline-flex h-[24px] flex-none items-center gap-1 rounded-md border border-border-subtle bg-transparent px-1.5 font-sans text-micro whitespace-nowrap text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-55${answered ? ` ${ASK_TAB_ANSWERED_CLASS}` : ""}${active ? ` ${ASK_TAB_ACTIVE_CLASS}` : ""}`}
+								disabled={props.responding}
+								onClick={() => changeBatch((current) => ({ ...current, currentTab: index }))}
+							>
+								<span className="min-w-[14px] text-center font-mono font-semibold">{index + 1}</span>
+								{/* 标签仍只占一行；整颗按钮悬停/聚焦都能看全文，不只文字区域生效。 */}
+								<span className="max-w-[14ch] min-w-0 truncate text-left">{question.question}</span>
+								{answered ? <Check size={11} className="shrink-0 text-[var(--color-success)]" aria-hidden="true" /> : null}
+							</Button>
+						</PromptTooltip>
 					);
 				})}
 				{props.request.batchReview ? (
@@ -321,12 +319,16 @@ function BatchAskInlineBar(props: {
 				) : null}
 			</div>
 
-			{/* 题目行放在换题动画之外的稳定层：AnimatePresence 重挂子树时这里只换 value，
-			    ActionSwapRollText（beui ApprovalCard 标题同款）逐字滚动，与下方选项体滑动互补。 */}
+			{/* 题干必须留在正常文档流：短标签滚动组件内部 nowrap + 测量宽度会覆盖外层换行，
+			    导致长问题被卡片裁切。这里只做整段淡入，保留换行与长路径断行，不改共享动效原语。 */}
 			{!reviewTab && currentQuestion ? (
-				<div className="mb-1.5 text-control font-medium leading-[1.5] break-words text-text-primary">
-					<ActionSwapRollText value={currentQuestion.id}>{currentQuestion.question}</ActionSwapRollText>
-				</div>
+				<PromptTooltip key={currentQuestion.id} text={currentQuestion.question}>
+					<div tabIndex={0} className="mb-1.5 min-w-0 whitespace-pre-wrap text-control font-medium leading-[1.5] text-text-primary [overflow-wrap:anywhere] select-text focus-visible:outline-[var(--focus-ring)]">
+						<motion.div initial={reduce ? false : { opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.16, ease: EASE_OUT }}>
+							{currentQuestion.question}
+						</motion.div>
+					</div>
+				</PromptTooltip>
 			) : null}
 
 			<AnimatePresence initial={false} mode="wait">

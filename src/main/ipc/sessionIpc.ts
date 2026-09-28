@@ -11,6 +11,7 @@ import { isDshPermissionPreset } from "../../shared/types/agent";
 import { isRewindRestoreScope } from "../../shared/types/rewind";
 import { canonicalizeSessionPath } from "../../shared/sessionIdentity";
 import { createSessionModelPreference } from "../../shared/modelDisplayName";
+import { modelThinkingLevelOf } from "../../shared/modelThinkingLevels";
 import type {
 	CreateSessionDraftInput,
 	CreateAnonymousSessionInput,
@@ -621,7 +622,12 @@ export function registerSessionIpc(deps: SessionIpcDeps): void {
 					model = defaults.model;
 				}
 				if (!thinkingLevel) {
-					thinkingLevel = defaults.thinkingLevel;
+					// 每模型默认档位优先于全局默认，且必须按**最终生效的模型**查（显式传入的
+					// model / welcomeModel 可能不是解析器选出的默认模型）：pi 在新建与切换模型时
+					// 都按「显式选择 > 每模型默认 > 全局默认」解析再 clamp，这里同序才能保证
+					// 首轮请求用的档位与引导页底栏展示的一致。DSH 无 pi 模型身份，跳过。
+					const perModelThinkingLevel = input.backend !== "dsh" && model && typeof model.provider === "string" && typeof model.modelId === "string" ? modelThinkingLevelOf(settingsResult.parsed, model.provider, model.modelId) : undefined;
+					thinkingLevel = perModelThinkingLevel ?? defaults.thinkingLevel;
 				}
 			} catch {
 				// Config read is best-effort; draft creation must never block.

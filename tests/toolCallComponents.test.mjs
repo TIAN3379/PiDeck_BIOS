@@ -9,6 +9,7 @@ const toolResult = readFileSync("src/renderer/src/components/agents/tool-result.
 const runtimeInjector = readFileSync("src/renderer/src/components/session/SessionRuntimeInjector.tsx", "utf8");
 const app = readFileSync("src/renderer/src/App.tsx", "utf8");
 const fileEditor = readFileSync("src/renderer/src/hooks/useFileEditor.ts", "utf8");
+const sessionFilePathOpener = readFileSync("src/renderer/src/hooks/useSessionFilePathOpener.ts", "utf8");
 
 test("tool-call rendering stays isolated behind the SurfaceComponents facade", () => {
 	assert.match(toolCalls, /export const ToolCard = memo/);
@@ -91,10 +92,14 @@ test("edit/write diff cards expose an accessible open-file action", () => {
 	assert.match(runtimeInjector, /services\.onOpenFile\(path, line, paneFileContext\)/);
 	assert.match(app, /if \(context && !projectId\)/);
 	assert.match(app, /resolveFileLinkPath\(path, baseDir, projectRoot\)/);
-	assert.match(app, /viewFilePath\(resolved, undefined, line, fileAccessScope\)/);
-	assert.match(app, /readBase64\(resolved, undefined, fileAccessScope\)/);
-	assert.match(app, /mimeType: imageMimeTypeFromPath\(resolved\)/);
-	assert.doesNotMatch(app, /dataUrl\.match\(\/\^data:/);
+	// 打开方式已抽到 hook：既校验 App 传递本栏授权，也校验 hook 消费同一份快照，
+	// 不能继续只扫描旧 App 闭包，或只证明 hook 存在而漏掉实际接线。
+	assert.match(app, /const\s+openSessionFilePath\s*=\s*useSessionFilePathOpener\(\{\s*onPreviewImage:\s*setPreviewImage,\s*viewFilePath\s*\}\)/);
+	assert.match(app, /await\s+openSessionFilePath\(\s*resolved,\s*\{\s*line,\s*scope:\s*projectId\s*\?\s*\{\s*projectId\s*\}\s*:\s*undefined\s*\}\s*\)/);
+	assert.match(sessionFilePathOpener, /viewFilePath\(\s*path,\s*undefined,\s*options\.line,\s*options\.scope,\s*options\.readOnly\s*===\s*true\s*\)/);
+	assert.match(sessionFilePathOpener, /readBase64\(\s*path,\s*undefined,\s*options\.scope\s*\)/);
+	assert.match(sessionFilePathOpener, /mimeType:\s*imageMimeTypeFromPath\(\s*path\s*\)/);
+	assert.doesNotMatch(sessionFilePathOpener, /dataUrl\.match\(\/\^data:/);
 	// 授权随 editor tab 固化，异步加载不能改用后来聚焦的项目。
 	assert.match(fileEditor, /fileAccessScope\?: ProjectFileAccessScope/);
 	assert.match(fileEditor, /readFileContent\(path, maxBytes, scope\)/);
