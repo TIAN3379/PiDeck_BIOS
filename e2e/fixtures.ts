@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { armStartupOverlayDismissal } from "./startupOverlays";
+import { ensureWindowsProfileSkeleton } from "./win-profile";
 
 /**
  * Electron 应用 fixture：默认启动构建产物（out/main/index.js）；设置
@@ -27,6 +28,11 @@ export type SeedProject = { id: string; name: string; path: string; pinned?: boo
 export type SeedSettings = Record<string, unknown>;
 
 const repoRoot = resolve(__dirname, "..");
+
+/**
+ * Windows 下 `USERPROFILE` 被重定向到临时目录时，必须先把「用户配置目录骨架」建出来 ——
+ * 实现与原因见 `./win-profile.ts`（本文件与 `./mock-pi-fixture.ts` 共用同一份）。
+ */
 
 export const test = base.extend<AppFixture & { seedProjects: SeedProject[] | undefined; seedSettings: SeedSettings | undefined }>({
 	seedProjects: [undefined, { option: true }],
@@ -61,6 +67,9 @@ export const test = base.extend<AppFixture & { seedProjects: SeedProject[] | und
 			mkdirSync(join(userDataRoot, "profile"), { recursive: true });
 			writeFileSync(join(userDataRoot, "profile", "settings.json"), JSON.stringify(seedSettings));
 		}
+		// 重定向 USERPROFILE 后，shell 文件夹解析要求配置目录骨架存在（见函数注释）；
+		// 骨架缺失会让主进程在 win32 上启动即崩，先补目录再 spawn。
+		if (process.platform === "win32") ensureWindowsProfileSkeleton(userDataRoot);
 		const profileDir = join(userDataRoot, "profile");
 		const env = {
 			...process.env,
