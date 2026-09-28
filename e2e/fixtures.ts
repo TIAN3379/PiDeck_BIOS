@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { armStartupOverlayDismissal } from "./startupOverlays";
+import { ensureWindowsProfileSkeleton } from "./win-profile";
 
 /**
  * Electron 应用 fixture：默认启动构建产物（out/main/index.js）；设置
@@ -29,21 +30,9 @@ export type SeedSettings = Record<string, unknown>;
 const repoRoot = resolve(__dirname, "..");
 
 /**
- * Windows 下 `USERPROFILE` 被重定向到临时目录时，必须先把「用户配置目录骨架」建出来。
- *
- * Chromium 的 appData 路径 provider 在 win32 上走 shell 文件夹解析（SHGetFolderPath），
- * 它**不读 APPDATA 环境变量**，而是按重定向后的 USERPROFILE 去找
- * `<USERPROFILE>\AppData\Roaming`。该目录不存在时解析直接失败，`app.getPath("appData")`
- * 抛 "Failed to get 'appData' path"，主进程在模块加载期就崩掉 —— 窗口永不出现，
- * 表现为 Playwright `firstWindow: Timeout`，完全不像环境问题（实测 Electron 43.4.0）。
- *
- * 只补目录、不写任何业务数据：骨架缺失时补上，已存在时幂等 no-op。
+ * Windows 下 `USERPROFILE` 被重定向到临时目录时，必须先把「用户配置目录骨架」建出来 ——
+ * 实现与原因见 `./win-profile.ts`（本文件与 `./mock-pi-fixture.ts` 共用同一份）。
  */
-function ensureWindowsProfileSkeleton(profileRoot: string): void {
-	for (const relative of ["AppData\\Roaming", "AppData\\Local", "AppData\\LocalLow", "Desktop", "Documents"]) {
-		mkdirSync(join(profileRoot, relative), { recursive: true });
-	}
-}
 
 export const test = base.extend<AppFixture & { seedProjects: SeedProject[] | undefined; seedSettings: SeedSettings | undefined }>({
 	seedProjects: [undefined, { option: true }],
