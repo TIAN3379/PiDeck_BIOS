@@ -8,7 +8,7 @@ import { findLastUserMessageIndex, shouldRefreshOutlineForRuntimeUpsert } from "
 import { releaseSessionOutlineProjection } from "./outlineProjectionCache";
 import { sameProjectSessionList } from "../utils/sessionRecordIdentity";
 import { resolveStreamingTextUpdate, shouldHoldLiveText, shouldReleaseHeldLiveText } from "../utils/liveTextHandoff";
-import type { BridgeOverlayOptions, BridgeUINode, BridgeUpdate } from "../../../shared/types/bridge";
+import type { BridgeOverlayOptions, BridgeTone, BridgeUINode, BridgeUpdate } from "../../../shared/types/bridge";
 
 /**
  * 渲染层会话消息缓存上限（LRU）。
@@ -131,8 +131,15 @@ export type SessionRuntimeUiState = {
 	bridgeTargets?: Record<string, BridgeUINode | null>;
 	/** 桥的状态栏条目（多 key 共存）。 */
 	bridgeStatus?: Record<string, string>;
-	/** 桥的流式状态行（setWorkingMessage / setWorkingVisible / setWorkingIndicator）。 */
-	bridgeWorking?: { message?: string; visible?: boolean; frames?: string[] };
+	/**
+	 * 状态条目的语义色（与 `bridgeStatus` 同键，值是桥侧量化后的 tone）。
+	 *
+	 * 与文本分开存：`bridgeStatus` 保持「key → 净文本」的原语义（老读者/老断言不受影响），
+	 * tone 是**增量**能力 —— 桥侧把 ANSI 配色量化成 tone 后单独下发（方案 B：保色）。
+	 */
+	bridgeStatusTone?: Record<string, BridgeTone>;
+	/** 桥的流式状态行（setWorkingMessage / setWorkingVisible / setWorkingIndicator）；`tone` 是文案的语义色。 */
+	bridgeWorking?: { message?: string; tone?: BridgeTone; visible?: boolean; frames?: string[] };
 	/** 桥的会话标题（setTitle）。 */
 	bridgeTitle?: string;
 	/** 桥的折叠思考块标签（setHiddenThinkingLabel）。 */
@@ -1024,6 +1031,9 @@ function tryReleaseLiveThinkingAfterHistory(get: Getter, set: Setter, sessionId:
  * 未知 `update.type` 一律忽略（前向兼容：桥升级后推的新类型不会让旧 PiDeck 崩）。
  */
 function applyBridgeUpdate(base: SessionRuntimeUiState, payload: Record<string, unknown>, revision: number): SessionRuntimeUiState {
+	// 桥帧的 ANSI 净化**不在这里**：桥侧出帧口（`pi-deck-gui-bridge-runtime.ts` 的净化通路）
+	// 与主进程边界（`AgentManager.handleBridgeUpdate` → `shared/bridgeText.ts`）各收一次，
+	// 本函数拿到的已经是净文本，因此渲染层各分支不需要各自 stripAnsi。
 	const update = payload.bridgeUpdate as BridgeUpdate | undefined;
 	if (!update || typeof update !== "object" || typeof update.type !== "string") return { ...base, revision };
 
@@ -1044,14 +1054,25 @@ function applyBridgeUpdate(base: SessionRuntimeUiState, payload: Record<string, 
 			const key = typeof update.key === "string" ? update.key : "";
 			if (!key) return { ...base, revision };
 			const status = { ...(base.bridgeStatus ?? {}) };
-			if (update.text === undefined || update.text === null) delete status[key];
-			else status[key] = String(update.text);
-			return { ...base, revision, bridgeStatus: status };
+			const tones = { ...(base.bridgeStatusTone ?? {}) };
+			if (update.text === undefined || update.text === null) {
+				delete status[key];
+				delete tones[key];
+			} else {
+				status[key] = String(update.text);
+				// tone 是可选增量：扩展这一帧没给颜色就把旧色撤掉，避免「改了文案还在用旧色」
+				if (update.tone) tones[key] = update.tone;
+				else delete tones[key];
+			}
+			return { ...base, revision, bridgeStatus: status, bridgeStatusTone: tones };
 		}
 		case "working": {
 			// 字段是「可选增量」语义：只覆盖本次带来的字段，未带的保持原值
 			const next = { ...(base.bridgeWorking ?? {}) };
-			if ("message" in update) next.message = update.message;
+			if ("message" in update) {
+				next.message = update.message;
+				next.tone = update.tone;
+			}
 			if ("visible" in update) next.visible = update.visible;
 			if ("frames" in update) next.frames = update.frames;
 			return { ...base, revision, bridgeWorking: next };
@@ -1088,6 +1109,7 @@ function applyBridgeUpdate(base: SessionRuntimeUiState, payload: Record<string, 
 				bridgeTargets: undefined,
 				bridgeOverlays: undefined,
 				bridgeStatus: undefined,
+				bridgeStatusTone: undefined,
 				bridgeWorking: undefined,
 				bridgeTitle: undefined,
 				bridgeThinkingLabel: undefined,

@@ -174,14 +174,20 @@ export type UIBridgeEvent =
 export type UIBridgeUpdate =
 	/** 某个落点（header/footer/widget/侧边栏…）的新节点树；null 表示清空该落点。 */
 	| { type: "ui-update"; targetId: string; node: UINode | null }
-	/** 状态栏条目（多 key 共存）。 */
-	| { type: "status"; key: string; text: string | undefined }
-	/** 流式状态行：文案 / 显隐 / 指示器帧。 */
-	| { type: "working"; message?: string; visible?: boolean; frames?: string[] }
-	/** 会话标题。 */
-	| { type: "title"; title: string }
-	/** 折叠思考块标签。 */
-	| { type: "thinking-label"; label: string | undefined }
+	/**
+	 * 状态栏条目（多 key 共存）。
+	 *
+	 * `text` 是**净文本**（不含任何转义码）；`tone` 是扩展配色量化后的语义色档，
+	 * 作为**独立字段**下发 —— 留在字符串里的颜色码会被宿主侧 `stripAnsi` 兜底吃掉
+	 * （见 `pi-deck-gui-bridge-theme.ts` 的 `splitToneAndText`）。
+	 */
+	| { type: "status"; key: string; text: string | undefined; tone?: Tone }
+	/** 流式状态行：文案（净文本 + tone）/ 显隐 / 指示器帧（纯字形）。 */
+	| { type: "working"; message?: string; tone?: Tone; visible?: boolean; frames?: string[] }
+	/** 会话标题（净文本 + tone；宿主暂无配色位）。 */
+	| { type: "title"; title: string; tone?: Tone }
+	/** 折叠思考块标签（净文本 + tone；宿主暂无配色位）。 */
+	| { type: "thinking-label"; label: string | undefined; tone?: Tone }
 	/** 全量重推（PiDeck 侧重连 / 会话切换时用）。 */
 	| { type: "resync" }
 	/** 覆盖层（ctx.gui.custom 的 overlay/modal）开关。 */

@@ -21,7 +21,7 @@ import type { UIBridgeUpdate } from "./pi-deck-gui-bridge-types";
 import type { UIBridgeTransport } from "./pi-deck-gui-bridge-transport";
 import { repushGuiState, findContributionNode } from "./pi-deck-gui-bridge-gui";
 import { hashUINode, serialize, componentOf, invokeAction } from "./pi-deck-gui-bridge-serialize";
-import { createBridgeTheme, type BridgeTheme } from "./pi-deck-gui-bridge-theme";
+import { createBridgeTheme, sanitizeBridgeUpdate, type BridgeTheme } from "./pi-deck-gui-bridge-theme";
 import { loadPiTui, type PiTuiComponent, type PiTuiModule } from "./pi-deck-gui-bridge-tui";
 import type { GuiComponent } from "./pi-deck-gui-bridge-gui-types";
 
@@ -52,8 +52,13 @@ type TrackedEntry = {
 
 /** 桥的运行时状态。 */
 export type BridgeState = {
+	/** 状态条目净文本（key → text）。 */
 	status: Map<string, string>;
+	/** 状态条目语义色（与 `status` 同键；无配色时缺键）。 */
+	statusTone: Map<string, Tone>;
 	workingMessage: string | undefined;
+	/** 流式状态行的语义色。 */
+	workingTone: Tone | undefined;
 	workingVisible: boolean | undefined;
 	workingFrames: string[] | undefined;
 	hiddenThinkingLabel: string | undefined;
@@ -64,7 +69,9 @@ export type BridgeState = {
 export function createBridgeState(): BridgeState {
 	return {
 		status: new Map(),
+		statusTone: new Map(),
 		workingMessage: undefined,
+		workingTone: undefined,
 		workingVisible: undefined,
 		workingFrames: undefined,
 		hiddenThinkingLabel: undefined,
@@ -97,6 +104,38 @@ const log = (message: string): void => {
 	process.stderr.write(`[pi-deck-gui-bridge] ${message}\n`);
 };
 
+/**
+ * 出帧的**唯一净化口**（§6.5 / 2026-09 ANSI 泄漏修复）。
+ *
+ * 桥支持的全部通道 —— `status` / `working` / `thinking-label` / `title` /
+ * `footer` / `header` / `widget:*` / `editor` / `ctx.gui.*` 的落点与覆盖层 ——
+ * 都**只能**经 `runtime.transport.push` 出网（`gui.ts` 也拿的是同一个 runtime）。
+ * 把净化包在这一层，就不存在「新增一条通道忘了净化」：
+ * 通道是会长出来的，出口只有一个。
+ *
+ * 这样各通道（含将来新增的）都不需要自己调 `toPlainText` / `stripStyledText`；
+ * 净化规则集中在 `theme.sanitizeBridgeUpdate`（纯函数、可单测）。
+ */
+function createSanitizingTransport(transport: UIBridgeTransport): UIBridgeTransport {
+	return {
+		get available(): boolean {
+			return transport.available;
+		},
+		push(update: UIBridgeUpdate): void {
+			transport.push(sanitizeBridgeUpdate(update));
+		},
+		onEvent(handler): void {
+			transport.onEvent(handler);
+		},
+		onResync(handler): void {
+			transport.onResync?.(handler);
+		},
+		close(): void {
+			transport.close();
+		},
+	};
+}
+
 /** 组件释放：有 dispose 就调，异常吞掉。 */
 function disposeComponent(entry: TrackedEntry): void {
 	const component = entry.component;
@@ -114,15 +153,51 @@ function disposeComponent(entry: TrackedEntry): void {
  *
  * 只创建一次（模块级单例），`/reload` 后复用（§14.8 幂等）。
  */
-export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime {
+export function createBridgeRuntime(rawTransport: UIBridgeTransport): BridgeRuntime {
 	const state = createBridgeState();
 	const theme = createBridgeTheme();
+	// 所有出帧走净化通路 —— 见 createSanitizingTransport（本函数与 gui.ts 都只认它）
+	const transport = createSanitizingTransport(rawTransport);
 	let ticker: NodeJS.Timeout | null = null;
 	let wrapped = false;
 	/** tui 引用：footer/header factory 需要它。RPC 下没有真 TUI，传一个最小替身。 */
 	let tuiStub: unknown = null;
 	/** footerData：pi 的 ReadonlyFooterDataProvider。RPC 下给最小替身。 */
 	let footerDataStub: unknown = null;
+
+	/**
+	 * 纯文本通道的统一出口：**先归一化**（净化 + 配色量化 → `theme.sanitizeBridgeUpdate`），
+	 * 再把净文本与语义 tone 记进 state（`resync()` 从 state 重推，存原文等于把乱码留在内存里），
+	 * 最后交给净化通路。
+	 *
+	 * 各通道只负责「把扩展给的值原样报出来」，**不再各自净化/配色** —— 规则只有一份。
+	 */
+	function emitPlain(update: UIBridgeUpdate): void {
+		const clean = sanitizeBridgeUpdate(update);
+		if (clean.type === "status") {
+			if (clean.text === undefined || clean.text === null) {
+				state.status.delete(clean.key);
+				state.statusTone.delete(clean.key);
+			} else {
+				state.status.set(clean.key, clean.text);
+				// tone 与文本分开存：文本映射保持 `Map<string,string>` 语义不变（老断言/老读者不受影响）
+				if (clean.tone) state.statusTone.set(clean.key, clean.tone);
+				else state.statusTone.delete(clean.key);
+			}
+		} else if (clean.type === "working") {
+			if ("message" in clean) {
+				state.workingMessage = clean.message;
+				state.workingTone = clean.tone;
+			}
+			if ("visible" in clean) state.workingVisible = clean.visible;
+			if ("frames" in clean) state.workingFrames = clean.frames;
+		} else if (clean.type === "title") {
+			state.title = clean.title;
+		} else if (clean.type === "thinking-label") {
+			state.hiddenThinkingLabel = clean.label;
+		}
+		transport.push(clean);
+	}
 
 	/** 取 pi-tui 模块（可能为 null → 适配器走形状判定）。 */
 	function piTui(): PiTuiModule | null {
@@ -239,9 +314,8 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 			try {
 				const k = String(key ?? "");
 				if (!k) return;
-				if (text === undefined || text === null) state.status.delete(k);
-				else state.status.set(k, String(text));
-				transport.push({ type: "status", key: k, text: text === undefined || text === null ? undefined : String(text) });
+				// 通道只负责报值：净化与 state 记录都在 emitPlain 里（唯一出口）
+				emitPlain({ type: "status", key: k, text: text === undefined || text === null ? undefined : String(text) });
 			} catch (error) {
 				log(`setStatus 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -326,8 +400,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetWorkingMessage = target.setWorkingMessage;
 		target.setWorkingMessage = (message?: unknown) => {
 			try {
-				state.workingMessage = message === undefined || message === null ? undefined : String(message);
-				transport.push({ type: "working", message: state.workingMessage });
+				emitPlain({ type: "working", message: message === undefined || message === null ? undefined : String(message) });
 			} catch (error) {
 				log(`setWorkingMessage 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -341,8 +414,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetWorkingVisible = target.setWorkingVisible;
 		target.setWorkingVisible = (visible: unknown) => {
 			try {
-				state.workingVisible = Boolean(visible);
-				transport.push({ type: "working", visible: state.workingVisible });
+				emitPlain({ type: "working", visible: Boolean(visible) });
 			} catch (error) {
 				log(`setWorkingVisible 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -357,8 +429,8 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		target.setWorkingIndicator = (options?: unknown) => {
 			try {
 				const frames = (options as { frames?: unknown } | undefined)?.frames;
-				state.workingFrames = Array.isArray(frames) ? frames.map((f) => String(f)) : undefined;
-				transport.push({ type: "working", frames: state.workingFrames });
+				// frames 也是纯文本通道（宿主渲染的是帧序列本身），同样只报值、由 emitPlain 净化
+				emitPlain({ type: "working", frames: Array.isArray(frames) ? frames.map((frame) => String(frame)) : undefined });
 			} catch (error) {
 				log(`setWorkingIndicator 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -372,8 +444,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetHiddenThinkingLabel = target.setHiddenThinkingLabel;
 		target.setHiddenThinkingLabel = (label?: unknown) => {
 			try {
-				state.hiddenThinkingLabel = label === undefined || label === null ? undefined : String(label);
-				transport.push({ type: "thinking-label", label: state.hiddenThinkingLabel });
+				emitPlain({ type: "thinking-label", label: label === undefined || label === null ? undefined : String(label) });
 			} catch (error) {
 				log(`setHiddenThinkingLabel 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -387,9 +458,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetTitle = target.setTitle;
 		target.setTitle = (title: unknown) => {
 			try {
-				const value = String(title ?? "");
-				state.title = value;
-				transport.push({ type: "title", title: value });
+				emitPlain({ type: "title", title: String(title ?? "") });
 			} catch (error) {
 				log(`setTitle 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -470,9 +539,10 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 	/** 全量重推（PiDeck 要快照时用，§9.4）。 */
 	function resync(): void {
 		transport.push({ type: "resync" });
-		for (const [key, text] of state.status) transport.push({ type: "status", key, text });
+		// tone 与文本一起重推：只推文本会让重建后的状态栏丢色（用户看到「刷新后变灰」）
+		for (const [key, text] of state.status) transport.push({ type: "status", key, text, tone: state.statusTone.get(key) });
 		if (state.workingMessage !== undefined || state.workingVisible !== undefined || state.workingFrames !== undefined) {
-			transport.push({ type: "working", message: state.workingMessage, visible: state.workingVisible, frames: state.workingFrames });
+			transport.push({ type: "working", message: state.workingMessage, tone: state.workingTone, visible: state.workingVisible, frames: state.workingFrames });
 		}
 		if (state.title !== undefined) transport.push({ type: "title", title: state.title });
 		if (state.hiddenThinkingLabel !== undefined) transport.push({ type: "thinking-label", label: state.hiddenThinkingLabel });

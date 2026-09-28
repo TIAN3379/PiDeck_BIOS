@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, CircleAlert, ListTree, RotateCw, Sparkles, Wrench } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert, ListTree, MessagesSquare, RotateCw, Sparkles, Wrench } from "lucide-react";
 import { memo } from "react";
 import { t } from "../../../i18n";
 import type { ProcessSummary } from "../timeline/segmentSummary";
@@ -36,7 +36,8 @@ export const ProcessSummaryToggle = memo(function ProcessSummaryToggle(props: { 
 	const stats = [
 		props.summary.toolCount > 0 ? { icon: Wrench, value: props.summary.toolCount, label: t("activity.executionToolCount", { count: props.summary.toolCount }), tone: "" } : null,
 		props.summary.thinkingCount > 0 ? { icon: Sparkles, value: props.summary.thinkingCount, label: t("activity.executionThinkingCount", { count: props.summary.thinkingCount }), tone: "" } : null,
-		props.summary.interimCount > 0 ? { icon: ListTree, value: props.summary.interimCount, label: t("activity.executionInterimCount", { count: props.summary.interimCount }), tone: "" } : null,
+		// 中间回复也是「说话」，用对话气泡而不是树形列表（与折叠头的 ListTree 区分开）。
+		props.summary.interimCount > 0 ? { icon: MessagesSquare, value: props.summary.interimCount, label: t("activity.executionInterimCount", { count: props.summary.interimCount }), tone: "" } : null,
 		props.summary.retryCount > 0 ? { icon: RotateCw, value: props.summary.retryCount, label: t("activity.executionRetryCount", { count: props.summary.retryCount }), tone: "warning" } : null,
 		props.summary.errorCount > 0 ? { icon: CircleAlert, value: props.summary.errorCount, label: t("activity.executionErrorCount", { count: props.summary.errorCount }), tone: "danger" } : null,
 	].filter((stat): stat is { icon: typeof Wrench; value: number; label: string; tone: string } => stat !== null);

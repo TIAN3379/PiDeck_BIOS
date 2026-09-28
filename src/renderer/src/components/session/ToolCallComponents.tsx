@@ -17,6 +17,7 @@ import { FileDiff } from "../agents/file-diff";
 import { desktopApi } from "../../desktopApi";
 import { formatDuration, getToolDetailText, getToolDiffTarget, getToolExitCode, getToolLiveStartTimestamp, getToolName, getToolStatus, fileChangeToDiffLines } from "./TimelineFormat";
 import { BridgeGuiSlot } from "../bridge/BridgeSlot";
+import { useInsideProcessGroupBody } from "./turn/processGroupScrollContext";
 
 export type DiffFileHandler = (path: string, originalContent?: string, content?: string) => void;
 
@@ -153,6 +154,14 @@ export const ToolActivityCard = memo(function ToolActivityCard(props: { name: st
 	);
 });
 
+/**
+ * 工具结果内层的限高：组体内让位（null），组外保持既有 320。
+ *
+ * 见 `turn/processGroupScrollContext.ts`：组体已经是「限高 + 一条滚轮」，组内再套一层
+ * 限高滚动区就是用户看到的双层滚动条（内层到边即被 contain 切断，外层不动）。
+ */
+const TOOL_RESULT_MAX_HEIGHT_OUTSIDE_GROUP = 320;
+
 /** 单个工具调用卡片：trigger 行（图标+工具名+副标题+状态+耗时）+ 展开后详情。 */
 export const ToolCard = memo(function ToolCard(props: {
 	message: ChatMessage;
@@ -164,6 +173,8 @@ export const ToolCard = memo(function ToolCard(props: {
 	/** 通过会话工作区路由打开工具目标文件（相对路径由 App 层补齐工作目录） */
 	onOpenFile?: (path: string) => void;
 }) {
+	// 组体内：外层组体已经限高并自带滚轮，这里的内层必须让位，否则是双层滚动条。
+	const insideProcessGroupBody = useInsideProcessGroupBody();
 	const [expanded, setExpanded] = useState(props.defaultOpen ?? false);
 	const messageStatus = getToolStatus(props.message);
 	const status = props.stopped && messageStatus === "running" ? "stopped" : messageStatus;
@@ -357,7 +368,7 @@ export const ToolCard = memo(function ToolCard(props: {
 									// 文件工具内联 diff（issue-兼容期：edit/write 的工具卡直接看改动，
 									// 不必再点开右侧差异查看器）。折叠态渲染行；maxHeight 上限防长文件撑爆卡片。
 									<div className="mb-1.5 flex min-w-0 items-start gap-1">
-										<FileDiff className="min-w-0 flex-1" file={diffTarget.path} lines={fileChangeToDiffLines(diffTarget)} status="complete" defaultOpen={false} maxHeight={200} language="diff" />
+										<FileDiff className="min-w-0 flex-1" file={diffTarget.path} lines={fileChangeToDiffLines(diffTarget)} status="complete" defaultOpen={false} maxHeight={insideProcessGroupBody ? null : 200} language="diff" />
 										{props.onOpenFile && (
 											// 打开按钮与 diff 标题同行但不嵌套在 FileDiff 的折叠按钮内，
 											// 避免无效的 button 嵌套；路径解析交给会话工作区统一处理。
@@ -375,7 +386,7 @@ export const ToolCard = memo(function ToolCard(props: {
 									title={toolName}
 									status={status === "running" ? "running" : status === "error" ? "error" : "success"}
 									kind={toolName.toLowerCase().includes("bash") || toolName.toLowerCase().includes("shell") ? "terminal" : "custom"}
-									maxHeight={320}
+									maxHeight={insideProcessGroupBody ? null : TOOL_RESULT_MAX_HEIGHT_OUTSIDE_GROUP}
 									copyText={displayText}
 									copyClassName="tool-card-copy"
 									contentClassName="text-text-tertiary"

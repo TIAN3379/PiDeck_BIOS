@@ -13,6 +13,7 @@ import type { TurnProcessEntry } from "../timeline/types";
 import { ThinkingStep } from "./ThinkingStep";
 import { ToolStep } from "./ToolStep";
 import { useStickToBottom } from "../../../lib/stick-to-bottom";
+import { ProcessGroupBodyScrollContext } from "./processGroupScrollContext";
 
 /**
  * 过程组（组头 + 可折叠组体）。
@@ -225,40 +226,44 @@ export const ProcessGroupStep = memo(function ProcessGroupStep(props: ProcessGro
 
 			{props.open && (
 				// 组体：缩进 + 竖线沿用现有展开区语言；限高交给内层 scroller，滚轮不外溢到时间线。
-				<div id={bodyId} data-process-group-body="" className="ml-5 mt-1 border-l-2 border-border-subtle pl-3">
-					<div
-						ref={stickScrollRef}
-						data-process-group-scroller=""
-						// 滚轮交给引擎才能产生「上滚逃逸 / 回底重锁」：引擎的 wheel 意图是从外部路由进来的
-						// （noteWheel），不注册自己的 wheel 监听。虽然同一事件会冒泡到外层时间线，
-						// 但外层会先判定滚动链归属：组内有余量时由内层认领，到边后 contain 切断，
-						// 两种情况都不能改变外层跟随态。
-						onWheel={(event) => stickNoteWheel(event.deltaY, event.target)}
-						className="flex max-h-[min(320px,30vh)] flex-col overflow-y-auto overscroll-contain"
-					>
-						{/* 内容包装盒：引擎的 ResizeObserver 观察这一层才能感知「内容变高」——
+				// 组体内层限高交给 ProcessGroupBodyScrollContext：组内工具卡展开后不再自带滚轮，
+				// 整组只有这一条滚轮（否则是双层滚动条，内层到边就滚不动了）。
+				<ProcessGroupBodyScrollContext.Provider value={true}>
+					<div id={bodyId} data-process-group-body="" className="ml-5 mt-1 border-l-2 border-border-subtle pl-3">
+						<div
+							ref={stickScrollRef}
+							data-process-group-scroller=""
+							// 滚轮交给引擎才能产生「上滚逃逸 / 回底重锁」：引擎的 wheel 意图是从外部路由进来的
+							// （noteWheel），不注册自己的 wheel 监听。虽然同一事件会冒泡到外层时间线，
+							// 但外层会先判定滚动链归属：组内有余量时由内层认领，到边后 contain 切断，
+							// 两种情况都不能改变外层跟随态。
+							onWheel={(event) => stickNoteWheel(event.deltaY, event.target)}
+							className="flex max-h-[min(320px,30vh)] flex-col overflow-y-auto overscroll-contain"
+						>
+							{/* 内容包装盒：引擎的 ResizeObserver 观察这一层才能感知「内容变高」——
 						    外层 scroller 被 max-height 钳住、尺寸恒定，观察它收不到增长通知。 */}
-						<div ref={stickContentRef} className="flex shrink-0 flex-col">
-							{mounted.hiddenCount > 0 && (
-								// 超出挂载预算的早期成员入口：与 TurnRow 的「显示更早的 N 条步骤」同款观感。
-								<button
-									type="button"
-									className="mt-1 inline-flex h-[26px] shrink-0 items-center gap-2 self-start rounded-[var(--radius-md)] border border-border-subtle bg-[var(--color-chat-card-bg)] px-3 text-chat-detail font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-bg-hover hover:text-text-primary"
-									onClick={() => setExpandedGroupId(props.group.id)}
-									title={t("timeline.showEarlierSteps", { count: mounted.hiddenCount })}
-								>
-									<ChevronUp size={12} aria-hidden="true" />
-									<span>{t("timeline.showEarlierSteps", { count: mounted.hiddenCount })}</span>
-								</button>
-							)}
-							{mounted.items.map((entry) => (
-								<div key={entry.id} className="shrink-0">
-									{renderMember(entry)}
-								</div>
-							))}
+							<div ref={stickContentRef} className="flex shrink-0 flex-col">
+								{mounted.hiddenCount > 0 && (
+									// 超出挂载预算的早期成员入口：与 TurnRow 的「显示更早的 N 条步骤」同款观感。
+									<button
+										type="button"
+										className="mt-1 inline-flex h-[26px] shrink-0 items-center gap-2 self-start rounded-[var(--radius-md)] border border-border-subtle bg-[var(--color-chat-card-bg)] px-3 text-chat-detail font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-bg-hover hover:text-text-primary"
+										onClick={() => setExpandedGroupId(props.group.id)}
+										title={t("timeline.showEarlierSteps", { count: mounted.hiddenCount })}
+									>
+										<ChevronUp size={12} aria-hidden="true" />
+										<span>{t("timeline.showEarlierSteps", { count: mounted.hiddenCount })}</span>
+									</button>
+								)}
+								{mounted.items.map((entry) => (
+									<div key={entry.id} className="shrink-0">
+										{renderMember(entry)}
+									</div>
+								))}
+							</div>
 						</div>
 					</div>
-				</div>
+				</ProcessGroupBodyScrollContext.Provider>
 			)}
 		</div>
 	);

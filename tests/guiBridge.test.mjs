@@ -409,6 +409,37 @@ describe("bridge runtime: 拦截层", () => {
 		);
 	});
 
+	it("★ 纯文本通道剥净扩展自拼的样式（回归：MCP 状态行显示 ESC[38;2;…m 乱码）", () => {
+		// 2026-09 事故：pi-mcp-adapter 用 `ui.setStatus("mcp", ui.theme.fg("accent", …))` 写状态，
+		// pi 的 Theme.fg 产**真 ANSI**，而 PiDeck 的状态栏按纯文本渲染 → 界面上一行 `[38;2;138;190;183m`。
+		// 纯文本通道（status / working / thinking-label / title）一律只收净文本。
+		const { runtime, pushed } = makeRuntime();
+		const ui = makeFakeUi();
+		runtime.wrapUI(ui);
+		const ansi = "\u001b[38;2;138;190;183m🔌 MCP: 2 servers enabled (1 disabled)\u001b[39m";
+		const clean = "🔌 MCP: 2 servers enabled (1 disabled)";
+
+		ui.setStatus("mcp", ansi);
+		ui.setStatus("sentinel", themeMod.createBridgeTheme().fg("accent", "哨兵状态"));
+		ui.setStatus("plain", "原文逐字保留");
+		ui.setWorkingMessage(ansi);
+		ui.setHiddenThinkingLabel(ansi);
+		ui.setTitle(ansi);
+
+		const lastStatus = (key) => pushed.filter((u) => u.type === "status" && u.key === key).pop();
+		assert.equal(lastStatus("mcp")?.text, clean, "status 帧不得带 ANSI");
+		assert.equal(lastStatus("sentinel")?.text, "哨兵状态", "桥自己产的哨兵也必须剥净");
+		assert.equal(lastStatus("plain")?.text, "原文逐字保留", "纯文本必须逐字通过");
+		assert.equal(runtime.state.status.get("mcp"), clean, "state 里也必须是净文本");
+		assert.equal(pushed.filter((u) => u.type === "working").pop()?.message, clean, "working 行不得带 ANSI");
+		assert.equal(pushed.filter((u) => u.type === "thinking-label").pop()?.label, clean, "thinking 折叠标签不得带 ANSI");
+		assert.equal(pushed.filter((u) => u.type === "title").pop()?.title, clean, "窗口标题不得带 ANSI");
+
+		// resync 从 state 重推 —— 存原文的话这里会把乱码带回来
+		runtime.resync();
+		assert.equal(lastStatus("mcp")?.text, clean, "resync 重推的也必须是净文本");
+	});
+
 	it("setFooter(undefined) 恢复内置（推 null）", () => {
 		const { runtime, pushed } = makeRuntime();
 		const ui = makeFakeUi();

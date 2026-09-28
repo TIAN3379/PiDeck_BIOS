@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop",
-  "version": "0.7.7",
+  "version": "0.7.8-beta",
   "dshRuntimeVersion": "0.1.5-rc.1",
   "packageManager": "npm@11.6.2",
   "engines": {

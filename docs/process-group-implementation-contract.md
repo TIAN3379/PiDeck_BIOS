@@ -99,10 +99,10 @@ export function lastProcessGroupIndex(nodes: readonly TurnProcessNode[]): number
 
 | 键 | zh-CN | en-US |
 |---|---|---|
-| `settings.processGroupDisplay` | 过程组显示（实验） | Grouped process display (experimental) |
-| `settings.processGroupDisplayDesc` | 开启后，一轮里的连续思考与工具调用会合并成「过程组」，点开组头才展开明细；关闭则保持现在的平铺方式。 | When on, consecutive reasoning and tool calls in a turn merge into process groups; expand a group header to see its details. Turn it off to keep the current flat layout. |
+| `settings.processGroupDisplay` | 过程组显示 | Grouped process display |
+| `settings.processGroupDisplayDesc` | 一轮内的连续思考与工具调用合并为「过程组」，点开组头展开明细。 | Merges consecutive reasoning and tool calls in a turn into process groups; expand a group header for details. |
 
-**默认值：关闭（走保守项）**。理由：AGENTS.md「特性开关……默认值取保守项」。要改成默认开启只需同步改 5 处默认值（见 §6）。
+**默认值：开启（2026-11 起过程组转正为默认显示，设置里可关回平铺）**。
 
 ---
 

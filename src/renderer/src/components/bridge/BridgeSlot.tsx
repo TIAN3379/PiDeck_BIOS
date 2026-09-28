@@ -18,6 +18,8 @@ import { sessionRuntimeUiBySessionIdAtomFamily } from "../../atoms/session-selec
 import { useBridgeEventSink } from "../../hooks/useBridgeEventSink";
 import { useBridgeResync } from "../../hooks/useBridgeResync";
 import { renderBridgeNode, type BridgeEventSink } from "./renderBridgeNode";
+import { bridgeToneClass } from "./bridgeTone";
+import { sanitizeBridgeNode } from "../../../../shared/bridgeText";
 import { BRIDGE_TARGET, type BridgeGuiSlot as BridgeGuiSlotName, type BridgeUINode } from "../../../../shared/types/bridge";
 
 /**
@@ -36,13 +38,19 @@ const NO_SESSION_FAMILY_KEY = "__bridge_no_session__";
  * 保证别的会话推帧时本栏引用不变、不重渲。
  */
 function useSessionBridgeTargets(sessionId: string | undefined): Record<string, BridgeUINode | null> | undefined {
-	return useAtomValue(sessionBridgeUiFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
+	const targets = useAtomValue(sessionBridgeUiFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
+	// **渲染前的最后一道**（不是主路径）：桥侧出帧口与主进程边界都净化过，
+	// 这里只是防「旧版桥 / 第三方帧 / 将来漏网的裸码」。tone 是独立字段，剥不掉颜色。
+	// 用 useMemo 挂在原始引用上：selectAtom 保证别的会话推帧时本引用不变，不会每次渲染重建。
+	return useMemo(() => (targets ? sanitizeBridgeNode(targets) : targets), [targets]);
 }
 
 /** 订「本会话」的整份桥 UI 状态（状态栏 / 流式行 / 标签 / 覆盖层用；同上按 session 隔离）。 */
 function useSessionBridgeUi(sessionId: string | undefined): SessionRuntimeUiState | undefined {
 	const ui = useAtomValue(sessionRuntimeUiBySessionIdAtomFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
-	return sessionId ? ui : undefined;
+	const scoped = sessionId ? ui : undefined;
+	// 同上：状态栏文案同样过最后一道兜底（净文本 + 独立 tone，互不影响）
+	return useMemo(() => (scoped ? sanitizeBridgeNode(scoped) : scoped), [scoped]);
 }
 
 /** 单个落点的容错边界：崩溃只隐藏该落点。 */
@@ -117,23 +125,54 @@ export function BridgeWidgetSlot({ sessionId, placement }: { sessionId: string |
 	);
 }
 
-/** 状态栏：桥的 setStatus 多 key 条目（§8.2 A 组 status 是新建项）。 */
-export function BridgeStatusBar({ sessionId, className }: { sessionId: string | undefined; className?: string }): ReactNode {
-	const status = useSessionBridgeUi(sessionId)?.bridgeStatus;
-	const entries = status ? Object.entries(status) : [];
-	if (entries.length === 0) return null;
-	return (
-		<BridgeSlotBoundary>
-			<div className={className ?? "flex flex-wrap items-center gap-x-3 gap-y-0.5"}>
-				{entries.map(([key, text]) => (
-					<span key={key} className="text-[11px] text-muted-foreground" data-bridge-status={key}>
-						{text}
-					</span>
-				))}
-			</div>
-		</BridgeSlotBoundary>
-	);
-}
+/**
+ * 桥状态栏**已退役**：`ctx.ui.setStatus` 的条目不再渲染（2026-09 产品决定，方案 ②）。
+ *
+ * **这是决定，不是漏挂** —— 别再把它当 bug 修回来（守卫测试
+ * `tests/guiBridgeAnsiLeak.test.mjs` 会在有人加回挂载点时变红，提醒先确认产品意图）。
+ *
+ * 为什么要隐藏：PiDeck 自己那行统计（`N 轮 | 首 token… | 缓存命中 | 输入输出`）
+ * 已经在输入框正下方，桥的 status 条目（`🔌 MCP: 3 servers enabled` 等）挤在同一区域
+ * 属于重复噪声。
+ *
+ * **代价（明确记录，免得以后误以为「没有扩展在用」）**：所有只经 `setStatus` 输出信息的
+ * 扩展在 GUI 里就看不见了，已知的有 ——
+ * - `pi-mcp-adapter`：`🔌 MCP: N servers enabled` 连接概况；
+ * - `pi-tracker`：用量/额度行；
+ * - `pi-mcp-adapter` 的 `mcp-auth`：`Authenticating <server>…` 授权进度；
+ * - `pi-deck-plan-mode` / 待办类扩展写进 status 的进度。
+ * 需要重新可见时按下面的步骤接回来。
+ *
+ * **数据侧全部保留**：桥照旧收集 `state.status` 与 `statusTone`、照旧推
+ * `{type:"status", text, tone}`，渲染层照旧写进 `bridgeStatus / bridgeStatusTone`
+ * —— 恢复渲染是零成本的（数据一直在），将来也可以做成「显示桥状态」设置开关。
+ *
+ * 恢复步骤（三步）：
+ * 1. 在本文件加回一个导出组件，读数据并按 tone 上色：
+ *    ```tsx
+ *    export function BridgeStatusBar({ sessionId }: { sessionId: string | undefined }): ReactNode {
+ *      const ui = useSessionBridgeUi(sessionId);
+ *      const entries = ui?.bridgeStatus ? Object.entries(ui.bridgeStatus) : [];
+ *      if (entries.length === 0) return null;
+ *      return (
+ *        <BridgeSlotBoundary>
+ *          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+ *            {entries.map(([key, text]) => (
+ *              <span key={key} className={`text-[11px] ${bridgeToneClass(ui?.bridgeStatusTone?.[key]) || "text-muted-foreground"}`} data-bridge-status={key}>
+ *                {text}
+ *              </span>
+ *            ))}
+ *          </div>
+ *        </BridgeSlotBoundary>
+ *      );
+ *    }
+ *    ```
+ *    （`bridgeToneClass` 仍在 `./bridgeTone`，被流式行与节点样式使用，别删。）
+ * 2. `components/session/ComposerArea.tsx`：加回 `bridgeStatusBar?: ReactNode` 入参、
+ *    在 `{props.statsLine}` 之后渲染 `{props.bridgeStatusBar}`，并在挂载处传
+ *    `<BridgeStatusBar sessionId={props.sessionId} />`。
+ * 3. 删掉守卫测试里「渲染层不得挂载桥状态栏」那一条。
+ */
 
 /** 流式状态行：桥的 setWorkingMessage / setWorkingVisible / setWorkingIndicator（§8.2 A 组）。 */
 export function BridgeWorkingLine({ sessionId }: { sessionId: string | undefined }): ReactNode {
@@ -149,7 +188,7 @@ export function BridgeWorkingLine({ sessionId }: { sessionId: string | undefined
 		<BridgeSlotBoundary>
 			<div className="flex items-center gap-2 text-xs text-muted-foreground">
 				{showIndicator ? <span className="size-3 animate-pideck-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" /> : null}
-				{hasMessage ? <span>{working.message}</span> : null}
+				{hasMessage ? <span className={bridgeToneClass(working.tone) || undefined}>{working.message}</span> : null}
 			</div>
 		</BridgeSlotBoundary>
 	);

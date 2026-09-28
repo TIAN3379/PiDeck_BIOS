@@ -146,10 +146,16 @@ export type BridgeOverlayOptions = {
 /** 桥推给 PiDeck 的一帧更新。 */
 export type BridgeUpdate =
 	| { type: "ui-update"; targetId: string; node: BridgeUINode | null }
-	| { type: "status"; key: string; text: string | undefined }
-	| { type: "working"; message?: string; visible?: boolean; frames?: string[] }
-	| { type: "title"; title: string }
-	| { type: "thinking-label"; label: string | undefined }
+	/**
+	 * 状态栏条目（多 key 共存）。
+	 *
+	 * `text` 是**净文本**，`tone` 是桥侧把扩展的 ANSI 配色量化后的语义色档，
+	 * 作为**独立字段**下发；留在字符串里的颜色码会被宿主侧 `stripAnsi` 兜底吃掉。
+	 */
+	| { type: "status"; key: string; text: string | undefined; tone?: BridgeTone }
+	| { type: "working"; message?: string; tone?: BridgeTone; visible?: boolean; frames?: string[] }
+	| { type: "title"; title: string; tone?: BridgeTone }
+	| { type: "thinking-label"; label: string | undefined; tone?: BridgeTone }
 	| { type: "resync" }
 	| { type: "overlay"; elementId: string; node: BridgeUINode | null; options?: BridgeOverlayOptions }
 	| { type: "overlay-update"; elementId: string; node: BridgeUINode };
@@ -174,10 +180,12 @@ export type BridgeEvent = { targetId?: string } & (
 export type BridgeSessionUi = {
 	/** 落点 id → 节点树（null 表示该落点无内容）。 */
 	targets: Record<string, BridgeUINode | null>;
-	/** 状态栏条目（多 key 共存）。 */
+	/** 状态栏条目（多 key 共存，值为净文本）。 */
 	status: Record<string, string>;
+	/** 状态条目的语义色（与 `status` 同键；桥侧量化后的 tone，缺省表示无配色）。 */
+	statusTone?: Record<string, BridgeTone>;
 	/** 流式状态行。 */
-	working?: { message?: string; visible?: boolean; frames?: string[] };
+	working?: { message?: string; tone?: BridgeTone; visible?: boolean; frames?: string[] };
 	/** 会话标题（setTitle）。 */
 	title?: string;
 	/** 折叠思考块标签。 */

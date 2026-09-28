@@ -67,8 +67,10 @@ export const SessionRuntimeInjector = React.memo(function SessionRuntimeInjector
 			baseDir: currentSessionRuntime?.cwd ?? paneProject?.path,
 			projectId: paneProjectId || undefined,
 			projectRoot: paneProject?.path,
+			// 项目外路径的安全等级判定按本栏会话走，分屏两栏各自的安全等级互不干扰。
+			sessionId: currentSessionId,
 		}),
-		[currentSessionRuntime?.cwd, paneProject?.path, paneProjectId],
+		[currentSessionId, currentSessionRuntime?.cwd, paneProject?.path, paneProjectId],
 	);
 	const openPaneFile = React.useCallback((path: string, line?: number) => services.onOpenFile(path, line, paneFileContext), [paneFileContext, services.onOpenFile]);
 	const paneTerminal = React.useMemo(
@@ -228,7 +230,7 @@ export const SessionRuntimeInjector = React.memo(function SessionRuntimeInjector
 	}, [currentSessionId, currentSessionRuntime, rewindConfirm, services]);
 
 	return (
-		<FileLinkBaseProvider baseDir={paneFileContext.baseDir} projectId={paneFileContext.projectId} projectRoot={paneFileContext.projectRoot}>
+		<FileLinkBaseProvider baseDir={paneFileContext.baseDir} projectId={paneFileContext.projectId} projectRoot={paneFileContext.projectRoot} sessionId={currentSessionId}>
 			<>
 				<SessionView
 					sessionId={currentSessionId}

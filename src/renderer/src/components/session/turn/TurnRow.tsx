@@ -231,7 +231,7 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 	const stepsFullyExpanded = expandedStepsRunId === run.id;
 	const mountedSteps = useMemo(() => boundMountedSteps(foldableItems, TIMELINE_MOUNTED_STEP_LIMIT, stepsFullyExpanded), [foldableItems, stepsFullyExpanded]);
 
-	/* ── 过程组模式（实验开关 processGroupDisplay；关闭时走下面原有的扁平渲染） ──
+	/* ── 过程组模式（processGroupDisplay；关闭时走下面原有的扁平渲染） ──
 	 * 纯函数把扁平序列切成「中间回复 / 过程组 / 一级行」交替序列（见 timeline/groupTurnProcess.ts）。
 	 * 手风琴语义（与用户确认）：
 	 * - 大折叠栏展开时，自动槽指向**最新**的那个过程组；
