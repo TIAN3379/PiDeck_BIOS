@@ -21,7 +21,7 @@ import type { UIBridgeUpdate } from "./pi-deck-gui-bridge-types";
 import type { UIBridgeTransport } from "./pi-deck-gui-bridge-transport";
 import { repushGuiState, findContributionNode } from "./pi-deck-gui-bridge-gui";
 import { hashUINode, serialize, componentOf, invokeAction } from "./pi-deck-gui-bridge-serialize";
-import { createBridgeTheme, type BridgeTheme } from "./pi-deck-gui-bridge-theme";
+import { createBridgeTheme, stripStyledText, type BridgeTheme } from "./pi-deck-gui-bridge-theme";
 import { loadPiTui, type PiTuiComponent, type PiTuiModule } from "./pi-deck-gui-bridge-tui";
 import type { GuiComponent } from "./pi-deck-gui-bridge-gui-types";
 
@@ -96,6 +96,21 @@ const log = (message: string): void => {
 	// stderr 不属于 RPC 协议，会进入 PiDeck 的日志面板，不污染 stdout JSONL
 	process.stderr.write(`[pi-deck-gui-bridge] ${message}\n`);
 };
+
+/**
+ * 纯文本通道的净化（status / working / thinking-label / title）。
+ *
+ * 扩展给这些通道的文本会**原样渲染**（短文本行，没有组件树可承载样式），
+ * 而它们常常顺手 `ctx.ui.theme.fg()` 上个色 —— pi 的 `Theme.fg` 产的是真 ANSI
+ * （`ESC[38;2;R;G;Bm…ESC[39m`），落到 PiDeck 就是一行 `[38;2;138;190;183m` 乱码
+ * （2026-09 用户报的 MCP 状态行即此类）。桥给组件的 theme 产哨兵，同样的道理。
+ *
+ * 样式化文本有专门的通道：组件树 → `serialize` → `parseStyledText` → 语义 tone。
+ * 这里**只剥不译**，与主题模块 §6.5「解析不了就剥掉转纯文本」的兜底一致。
+ */
+function toPlainText(value: unknown): string {
+	return stripStyledText(String(value));
+}
 
 /** 组件释放：有 dispose 就调，异常吞掉。 */
 function disposeComponent(entry: TrackedEntry): void {
@@ -239,9 +254,11 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 			try {
 				const k = String(key ?? "");
 				if (!k) return;
-				if (text === undefined || text === null) state.status.delete(k);
-				else state.status.set(k, String(text));
-				transport.push({ type: "status", key: k, text: text === undefined || text === null ? undefined : String(text) });
+				// 净化后才进 state：resync 从 state 重推，存原文等于把乱码带回来
+				const value = text === undefined || text === null ? undefined : toPlainText(text);
+				if (value === undefined) state.status.delete(k);
+				else state.status.set(k, value);
+				transport.push({ type: "status", key: k, text: value });
 			} catch (error) {
 				log(`setStatus 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -326,7 +343,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetWorkingMessage = target.setWorkingMessage;
 		target.setWorkingMessage = (message?: unknown) => {
 			try {
-				state.workingMessage = message === undefined || message === null ? undefined : String(message);
+				state.workingMessage = message === undefined || message === null ? undefined : toPlainText(message);
 				transport.push({ type: "working", message: state.workingMessage });
 			} catch (error) {
 				log(`setWorkingMessage 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
@@ -372,7 +389,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetHiddenThinkingLabel = target.setHiddenThinkingLabel;
 		target.setHiddenThinkingLabel = (label?: unknown) => {
 			try {
-				state.hiddenThinkingLabel = label === undefined || label === null ? undefined : String(label);
+				state.hiddenThinkingLabel = label === undefined || label === null ? undefined : toPlainText(label);
 				transport.push({ type: "thinking-label", label: state.hiddenThinkingLabel });
 			} catch (error) {
 				log(`setHiddenThinkingLabel 包装抛错（已吞）: ${error instanceof Error ? error.message : String(error)}`);
@@ -387,7 +404,7 @@ export function createBridgeRuntime(transport: UIBridgeTransport): BridgeRuntime
 		const originalSetTitle = target.setTitle;
 		target.setTitle = (title: unknown) => {
 			try {
-				const value = String(title ?? "");
+				const value = toPlainText(title ?? "");
 				state.title = value;
 				transport.push({ type: "title", title: value });
 			} catch (error) {

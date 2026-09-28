@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "1.0.0",
-  "bundleSha256": "4cea9f4d04cf3922433b1df110934eed6a4a03056494203dd1c03d6ded77b0ac",
+  "bundleSha256": "60b1e938ccef546f2dbb3ccc6cf18a2816366894849984837e850403da6bd62b",
   "fileCount": 24,
   "files": [
     {
@@ -31,8 +31,8 @@
     },
     {
       "name": "pi-deck-gui-bridge-runtime.ts",
-      "sha256": "be7778ffbd7740320a46a6f8467e969502307fa875f39186df391030d2191a7c",
-      "bytes": 26914
+      "sha256": "a3fbb3583b4bf667231258806d44dfcbb8faa0e4f570548b393e4b5cf9e25b2d",
+      "bytes": 27846
     },
     {
       "name": "pi-deck-gui-bridge-serialize.ts",
