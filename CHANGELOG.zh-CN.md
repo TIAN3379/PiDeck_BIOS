@@ -1,11 +1,7 @@
-## v0.7.9（未发布）
-
-### 🚀 新功能
-- **数据目录更名为 PiDeck 并自动迁移历史数据** — 正式包的 userData 目录从此前的历史名 `pi-desktop` 改名为 `PiDeck`（Windows `%APPDATA%\PiDeck`、macOS `~/Library/Application Support/PiDeck`、Linux `~/.config/PiDeck`），默认聊天记录目录随之不再显示为「pi desktop」。更新后首次启动自动完成：整个目录改名、设置与目录记录里的旧绝对路径就地改写、`~/.pi/agent/sessions` 下对应的会话目录同步改名（会话内容逐字节不动），完成后弹一次「数据目录已迁移」提示，此后永不再打扰。改名失败（文件被占用等）时本次照旧使用旧目录并在下次启动重试；便携版与显式 `--user-data-dir` 不参与；新旧目录并存的冲突场景保守使用新目录。
-
 ## v0.7.8-beta - 2026-09-28
 
 ### 🚀 新功能
+- **数据目录更名为 PiDeck 并自动迁移历史数据** — 正式包的 userData 目录从此前的历史名 `pi-desktop` 改名为 `PiDeck`（Windows `%APPDATA%\PiDeck`、macOS `~/Library/Application Support/PiDeck`、Linux `~/.config/PiDeck`），默认聊天记录目录随之不再显示为「pi desktop」。更新后首次启动自动完成：整个目录改名、设置与目录记录里的旧绝对路径就地改写、`~/.pi/agent/sessions` 下对应的会话目录同步改名（会话内容逐字节不动），完成后弹一次「数据目录已迁移」提示，此后永不再打扰。改名失败（文件被占用等）时本次照旧使用旧目录并在下次启动重试；便携版与显式 `--user-data-dir` 不参与；新旧目录并存的冲突场景保守使用新目录。
 - **用量查询新增「火山方舟 AK/SK」模板** — 供应商「用量查询」弹窗的预设模板里多了火山方舟一项：填入控制台「访问控制 → 密钥管理」里的 Access Key ID（AK）与 Secret Access Key（SK），即用火山 V4 签名查询 Agent Plan / Coding Plan 的套餐额度，并自动探测账号订购了哪种套餐，无需再手写 usage-probes.json。地域由该供应商的推理地址推断（如 ark.cn-beijing.volces.com → cn-beijing），识别不了按 cn-beijing 兜底，请求地址一般留空即可。
 - **供应商 / 提供方名称支持中文** — 此前「添加供应商」「添加 provider」要求名称以字母开头，中文名会被直接拒绝；现在名称按配置键语义放宽：1–80 个字符，支持中文、数字与空格，只禁止路径分隔符、`..`、控制字符、`%` 与保留名 `__proto__`。密钥引用由 PiDeck 独立派生（英文名用 `<ROUTE>_API_KEY`，中文等名称自动生成 `PIDECK_<8位十六进制>_API_KEY`），DSH 的 settings.yaml 里只存引用，不会把中文名写进环境变量名。存量配置不受影响。
 - **DSH「添加 provider」补齐必要字段** — 以前只有一个名称输入框，填完即保存；现在改为整页表单：名称、Base URL、API 类型、API Key 与模型编辑器（可获取或手动添加），并在页内提示「密钥单独存入 credentials，settings.yaml 仅保存引用」。校验失败会说明缺什么（名称无效或重复、自定义提供方缺 Base URL / API 类型 / 有效模型等）。
