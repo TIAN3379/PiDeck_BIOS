@@ -80,8 +80,8 @@ const EXPECTED_ZH = {
 	"timeline.processGroup.joinList": "{items}",
 	"timeline.processGroup.listSeparator": "、",
 	"timeline.processGroup.more": "{title} 等",
-	"settings.processGroupDisplay": "过程组显示（实验）",
-	"settings.processGroupDisplayDesc": "开启后，一轮里的连续思考与工具调用会合并成「过程组」，点开组头才展开明细；关闭则保持现在的平铺方式。",
+	"settings.processGroupDisplay": "过程组显示",
+	"settings.processGroupDisplayDesc": "一轮内的连续思考与工具调用合并为「过程组」，点开组头展开明细。",
 };
 
 const EXPECTED_EN = {
@@ -118,8 +118,8 @@ const EXPECTED_EN = {
 	"timeline.processGroup.joinList": "{items}",
 	"timeline.processGroup.listSeparator": ", ",
 	"timeline.processGroup.more": "{title}, and more",
-	"settings.processGroupDisplay": "Grouped process display (experimental)",
-	"settings.processGroupDisplayDesc": "When on, consecutive reasoning and tool calls in a turn merge into process groups; expand a group header to see its details. Turn it off to keep the current flat layout.",
+	"settings.processGroupDisplay": "Grouped process display",
+	"settings.processGroupDisplayDesc": "Merges consecutive reasoning and tool calls in a turn into process groups; expand a group header for details.",
 };
 
 test("两个 locale 的过程组键集合完全一致（缺失 / 多出都报出具体键名）", () => {
