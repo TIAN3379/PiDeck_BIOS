@@ -18,6 +18,8 @@ import { sessionRuntimeUiBySessionIdAtomFamily } from "../../atoms/session-selec
 import { useBridgeEventSink } from "../../hooks/useBridgeEventSink";
 import { useBridgeResync } from "../../hooks/useBridgeResync";
 import { renderBridgeNode, type BridgeEventSink } from "./renderBridgeNode";
+import { BRIDGE_DEFAULT_TEXT_CLASS, bridgeToneClass } from "./bridgeTone";
+import { sanitizeBridgeNode } from "../../../../shared/bridgeText";
 import { BRIDGE_TARGET, type BridgeGuiSlot as BridgeGuiSlotName, type BridgeUINode } from "../../../../shared/types/bridge";
 
 /**
@@ -36,13 +38,19 @@ const NO_SESSION_FAMILY_KEY = "__bridge_no_session__";
  * 保证别的会话推帧时本栏引用不变、不重渲。
  */
 function useSessionBridgeTargets(sessionId: string | undefined): Record<string, BridgeUINode | null> | undefined {
-	return useAtomValue(sessionBridgeUiFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
+	const targets = useAtomValue(sessionBridgeUiFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
+	// **渲染前的最后一道**（不是主路径）：桥侧出帧口与主进程边界都净化过，
+	// 这里只是防「旧版桥 / 第三方帧 / 将来漏网的裸码」。tone 是独立字段，剥不掉颜色。
+	// 用 useMemo 挂在原始引用上：selectAtom 保证别的会话推帧时本引用不变，不会每次渲染重建。
+	return useMemo(() => (targets ? sanitizeBridgeNode(targets) : targets), [targets]);
 }
 
 /** 订「本会话」的整份桥 UI 状态（状态栏 / 流式行 / 标签 / 覆盖层用；同上按 session 隔离）。 */
 function useSessionBridgeUi(sessionId: string | undefined): SessionRuntimeUiState | undefined {
 	const ui = useAtomValue(sessionRuntimeUiBySessionIdAtomFamily(sessionId ?? NO_SESSION_FAMILY_KEY));
-	return sessionId ? ui : undefined;
+	const scoped = sessionId ? ui : undefined;
+	// 同上：状态栏文案同样过最后一道兜底（净文本 + 独立 tone，互不影响）
+	return useMemo(() => (scoped ? sanitizeBridgeNode(scoped) : scoped), [scoped]);
 }
 
 /** 单个落点的容错边界：崩溃只隐藏该落点。 */
@@ -117,16 +125,24 @@ export function BridgeWidgetSlot({ sessionId, placement }: { sessionId: string |
 	);
 }
 
-/** 状态栏：桥的 setStatus 多 key 条目（§8.2 A 组 status 是新建项）。 */
+/**
+ * 状态栏：桥的 setStatus 多 key 条目（§8.2 A 组 status 是新建项）。
+ *
+ * **配色走语义 tone**（方案 B）：桥侧把扩展的 ANSI 配色量化成 `tone` 字段下发，
+ * 这里投影成 Tailwind 语义 class（`bridgeToneClass`）；无 tone 时保持原先的
+ * `text-muted-foreground`（亮/暗色都由 token 自适应，不写死色值）。
+ */
 export function BridgeStatusBar({ sessionId, className }: { sessionId: string | undefined; className?: string }): ReactNode {
-	const status = useSessionBridgeUi(sessionId)?.bridgeStatus;
+	const sessionUi = useSessionBridgeUi(sessionId);
+	const status = sessionUi?.bridgeStatus;
+	const tones = sessionUi?.bridgeStatusTone;
 	const entries = status ? Object.entries(status) : [];
 	if (entries.length === 0) return null;
 	return (
 		<BridgeSlotBoundary>
 			<div className={className ?? "flex flex-wrap items-center gap-x-3 gap-y-0.5"}>
 				{entries.map(([key, text]) => (
-					<span key={key} className="text-[11px] text-muted-foreground" data-bridge-status={key}>
+					<span key={key} className={`text-[11px] ${bridgeToneClass(tones?.[key]) || BRIDGE_DEFAULT_TEXT_CLASS}`} data-bridge-status={key} data-bridge-tone={tones?.[key] ?? ""}>
 						{text}
 					</span>
 				))}
@@ -149,7 +165,7 @@ export function BridgeWorkingLine({ sessionId }: { sessionId: string | undefined
 		<BridgeSlotBoundary>
 			<div className="flex items-center gap-2 text-xs text-muted-foreground">
 				{showIndicator ? <span className="size-3 animate-pideck-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" /> : null}
-				{hasMessage ? <span>{working.message}</span> : null}
+				{hasMessage ? <span className={bridgeToneClass(working.tone) || undefined}>{working.message}</span> : null}
 			</div>
 		</BridgeSlotBoundary>
 	);
