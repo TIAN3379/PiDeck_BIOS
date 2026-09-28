@@ -9,6 +9,8 @@ export type SessionFileOpenContext = {
 	baseDir?: string;
 	projectId?: string;
 	projectRoot?: string;
+	/** 本栏会话身份：项目外路径的安全等级判定按「本栏会话的覆盖等级」走（分屏两栏可能不同） */
+	sessionId?: string;
 };
 
 /**

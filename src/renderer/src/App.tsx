@@ -38,8 +38,6 @@ import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAto
 import { resolveBusySendDelivery } from "../../shared/busySendDelivery";
 import { SESSION_TAB_MAX_WIDTH_DEFAULT } from "../../shared/sessionTabWidth";
 import { FILE_TREE_ABSOLUTE_MAX_DEPTH } from "../../shared/fileTree";
-// 文件链接路由：图片类型走弹窗预览
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"]);
 import { type SidebarActions } from "./components/sidebar/SidebarContent";
 import { AppSidebar } from "./components/sidebar/AppSidebar";
 import { AppBootstrap } from "./components/app/AppBootstrap";
@@ -56,8 +54,9 @@ import { announcementCenterOpenAtom, announcementNotificationEnabledAtom } from 
 import { openProviderLoginAtom } from "./atoms/providerLoginAtoms";
 import { useSessionLayout } from "./hooks/useSessionLayout";
 import { useFileEditor } from "./hooks/useFileEditor";
+import { useSessionFilePathOpener } from "./hooks/useSessionFilePathOpener";
+import { useExternalPathOpenGate } from "./hooks/useExternalPathOpenGate";
 import { resolveFileLinkPath } from "./utils/filePathLinks";
-import { imageMimeTypeFromPath } from "./utils/composerImages";
 import { useOverlayActions } from "./hooks/useOverlayActions";
 import { useWorkspacePanels, type WorkspaceDrawerPanel, type WorkspaceExternalEditorAdapter } from "./hooks/useWorkspacePanels";
 import { useDrawerPorts } from "./hooks/useDrawerPorts";
@@ -1357,10 +1356,15 @@ export function App() {
 		t,
 	});
 
-	// 会话内文件链接打开路由：按扩展名分级——
+	// 会话内文件链接路由：两个口子分开——
+	// 1) openSessionFilePath：已解析出绝对路径后的「按扩展名分级打开」（图片预览 / 目录进资源管理器 / 其余进编辑器）；
+	// 2) requestExternalPathOpen：项目外路径按当次安全等级决定直开 / 二次确认 / 拒绝。
+	const openSessionFilePath = useSessionFilePathOpener({ onPreviewImage: setPreviewImage, viewFilePath });
+	const { requestExternalPathOpen, dialog: externalPathOpenDialog } = useExternalPathOpenGate();
+
+	// 会话内文件链接打开路由：项目内 → 直接按扩展名分级打开；项目外 → 交安全等级门。
 	// 图片 → 弹窗预览（readBase64 → ImagePreviewModal）；markdown/html → 中间栏查看
 	//（FileDiffViewer 对 .md 默认 preview、.html 用 HtmlPreview 内置渲染）；其他文件 → 编辑器打开。
-	// 替代原先的"系统默认应用打开"（.md 会被浏览器接管、体验割裂）
 	// line 为可选 `path:line` 位置标记：编辑器打开后滚动定位到该行。
 	const handleOpenLinkedFile = useCallback(
 		async (path: string, line?: number, context?: SessionFileOpenContext) => {
@@ -1376,61 +1380,28 @@ export function App() {
 			const resolved = resolveFileLinkPath(path, baseDir, projectRoot);
 			// 相对路径无基准目录、`..` 逃逸或绝对路径落在项目外都会返回 null。
 			// 主进程读取时还会按 projectId 对真实路径做第二次边界校验。
-			if (!resolved) {
+			if (resolved) {
+				await openSessionFilePath(resolved, { line, scope: projectId ? { projectId } : undefined });
+				return;
+			}
+			// 项目外：先做一次不带项目边界的词法解析。解析不出来（缺基准目录/非法路径）说明真的无处可去，
+			// 仍是原来的提示；解析出来就交给安全等级门——等级不限目录（默认）直接只读打开，
+			// 敏感文件或限定目录的等级弹框二次确认，denyDirs 直接拒绝。
+			// 只读 + 不带 scope：用户确认一次「看」不应变成可写任意路径。
+			const externalPath = resolveFileLinkPath(path, baseDir);
+			if (!externalPath) {
 				showToast(t("app.fileLinkCannotResolve", { path }));
 				return;
 			}
-			const fileAccessScope = projectId ? { projectId } : undefined;
-			// 点击时 stat 一次定路由：渲染期 verdict 只回答「存在与否」，区分不了目录，
-			// 目录链接进编辑器 readContent 会抛 EISDIR（"illegal operation on a directory"）。
-			// 目录 → 资源管理器直接打开；不存在（校验后被移动/删除，或 verdict 未返回时点击）
-			// → 友好提示，不再把原始 ENOENT/EISDIR 甩给用户。
-			let stat = { exists: false, isDirectory: false };
-			try {
-				stat = await api.files.stat(resolved, fileAccessScope);
-			} catch {
-				// stat 通道异常按不存在处理，走统一提示
-			}
-			if (!stat.exists) {
-				showToast(t("app.fileLinkNotFound", { path: resolved }));
-				return;
-			}
-			if (stat.isDirectory) {
-				void api.files.open(resolved, fileAccessScope).catch((error) =>
-					showToast(
-						t("app.openFileFailed", {
-							error: error instanceof Error ? error.message : String(error),
-						}),
-					),
-				);
-				return;
-			}
-			const ext = resolved.split(".").pop()?.toLowerCase() ?? "";
-			if (IMAGE_EXTENSIONS.has(ext)) {
-				// readBase64 返回原始 base64，不是 data URL；直接构造 ImageContent 供预览弹层使用。
-				void api.files
-					.readBase64(resolved, undefined, fileAccessScope)
-					.then((data) => {
-						if (!data) throw new Error("FILE_NOT_FOUND");
-						setPreviewImage({
-							type: "image",
-							mimeType: imageMimeTypeFromPath(resolved),
-							data,
-						});
-					})
-					.catch((error) =>
-						showToast(
-							t("app.openFileFailed", {
-								error: error instanceof Error ? error.message : String(error),
-							}),
-						),
-					);
-				return;
-			}
-			// markdown / html / 其他文本文件：统一抽屉查看；scope 固化进 tab，切焦点后仍按原项目读取。
-			viewFilePath(resolved, undefined, line, fileAccessScope);
+			await requestExternalPathOpen({
+				path: externalPath,
+				sessionId: context?.sessionId ?? currentSessionId,
+				cwd: baseDir,
+				projectRoot,
+				proceed: () => void openSessionFilePath(externalPath, { line, readOnly: true }),
+			});
 		},
-		[activeAgent?.cwd, activeProject?.id, activeProject?.path, viewFilePath, showToast],
+		[activeAgent?.cwd, activeProject?.id, activeProject?.path, currentSessionId, openSessionFilePath, requestExternalPathOpen, showToast, t],
 	);
 
 	// 工具抽屉（files/git/browser）的统一切换语义：当前面板已展开 → 关闭；
@@ -3980,7 +3951,7 @@ export function App() {
 
 	return (
 		// 非会话静态区域使用当前焦点作为兜底；每个 SessionRuntimeInjector 会用本栏 cwd/project 覆盖。
-		<FileLinkBaseProvider baseDir={activeAgent?.cwd ?? activeProject?.path} projectId={activeProject?.id} projectRoot={activeProject?.path}>
+		<FileLinkBaseProvider baseDir={activeAgent?.cwd ?? activeProject?.path} projectId={activeProject?.id} projectRoot={activeProject?.path} sessionId={currentSessionId}>
 			<>
 				<AppBootstrap {...bootstrapProps} />
 				<AppShell
@@ -4309,6 +4280,8 @@ export function App() {
 						}
 					/>
 					{previewImage && <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />}
+					{/* 项目外文件链接二次确认（安全等级：敏感文件 / 限定目录 / 配置不可读时才弹） */}
+					{externalPathOpenDialog}
 					{/* 会话代理设置：侧栏菜单与 Tab 栏 ⋯ 菜单共用的宿主（同一弹框实例） */}
 					{proxyDialogSessionId && <SessionProxyDialog sessionId={proxyDialogSessionId} onClose={() => setProxyDialogSessionId(null)} />}
 					{codexImportProject && <ImportOverlayHost kind="codex" project={codexImportProject} controller={codexImportController} onClose={() => setCodexImportProject(null)} />}

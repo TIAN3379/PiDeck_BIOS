@@ -101,8 +101,8 @@ export interface UseFileEditorOutput {
 	/** VS Code 式预览 Tab id（斜体）；至多一个 */
 	previewEditorTabId: string | null;
 	openFilePath: (path: string) => void;
-	/** 单击默认 preview；双击传 permanent */
-	viewFilePath: (path: string, openMode?: EditorTabOpenMode, initialLine?: number, fileAccessScope?: ProjectFileAccessScope) => void;
+	/** 单击默认 preview；双击传 permanent。readOnly=true 时不提供保存/自动保存（项目外文件） */
+	viewFilePath: (path: string, openMode?: EditorTabOpenMode, initialLine?: number, fileAccessScope?: ProjectFileAccessScope, readOnly?: boolean) => void;
 	diffFilePath: (path: string, originalContent?: string, content?: string) => void;
 	openWorkspaceFileDiff: (group: GitResourceGroupType, path: string, repoPath?: string) => Promise<void>;
 	openCommitFileDiff: (commit: CommitEntry, file: GitChangedFile, repoPath?: string) => Promise<void>;
@@ -331,10 +331,12 @@ export function useFileEditor(input: UseFileEditorInput): UseFileEditorOutput {
 	);
 
 	const viewFilePath = useCallback(
-		(path: string, openMode: EditorTabOpenMode = "preview", initialLine?: number, fileAccessScope?: ProjectFileAccessScope) => {
+		(path: string, openMode: EditorTabOpenMode = "preview", initialLine?: number, fileAccessScope?: ProjectFileAccessScope, readOnly = false) => {
 			// 只清 Git Diff，保留已有文件 tab——否则预览/多 tab 无法成立
 			dismissGitDiffOnly();
-			openEditorTab(path, "view", undefined, undefined, true, undefined, undefined, false, openMode, initialLine, fileAccessScope);
+			// readOnly 用 allowSave=false 表达：FileDiffViewer 只在该值为真时才挂保存与自动保存，
+			// 因此项目外文件确认后的「只读查看」不会变成「可写任意路径」。
+			openEditorTab(path, "view", undefined, undefined, !readOnly, undefined, undefined, false, openMode, initialLine, fileAccessScope);
 			const mode = contentOpenModeRef.current;
 			editorModeRef.current = mode;
 			setEditorMode(mode);
