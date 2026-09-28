@@ -3,7 +3,7 @@
 ### 🚀 New Features
 - **Data folder renamed to PiDeck with automatic migration** — The packaged userData folder moves off its legacy name `pi-desktop` to `PiDeck` (Windows `%APPDATA%\PiDeck`, macOS `~/Library/Application Support/PiDeck`, Linux `~/.config/PiDeck`), so the default chat folder no longer reads as "pi desktop". On the first launch after updating, PiDeck renames the folder, rewrites stored absolute paths in settings and directory records, and renames the matching session folders under `~/.pi/agent/sessions` (session files are left byte-for-byte untouched), then shows a one-time "Data folder migrated" notice that never repeats. If the rename fails (folder locked, etc.) this launch keeps using the old folder and retries next time; portable builds and an explicit `--user-data-dir` are never touched, and a new/old folder collision conservatively keeps the new folder.
 
-## v0.7.8 - 2026-09-26
+## v0.7.8-beta - 2026-09-28
 
 ### 🚀 New Features
 - **Usage probe template for Volcengine Ark (AK/SK)** — The provider usage dialog gains a “Volcengine Ark AK/SK” preset next to the generic / New API / cookie-login templates: enter the Access Key ID (AK) and Secret Access Key (SK) from “Access Control → Key Management” in the console and PiDeck signs V4 requests to read your Agent Plan / Coding Plan quota, detecting automatically which plan the account is subscribed to — no usage-probes.json needed. The region is inferred from the provider’s inference base URL (ark.cn-beijing.volces.com → cn-beijing) and falls back to cn-beijing, so the optional request URL can usually be left empty.
