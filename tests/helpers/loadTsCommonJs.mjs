@@ -85,6 +85,11 @@ export function loadTsCommonJs(filePath, options = {}) {
 				clearImmediate,
 				queueMicrotask,
 				crypto: globalThis.crypto,
+				// 构建期 define（electron.vite.config.ts）在沙箱里同样是编译期常量：
+				// 不给默认值，任何 import 到 deepLinkScheme / channelIdentity 的生产模块
+				// 都会在求值时整片 ReferenceError。默认 stable 通道；测 dev 通道的用例
+				// 经 options.globals 覆盖（见 tests/channelIdentity.test.mjs）。
+				__PIDECK_DEV_BUILD__: false,
 				...options.globals,
 			},
 			{ filename: absolutePath },

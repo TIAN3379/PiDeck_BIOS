@@ -6,8 +6,27 @@ import { join } from "node:path";
 import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
+import { createTsSandbox } from "./helpers/createTsSandbox.mjs";
 
 const require = createRequire(import.meta.url);
+
+/**
+ * 生产 TS 依赖图加载器（按**源文件目录**解析相对 import，同实例内缓存）。
+ *
+ * 这里不用手写 require 桥：它以 tests/ 为基准解析，生产模块一新增本地 import
+ * 就整片失败，而且「只给部分导出」的桩会静默变成 undefined —— 本文件 2026-09
+ * 就因为 ExtensionManager 新增 `INTERNAL_BUILT_IN_EXTENSIONS` 导入而红了三条。
+ */
+const loadProductionTs = createTsSandbox();
+
+/** 本地 TS 依赖 → 仓库相对路径（未列出的相对 import 会落到 Node 解析而失败，需补表）。 */
+const LOCAL_TS_MODULES = {
+	"../wsl/WslPaths": "src/main/wsl/WslPaths.ts",
+	"./builtInExtensions": "src/main/extensions/builtInExtensions.ts",
+	"./extensionVersionGate": "src/main/extensions/extensionVersionGate.ts",
+	"./extensionDiscovery": "src/main/extensions/extensionDiscovery.ts",
+	"../utils/versionCompare": "src/main/utils/versionCompare.ts",
+};
 
 function transpile(filePath) {
 	return ts.transpileModule(readFileSync(filePath, "utf8"), {
@@ -18,18 +37,11 @@ function transpile(filePath) {
 	}).outputText;
 }
 
-function loadWslPaths() {
-	const sandbox = { exports: {}, require };
-	vm.runInNewContext(transpile("src/main/wsl/WslPaths.ts"), sandbox, { filename: "WslPaths.ts" });
-	return sandbox.exports;
-}
-
 /**
  * 加载 ExtensionManager，并把 homeDir 重定向到 fixture（通过 mock os.homedir）。
  * 同时可 mock runPi 输出，便于测 list 冲突路径。
  */
 function loadExtensionManager({ homeDir, runPiOutput = "", fsOverrides = {} } = {}) {
-	const wslPaths = loadWslPaths();
 	const realOs = require("node:os");
 	const sandbox = {
 		exports: {},
@@ -53,26 +65,12 @@ function loadExtensionManager({ homeDir, runPiOutput = "", fsOverrides = {} } = 
 					},
 				};
 			}
-			if (id === "../wsl/WslPaths") return wslPaths;
+			// 需替换为替身的依赖（外部副作用 / 需重定向 home）
 			if (id === "../pi/PiLocator") return {};
 			if (id === "../fs/trash") return { trashPath: async () => {} };
 			if (id === "../logging/sharedLogger") return { getAppLogger: () => null };
-			if (id === "./extensionVersionGate") {
-				return require("../src/main/extensions/extensionVersionGate.ts");
-			}
-			if (id === "./extensionDiscovery") {
-				return require("../src/main/extensions/extensionDiscovery.ts");
-			}
-			if (id === "./builtInExtensions") {
-				// ExtensionManager 只需要内置名列表；避免 vm 沙箱解析相对 TS 路径失败。
-				return {
-					BUILT_IN_EXTENSIONS: ["pi-deck-ask-question.ts", "pi-deck-nul-redirect-fix.ts", "pi-deck-plan-mode.ts", "pi-deck-todo.ts"],
-				};
-			}
-			// ExtensionManager 依赖 ../utils/versionCompare 的 compareVersions；.ts 经 node 类型剥离可 require。
-			if (id === "../utils/versionCompare") {
-				return require("../src/main/utils/versionCompare.ts");
-			}
+			// 其余本地 TS 依赖一律加载**真模块**（含导出与行为），不再造部分导出桩
+			if (LOCAL_TS_MODULES[id]) return loadProductionTs(LOCAL_TS_MODULES[id]);
 			return require(id);
 		},
 	};
