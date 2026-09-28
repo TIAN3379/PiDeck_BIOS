@@ -64,6 +64,9 @@ test("execution summary toggle uses the beUI-style activity ledger hierarchy", (
 	assert.match(toggleRule, /min-height: 32px/);
 	assert.match(css, /\.execution-summary-stat\.is-warning/);
 	assert.match(css, /\.execution-summary-stat\.is-danger/);
+	// 中间回复的统计图标＝对话气泡（语义是「回复消息」），不复用折叠头的 ListTree 树形图标
+	assert.match(summaryToggle, /interimCount[\s\S]{0,40}?icon: MessagesSquare/);
+	assert.doesNotMatch(summaryToggle, /interimCount[\s\S]{0,40}?icon: ListTree/);
 });
 
 // Chain of Thought 步骤化：执行过程折叠详情里，思考与工具同为「步骤」——
