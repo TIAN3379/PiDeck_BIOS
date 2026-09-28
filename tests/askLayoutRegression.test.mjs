@@ -18,12 +18,13 @@ const securityCard = readFileSync("src/renderer/src/components/overlays/Security
 const planModeExt = readFileSync("resources/extensions/pi-deck-plan-mode.ts", "utf8");
 
 test("Ask cards keep long content readable in every render path", () => {
-	// 选项卡片/描述必须换行展示（break-words whitespace-normal），不能截断或裁切；
-	// 注意批量问答 tab 胶囊是例外：tab 只做单行摘要（truncate），完整问题在详情区展示。
+	// 选项卡片和题干应自然换行；tab 胶囊仍只做 14ch 单行摘要，避免挤占问答空间。
 	assert.match(overlay, /break-words whitespace-normal/);
-	// 批量问答 tab 胶囊：单行截断 + 悬停 title 看全文，禁止多行溢出胶囊固定高度；
-	// 宽度封顶 14ch（2026-12 用户反馈：28ch 太长，标签条太占位置）。
-	assert.match(overlay, /max-w-\[14ch\] min-w-0 truncate text-left" title=\{question\.question\}/);
+	assert.match(overlay, /max-w-\[14ch\] min-w-0 truncate text-left/);
+	// 整颗 tab 按钮都能悬停/聚焦看全文；Portal 提示不受卡片 overflow-hidden 裁切。
+	assert.match(overlay, /<PromptTooltip\s+key=\{question\.id\}\s+text=\{question\.question\}>[\s\S]*?<Button[\s\S]*?role="tab"/);
+	assert.doesNotMatch(overlay, /title=\{question\.question\}/);
+	assert.match(approvalCard, /<PromptTooltip\s+text=\{props\.title\}>/);
 	assert.match(toolCards, /whitespace-normal break-words font-mono text-chat-detail/);
 	assert.match(toolCards, /formatAskTitle\(item\.question/);
 	assert.match(webTimeline, /formatAskTitle\(props\.request\.title/);
@@ -53,10 +54,10 @@ test("Batch ask selected options carry a check mark for low-contrast themes", ()
 });
 
 /**
- * 换题动效借用自 beui ApprovalCard 的编排（AnimatePresence mode=wait + 横向滑入 + 标题滚动），
- * 但协议结构（tab 条/审阅页/editor/守卫）不随组件替换——这里锁定「动效在、结构没被换皮带走」。
+ * 换题仍保留 AnimatePresence mode=wait 与选项横向滑入；题干改为整段淡入，
+ * 不能退回内部 nowrap 的逐字滚动组件。真实行框与 hover 行为见 e2e/ask-title.spec.ts。
  */
-test("Batch question switching plays the borrowed beui motion choreography", () => {
+test("Batch question switching keeps motion while allowing long question wrapping", () => {
 	const drawCheck = readFileSync("src/renderer/src/components/motion/draw-check.tsx", "utf8");
 	assert.match(overlay, /import \{ AnimatePresence, motion, useReducedMotion \} from "motion\/react"/);
 	assert.match(overlay, /<AnimatePresence initial=\{false\} mode="wait">/);
@@ -64,8 +65,11 @@ test("Batch question switching plays the borrowed beui motion choreography", () 
 	assert.match(overlay, /key=\{`ask-q-\$\{currentQuestion\.id\}`\}/);
 	// reduced-motion 降级路径必须存在（静态透明度切换，不跑位移）。
 	assert.match(overlay, /reduce \? \{ opacity: 1 \} : \{ opacity: 0, x: 8 \}/);
-	// 题目行在动画外的稳定层，靠 value 换键触发逐字滚动。
-	assert.match(overlay, /<ActionSwapRollText value=\{currentQuestion\.id\}>\{currentQuestion\.question\}<\/ActionSwapRollText>/);
+	// 题干按题目 id 重新淡入，文本保持自然文档流；换行符与无空格长路径都不能被裁掉。
+	assert.match(overlay, /<PromptTooltip\s+key=\{currentQuestion\.id\}\s+text=\{currentQuestion\.question\}>/);
+	assert.match(overlay, /whitespace-pre-wrap[^"\n]*\[overflow-wrap:anywhere\]/);
+	assert.match(overlay, /<motion\.div\s+initial=\{reduce\s*\?\s*false\s*:\s*\{\s*opacity:\s*0,\s*y:\s*3\s*\}\}/);
+	assert.doesNotMatch(overlay, /ActionSwapRollText/);
 	assert.match(overlay, /import \{ DrawCheck \} from "\.\.\/motion\/draw-check"/);
 	// DrawCheck 本体：描线（pathLength 0→1）+ reduce 降级。
 	assert.match(drawCheck, /pathLength: 0/);
@@ -171,10 +175,11 @@ test("Plan mode prompts keep steps concise and visually separated", () => {
 
 test("Long ask descriptions collapse to a preview with eye toggle", () => {
 	// 2026-12 用户反馈：plan 草案步骤太多导致卡片过高。默认折叠为 2 行摘要，
-	// hover（title）可看全文，眼睛按钮显式切换全文/摘要；不传 previewLines 时行为不变。
+	// 可换行/滚动的 hover 全文提示与眼睛展开并存；不能只依赖无法滚动的原生 title。
 	assert.match(approvalCard, /descriptionPreviewLines\?: number/);
 	assert.match(approvalCard, /descriptionClamped && "line-clamp-2"/);
-	assert.match(approvalCard, /title=\{descriptionClamped \? props\.description : undefined\}/);
+	assert.match(approvalCard, /<PromptTooltip\s+text=\{props\.description\}>/);
+	assert.doesNotMatch(approvalCard, /title=\{descriptionClamped/);
 	assert.match(approvalCard, /descExpanded \? <EyeOff size=\{14\}/);
 	// live 卡与时间线卡都用 2 行预览：提问行 + 引导去待办查看详情，步骤默认隐藏。
 	// （TimelineEventCards 的 AskQuestionCard 死代码已删除，交互卡统一由 overlay 承载）

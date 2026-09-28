@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./collapsib
 import { cn } from "../../lib/utils";
 import { t } from "../../i18n";
 import { writeClipboard } from "../../utils/clipboard";
+import { PromptTooltip } from "./prompt-tooltip";
 
 /**
  * ApprovalCard 是 AI 人在回路交互的通用外壳。
@@ -100,13 +101,19 @@ export function ApprovalCard(props: {
 				</CollapsibleTrigger>
 				<CircleHelp className="mt-1.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
 				<div className="min-w-0 flex-1 py-0.5">
-					<div className="whitespace-pre-wrap break-words text-caption font-semibold leading-relaxed text-foreground select-text">{props.title}</div>
-					{props.description ? (
-						// 有 previewLines 时默认 line-clamp-2 折叠为摘要（plan 草案等超长列表）；
-						// title 兜底悬停看全文，眼睛按钮显式切换全文/摘要。文本本身可划选复制。
-						<div className={cn("whitespace-pre-wrap break-words text-micro font-normal leading-relaxed text-muted-foreground select-text", descriptionClamped && "line-clamp-2")} title={descriptionClamped ? props.description : undefined}>
-							{props.description}
+					<PromptTooltip text={props.title}>
+						<div tabIndex={0} className="whitespace-pre-wrap [overflow-wrap:anywhere] text-caption font-semibold leading-relaxed text-foreground select-text">
+							{props.title}
 						</div>
+					</PromptTooltip>
+					{props.description ? (
+						// 单题/计划摘要保留眼睛展开；悬停走同一全文提示，不能再依赖会截断的原生 title。
+						// 文本仍是非按钮节点，划选与全文提示都不触发选项区折叠。
+						<PromptTooltip text={props.description}>
+							<div tabIndex={0} className={cn("whitespace-pre-wrap [overflow-wrap:anywhere] text-micro font-normal leading-relaxed text-muted-foreground select-text", descriptionClamped && "line-clamp-2")}>
+								{props.description}
+							</div>
+						</PromptTooltip>
 					) : null}
 				</div>
 				<div className="flex shrink-0 items-start gap-0.5">
