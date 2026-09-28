@@ -1,3 +1,4 @@
+import { ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSetAtom } from "jotai";
 import { DEFAULT_VOICE_TRANSCRIPTION_CONFIG, VOLC_SUPPORTED_RESOURCE_IDS } from "../../../../../shared/voiceTranscriptionConfig";
@@ -7,6 +8,7 @@ import { getWhisperModelDef, WHISPER_MODEL_CATALOG, type WhisperInstallProgress,
 import { voiceConfigRevisionAtom } from "../../../atoms";
 import { desktopApi } from "../../../desktopApi";
 import { t } from "../../../i18n";
+import { openInSystemBrowser } from "../../../utils/openExternal";
 import { showNotice } from "../../../utils/notice";
 import { Button } from "../../ui-shadcn/button";
 import { Input } from "../../ui-shadcn/input";
@@ -427,6 +429,25 @@ export function VoiceTranscriptionSettingsSection() {
 							</SettingRow>
 							{isVolc ? (
 								<>
+									<SettingRow title={t("voice.settings.volcGuideTitle")} description={t("voice.settings.volcGuideDescription")} alignEnd={false} stacked>
+										<div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-caption">
+											<span className="text-muted-foreground">{t("voice.settings.volcGuideStep1")}</span>
+											<Button type="button" variant="link" size="sm" className="h-auto gap-1 p-0 text-primary" onClick={() => void openInSystemBrowser("https://console.volcengine.com/speech/app?opt=create")}>
+												{t("voice.settings.volcGuideOpenCreate")}
+												<ExternalLink aria-hidden="true" />
+											</Button>
+										</div>
+										<ol className="mt-2 list-decimal space-y-1 pl-5 text-caption text-muted-foreground">
+											<li>{t("voice.settings.volcGuideStep2")}</li>
+											<li>
+												{t("voice.settings.volcGuideStep3")}
+												<Button type="button" variant="link" size="sm" className="h-auto p-0 text-primary" onClick={() => void openInSystemBrowser("https://console.volcengine.com/speech/service/10039")}>
+													{t("voice.settings.volcGuideOpenCredentials")}
+												</Button>
+											</li>
+											<li>{t("voice.settings.volcGuideStep4")}</li>
+										</ol>
+									</SettingRow>
 									<SettingRow title={t("voice.settings.volcAppId")} description={t("voice.settings.volcAppIdDescription")} alignEnd={false} stacked>
 										<SecretFieldInput
 											value={volcAppId}

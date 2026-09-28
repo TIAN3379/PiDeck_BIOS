@@ -71,6 +71,17 @@ test("总开关关闭时不渲染下方配置项，只留开关本身", () => {
 	assert.ok(actionsIndex > guardIndex && actionsIndex < elseIndex, "配置操作按钮必须落在条件分支内");
 });
 
+test("火山语音配置引导提供创建页、凭据页与四步说明", () => {
+	assert.ok(source.includes("https://console.volcengine.com/speech/app?opt=create"));
+	assert.ok(source.includes("https://console.volcengine.com/speech/service/10039"));
+	assert.match(source, /voice\.settings\.volcGuideTitle/);
+	assert.match(source, /voice\.settings\.volcGuideDescription/);
+	for (const step of ["Step1", "Step2", "Step3", "Step4"]) {
+		assert.match(source, new RegExp(`voice\\.settings\\.volcGuide${step}`));
+	}
+	assert.match(source, /openInSystemBrowser/);
+});
+
 test("明文「只看了一眼」不得落盘，切换可见性不得抢输入框焦点", () => {
 	// 回归（用户反馈）：落盘会顺手清空草稿，用户点完眼睛回来发现内容凭空消失。
 	// 所以「取回的明文未被改动」必须直接 return，把这次失焦当成没发生过。
