@@ -1,13 +1,18 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
-  "bundleSha256": "60b1e938ccef546f2dbb3ccc6cf18a2816366894849984837e850403da6bd62b",
-  "fileCount": 24,
+  "version": "1.0.1",
+  "bundleSha256": "4db698670561e5c326051924367e8fa6f623ae2685ccf0acd7888ff440fbc702",
+  "fileCount": 25,
   "files": [
     {
       "name": "pi-deck-ask-question.ts",
       "sha256": "98db1a8166efb7d85d15f40888dc47f608c97713ef333f7fd471d447d26c25c7",
       "bytes": 15462
+    },
+    {
+      "name": "pi-deck-ext-points.ts",
+      "sha256": "dd7a9c6fe603deb2a3c3b02d9e44174c33f871805c8fd26e023047c013f107c7",
+      "bytes": 28238
     },
     {
       "name": "pi-deck-goal-mode.ts",
@@ -31,8 +36,8 @@
     },
     {
       "name": "pi-deck-gui-bridge-runtime.ts",
-      "sha256": "a3fbb3583b4bf667231258806d44dfcbb8faa0e4f570548b393e4b5cf9e25b2d",
-      "bytes": 27846
+      "sha256": "9e61f4b07f1be3eed20a9f471853b9b0365cc4c768ba9a8cdb25b9a853a9a9d9",
+      "bytes": 29950
     },
     {
       "name": "pi-deck-gui-bridge-serialize.ts",
@@ -41,8 +46,8 @@
     },
     {
       "name": "pi-deck-gui-bridge-theme.ts",
-      "sha256": "51709e257ad62c0ae9cab7439fabd6e83a852ecf50faaa79d61816bf4e505472",
-      "bytes": 10742
+      "sha256": "6366fd88b30216d843225987b7a8605eae3fb74d1a306b9c23c59eb5cf242b3d",
+      "bytes": 23759
     },
     {
       "name": "pi-deck-gui-bridge-transport.ts",
@@ -56,8 +61,8 @@
     },
     {
       "name": "pi-deck-gui-bridge-types.ts",
-      "sha256": "8a30dee8aba0f70ddbb5ff74afdc040cb69418b109c0818b02b5106cc13acf25",
-      "bytes": 11779
+      "sha256": "5dc661ce1b4f1413912860bea2958968689743a58cd50d5bf37ee2f7602398dd",
+      "bytes": 12257
     },
     {
       "name": "pi-deck-gui-bridge.ts",

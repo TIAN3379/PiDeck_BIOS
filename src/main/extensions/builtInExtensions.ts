@@ -23,9 +23,12 @@ import { BUILT_IN_EXTENSIONS_OVERLAY_DIR_NAME, readVerifiedArtifact, type BuiltI
  * 桥的解法是把 `gui` getter 同时挂上 `ctx.ui` **共享单例**（`ui.gui`）：
  * 任何加载顺序的扩展，从桥挂载后的任何事件 / 命令 handler 里
  * `ctx.ui.gui` 都可靠可用（见桥 `docs/extension-points.md` §2.1）。
+ *
+ * `pi-deck-ext-points`（扩展点面板）紧随其后：它要用桥挂出来的 `ctx.gui`。
  */
 export const BUILT_IN_EXTENSIONS = [
 	"pi-deck-gui-bridge.ts",
+	"pi-deck-ext-points.ts",
 	"pi-deck-request-size-recovery.ts",
 	"pi-deck-ask-question.ts",
 	"pi-deck-goal-mode.ts",

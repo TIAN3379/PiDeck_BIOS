@@ -32,6 +32,7 @@ import type {
 	SessionTodoSnapshot,
 } from "../../shared/types";
 import { ipcChannels } from "../../shared/ipc";
+import { sanitizeBridgeUpdate, stripBridgeAnsi } from "../../shared/bridgeText";
 import { collectSessionFileChanges } from "../../shared/fileChanges";
 import { COMPACT_CANCELLED_BY_OWNER, COMPACT_CANCELLED_BY_USER_ABORT, COMPACT_HOOK_REJECT_MAX_MS, COMPACT_OBSERVATION_MAX_AGE_MS, COMPACT_ROUTED_TO_OWNER, COMPACT_USER_ABORT_WINDOW_MS } from "../../shared/compactFeedback";
 import { PiProcess, type WhitelistSkip } from "./PiProcess";
@@ -684,12 +685,16 @@ export class AgentManager {
 	private handleBridgeUpdate(agentId: string, update: BridgeUpdate): void {
 		const runtime = this.agents.get(agentId);
 		if (!runtime) return;
+		// 桥帧是**本机 HTTP 端点**收来的外部输入：出这道边界前统一净化字符串字段
+		// （2026-09 ANSI 泄漏事故的兜底；规则见 shared/bridgeText.ts）。
+		// 渲染层 atom 侧还有一次同源净化 —— 两层都只是「保险」，不是规则的第二份实现。
+		const payload = sanitizeBridgeUpdate(update);
 		this.emit(ipcChannels.agentsUiRequest, {
 			agentId,
-			requestId: `bridge-${update.type}`,
+			requestId: `bridge-${payload.type}`,
 			method: "bridge:update",
 			title: "",
-			bridgeUpdate: update,
+			bridgeUpdate: payload,
 		});
 	}
 
@@ -4853,6 +4858,12 @@ export class AgentManager {
 	/**
 	 * 处理 pi 扩展发起的 UI 请求。
 	 * 对话类请求写入消息流等待用户回答；fire-and-forget 请求只转发给渲染进程或忽略。
+	 *
+	 * **扩展文本在此统一剥 ANSI**：这些字段最终都渲染成 GUI 文本（toast / 输入框 /
+	 * 输入框上下方的 widget 卡 / 提问卡），而扩展常顺手 `ctx.ui.theme.fg()` 上色 ——
+	 * pi 的 `Theme.fg` 产的是真 ANSI，透传就是界面上的一行 `[38;2;…m` 乱码
+	 * （2026-09 事故，事故现场见 `shared/bridgeText.ts`）。用 `stripBridgeAnsi`
+	 * 而不是 `stripAnsi`：后者只认 CSI，OSC 超链接 / 字符集切换会残留。
 	 */
 	private handleUIRequest(agentId: string, typed: Record<string, unknown>) {
 		const method = String(typed.method ?? "");
@@ -4867,7 +4878,7 @@ export class AgentManager {
 				// 扩展的 notify 消息常带终端颜色转义（如 billion-context-pi 的更新通知
 				// `\x1B[32m✔ ACP auto-updated ...\x1B[0m`），toast 不是终端，直接透传会显示乱码转义符，
 				// 在进程边界统一清洗后再交给渲染层。
-				message: stripAnsi(String(typed.message ?? "")),
+				message: stripBridgeAnsi(String(typed.message ?? "")),
 				notifyType: typed.notifyType,
 			});
 			return;
@@ -4879,20 +4890,24 @@ export class AgentManager {
 				requestId,
 				method,
 				title: "",
-				text: String(typed.text ?? ""),
+				// 写进 composer 输入框的文本：同样不能带转义码
+				text: stripBridgeAnsi(String(typed.text ?? "")),
 			});
 			return;
 		}
 
 		if (method === "setWidget") {
 			// Plan Mode 等扩展会频繁刷新 widget；只走 IPC 状态，不落入会话消息，避免 JSONL 被进度噪声污染。
+			// ★ 字符串形式保持原路（§14.4），因此**不过桥的出帧净化口** —— 渲染层会把这些行
+			// 原样画进输入框上下方的 widget 卡（ComposerComponents.renderWidgetLine），
+			// 带码就是乱码，所以在进程边界逐行剥掉。
 			this.emit(ipcChannels.agentsUiRequest, {
 				agentId,
 				requestId,
 				method,
 				title: "",
 				widgetKey: String(typed.widgetKey ?? requestId),
-				widgetLines: Array.isArray(typed.widgetLines) ? typed.widgetLines : undefined,
+				widgetLines: Array.isArray(typed.widgetLines) ? typed.widgetLines.map((line) => stripBridgeAnsi(String(line))) : undefined,
 				widgetPlacement: typed.widgetPlacement,
 			});
 			return;

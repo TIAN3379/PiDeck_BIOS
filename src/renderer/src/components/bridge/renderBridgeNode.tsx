@@ -18,6 +18,7 @@ import { Badge } from "../ui-shadcn/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui-shadcn/card";
 import { SettingBox, SettingRow } from "../app/settings/SettingRows";
 import type { BridgeStyleToken, BridgeUINode } from "../../../../shared/types/bridge";
+import { bridgeToneClass } from "./bridgeTone";
 import { t } from "../../i18n";
 import { renderBridgeControl } from "./renderBridgeControls";
 
@@ -67,20 +68,11 @@ export type BridgeEventTarget = { targetId?: string };
 export type BridgeNodeEvent = BridgeEventTarget & ({ type: "select"; index: number } | { type: "navigate"; index: number } | { type: "input"; value: string } | { type: "key"; key: string } | { type: "filter"; filter: string } | { type: "action"; actionId: string; payload?: unknown });
 
 /**
- * 语义 tone → 文字色 class。
+ * 语义 tone → 文字色 class（唯一一份映射在 `bridgeTone.ts`）。
  *
  * 用 PiDeck 既有的语义 token（`text-primary` / `text-muted-foreground` 等），
  * 不写死色值、不新增手写 CSS class（AGENTS.md「新样式一律走 Tailwind utility」）。
  */
-const TONE_TEXT: Record<string, string> = {
-	default: "",
-	muted: "text-muted-foreground",
-	accent: "text-primary",
-	success: "text-emerald-600 dark:text-emerald-400",
-	warning: "text-amber-600 dark:text-amber-400",
-	danger: "text-destructive",
-};
-
 /** 样式 token → 附加 class。 */
 function styleClasses(style?: BridgeStyleToken[]): string {
 	if (!style?.length) return "";
@@ -106,9 +98,11 @@ function styleClasses(style?: BridgeStyleToken[]): string {
 			case "code":
 				classes.push("font-mono text-[0.9em]");
 				break;
-			default:
-				if (TONE_TEXT[token]) classes.push(TONE_TEXT[token]);
+			default: {
+				const toneClass = bridgeToneClass(token);
+				if (toneClass) classes.push(toneClass);
 				break;
+			}
 		}
 	}
 	return classes.join(" ");
@@ -268,7 +262,7 @@ export function renderBridgeNode(node: BridgeUINode | null | undefined, onEvent:
 		case "icon":
 			// 图标名不是 lucide 的稳定契约，渲染成小号文本标记（不猜图标、不崩）
 			return (
-				<span key={reactKey} className={`text-[11px] ${TONE_TEXT[node.tone ?? "default"] ?? ""}`} aria-label={node.name}>
+				<span key={reactKey} className={`text-[11px] ${bridgeToneClass(node.tone)}`} aria-label={node.name}>
 					{node.name}
 				</span>
 			);
