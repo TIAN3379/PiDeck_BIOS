@@ -10,7 +10,7 @@
 - [x] Windows NSIS 安装包构建通过。
 - [x] `win-unpacked/BIOS Agent.exe` 打包版启动冒烟通过。
 - [ ] 安装包安装后桌面快捷方式可启动。
-- [ ] GitHub `BIOS_Agent` 分支已推送。
+- [x] GitHub `BIOS_Agent` 分支已推送。
 - [ ] v0.8.0 Release 已创建并上传安装包、blockmap 与 `latest.yml`。
 
 ## 已知限制
