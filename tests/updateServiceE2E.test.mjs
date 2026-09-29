@@ -533,16 +533,16 @@ test("start applies the configured update source feed URL (default github → no
 	assert.equal(updater.feedUrl, null);
 });
 
-test("switching update source rebuilds the generic feed URL immediately", async (t) => {
+test("legacy update source selections normalize to the BIOS Agent GitHub feed", async (t) => {
 	const { service, updater, settings } = createAutomaticService({ settings: { updateSource: "github" } });
 	stopAfter(t, service);
 	service.start({ startDelayMs: 0, intervalMs: 60_000 });
 	assert.equal(updater.feedUrl, null);
 
-	// 设置页切换到 atomgit 更新源：保存即生效（无需重启）
+	// 旧设置中的 atomgit 值继续兼容读取，但统一回到 GitHub provider。
 	await settings.update({ updateSource: "atomgit" });
 	service.applyUpdateSource();
-	assert.equal(updater.feedUrl, "https://atomgit.com/ayuayue/PiDeck/releases/download/latest");
+	assert.equal(updater.feedUrl, null);
 
 	// 回到官方源：重置 feed，恢复原生 GitHub provider
 	await settings.update({ updateSource: "github" });
@@ -600,8 +600,8 @@ test("real updater setFeedUrl: github -> mirror -> github round trip rebuilds th
 	real.setFeedUrl(null);
 	assert.equal(setFeedURLCalls.length, 2);
 	assert.equal(setFeedURLCalls[1].provider, "github");
-	assert.equal(setFeedURLCalls[1].owner, "ayuayue");
-	assert.equal(setFeedURLCalls[1].repo, "PiDeck");
+	assert.equal(setFeedURLCalls[1].owner, "TIAN3379");
+	assert.equal(setFeedURLCalls[1].repo, "PiDeck_BIOS");
 	assert.equal(electronUpdaterStub.autoUpdater.forceDevUpdateConfig, true);
 
 	// 去重守卫仍有效：重复 setFeedUrl(null) 不得再次触发 setFeedURL。
@@ -609,13 +609,13 @@ test("real updater setFeedUrl: github -> mirror -> github round trip rebuilds th
 	assert.equal(setFeedURLCalls.length, 2);
 });
 
-test("atomgit source is applied as generic feed URL on start", async (t) => {
+test("legacy atomgit source is normalized to GitHub on start", async (t) => {
 	const { service, updater } = createAutomaticService({
 		settings: { updateSource: "atomgit" },
 	});
 	stopAfter(t, service);
 	service.start({ startDelayMs: 0, intervalMs: 60_000 });
-	assert.equal(updater.feedUrl, "https://atomgit.com/ayuayue/PiDeck/releases/download/latest");
+	assert.equal(updater.feedUrl, null);
 });
 
 test("dev channel: feed is forced to GitHub and allowPrerelease=true regardless of the configured source", async (t) => {
@@ -636,14 +636,14 @@ test("dev channel: feed is forced to GitHub and allowPrerelease=true regardless 
 	assert.deepEqual(updater.allowPrereleaseCalls, [true, true]);
 });
 
-test("stable channel behavior is unchanged: atomgit feed applies and prerelease stays explicitly false", async (t) => {
+test("stable channel normalizes legacy sources and keeps prerelease disabled", async (t) => {
 	const { service, updater } = createAutomaticService({
 		channel: "stable",
 		settings: { updateSource: "atomgit" },
 	});
 	stopAfter(t, service);
 	service.start({ startDelayMs: 0, intervalMs: 60_000 });
-	assert.equal(updater.feedUrl, "https://atomgit.com/ayuayue/PiDeck/releases/download/latest");
+	assert.equal(updater.feedUrl, null);
 	// 显式重置 false（声明式保障，防残留）；绝不为 stable 开启预发布。
 	assert.deepEqual(updater.allowPrereleaseCalls, [false]);
 });
@@ -664,7 +664,7 @@ test("manual delivery on dev channel checks GitHub even when atomgit source is c
 	assert.equal(receivedUrl, undefined);
 });
 
-test("manual delivery uses latestReleaseUrl from the configured atomgit source per check", async (t) => {
+test("manual delivery normalizes legacy sources to GitHub", async (t) => {
 	let receivedUrl;
 	const { service, settings } = createManualService((latestReleaseUrl) => {
 		receivedUrl = latestReleaseUrl;
@@ -673,8 +673,7 @@ test("manual delivery uses latestReleaseUrl from the configured atomgit source p
 	stopAfter(t, service);
 	await settings.update({ updateSource: "atomgit" });
 	await service.checkNow();
-	// macOS manual 检查：AtomGit 源 URL 传进检查器（GitHub 源时为 undefined）
-	assert.equal(receivedUrl, "https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/releases/latest");
+	assert.equal(receivedUrl, undefined);
 });
 
 test("manual check rejection is a check error, not a download error", async (t) => {

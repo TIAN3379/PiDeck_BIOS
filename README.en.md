@@ -1,17 +1,17 @@
-# PiDeck
+# BIOS Agent
 
 [中文文档](README.md) · [English](README.en.md) · [LinuxDO 友链](https://linux.do)
 
-**An open-source desktop workbench ("pi desktop") for managing multiple [Pi](https://pi.dev) and [DSH](https://github.com/deepseek-ai/deepseek-harness) coding-agent sessions.**
+**A personal desktop workbench for local coding agents, packaged for normal icon-based desktop launching.**
 
-> PiDeck = **pi desktop**: the pi coding agent, in a desktop app. If you searched GitHub for "pi desktop", "pi GUI", or "pi client" — this is it.
+> BIOS Agent is a secondary development distribution based on [PiDeck](https://github.com/ayuayue/PiDeck). It remains MIT licensed and preserves upstream attribution.
 
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.7.7-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 
 <!-- star-history:start -->
 <picture>
@@ -25,7 +25,9 @@
 
 ---
 
-## What is PiDeck
+## What is BIOS Agent
+
+**BIOS Agent** is a personal Agent desktop application maintained by TIAN3379. The current focus is a self-use Windows distribution, normal double-click launching, and incremental secondary development. It retains PiDeck's Electron workbench architecture and delegates Agent behavior to the external `pi` CLI.
 
 **PiDeck** is an open-source desktop workbench for pi and DSH that manages pi Agent sessions across local project folders, with import support for local Codex and Claude sessions so you can browse and restore them in one place. Built with Electron + TypeScript, it provides multi-project workspace management, AI session history, Git integration, built-in terminal, visual config management, and plugin extensions — so local AI coding assistants stay consistent, traceable, and configurable across projects.
 
@@ -231,9 +233,11 @@ Core design principle: **one agent session = one pi RPC process**, keeping sessi
 
 Prebuilt packages for **Windows**, **macOS**, and **Linux** are published on GitHub Releases:
 
-👉 **[GitHub Releases](https://github.com/ayuayue/PiDeck/releases)**
+👉 **[BIOS Agent GitHub Releases](https://github.com/TIAN3379/PiDeck_BIOS/releases)**
 
-> PiDeck requires the `pi` CLI to be installed separately and available in your system `PATH`.
+Install `BIOS-Agent-<version>-setup.exe`; the installer creates Desktop and Start Menu shortcuts, after which BIOS Agent can be launched by double-clicking its icon.
+
+> BIOS Agent requires the `pi` CLI to be installed separately and available in your system `PATH`.
 
 Requirements:
 
@@ -252,8 +256,9 @@ pi --mode rpc
 ## 🧰 Quick Start (from Source)
 
 ```bash
-git clone https://github.com/ayuayue/PiDeck.git
-cd PiDeck
+git clone https://github.com/TIAN3379/PiDeck_BIOS.git
+cd PiDeck_BIOS
+git switch BIOS_Agent
 npm install
 npm run make-icon
 npm run dev

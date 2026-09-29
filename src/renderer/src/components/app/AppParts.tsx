@@ -153,7 +153,7 @@ export function BrandLockup() {
 			reduceMq.removeEventListener("change", onReduceChange);
 		};
 	}, []);
-	const brandTitle = branch ? `PiDeck · ${branch}` : "PiDeck";
+	const brandTitle = branch ? `BIOS Agent · ${branch}` : "BIOS Agent";
 	// macOS 窗口左上角已有原生交通灯，π logo + 字标挤在同一行视觉过重；
 	// darwin 平台只保留字标（品牌语义仍由 aria-label 承载），其余平台维持原样。
 	const showLogo = detectRendererPlatform() !== "darwin";
@@ -163,7 +163,7 @@ export function BrandLockup() {
 			{showLogo && <PiLogoCanvas size={18} playOnClick />}
 			<span className="flex min-w-0 flex-col justify-center gap-1">
 				<TextShimmer as="span" enabled={shimmerOn} className="brand-wordmark truncate text-[18px] font-[PiDeckDepartureMono] font-bold uppercase leading-none">
-					PiDeck
+					BIOS Agent
 				</TextShimmer>
 				{branch && <span className="truncate text-[13px] font-medium leading-none text-muted-foreground">{branch}</span>}
 			</span>

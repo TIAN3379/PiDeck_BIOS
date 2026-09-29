@@ -19,8 +19,8 @@ import type { UpdateSourceId } from "./types/settings";
  * 仓库已由 pi-desktop 更名为 PiDeck：旧名只能靠 GitHub 改名重定向工作，一旦重定向失效
  * （旧名被回收/被他人注册）更新检查会直接 404，禁止再回填旧名。
  */
-export const UPDATE_REPO_OWNER = "ayuayue";
-export const UPDATE_REPO = "PiDeck";
+export const UPDATE_REPO_OWNER = "TIAN3379";
+export const UPDATE_REPO = "PiDeck_BIOS";
 
 /** generic feed 的固定路径段：GitHub 把 `releases/latest/download/<asset>` 302 到当前最新 release。 */
 export const RELEASES_LATEST_DOWNLOAD_PATH = "/releases/latest/download";

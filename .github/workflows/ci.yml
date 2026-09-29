@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - BIOS_Agent
   pull_request:
     branches:
       - main
+      - BIOS_Agent
 
 permissions:
   contents: read

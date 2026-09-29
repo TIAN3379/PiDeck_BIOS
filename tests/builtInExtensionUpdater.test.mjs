@@ -222,7 +222,7 @@ test("checkRemote 按逐文件 sha256 判定更新，且忽略本地不认识的
 		assert.equal(result.localVersion, "1.0.0");
 		assert.deepEqual([...result.changedFiles], ["pi-deck-vision.ts"]);
 		// 默认源是 AtomGit：首个请求必须打到 OpenAPI contents
-		assert.ok(network.calls[0].includes("api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/"));
+		assert.ok(network.calls[0].includes("api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/"));
 		assert.ok(network.calls[0].includes(`ref=${BRANCH}`));
 
 		// 2) 远端多出一个本地不认识的文件：注入清单编译在应用里，不能凭空引入新代码
@@ -348,7 +348,7 @@ test("source=github 时 raw 直连优先；AtomGit 的 base64 解码必须字节
 		const githubRun = createUpdater(fixture, repoFiles, { source: () => "github" });
 		const githubCheck = await githubRun.updater.checkRemote();
 		assert.equal(githubCheck.ok, true);
-		assert.ok(githubRun.network.calls[0].startsWith("https://raw.githubusercontent.com/ayuayue/PiDeck/"));
+		assert.ok(githubRun.network.calls[0].startsWith("https://raw.githubusercontent.com/TIAN3379/PiDeck_BIOS/"));
 		assert.deepEqual([...githubCheck.changedFiles], ["pi-deck-todo.ts"]);
 
 		const atomGitRun = createUpdater(fixture, repoFiles);

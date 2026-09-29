@@ -30,15 +30,15 @@ function envelope(text, extra = {}) {
 }
 
 test("atomGitContentsApiUrl：路径按段编码保留斜杠，分支进 query 并编码", () => {
-	assert.equal(atomGitContentsApiUrl("resources/extensions/pi-deck-todo.ts", "main"), "https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/resources/extensions/pi-deck-todo.ts?ref=main");
+	assert.equal(atomGitContentsApiUrl("resources/extensions/pi-deck-todo.ts", "main"), "https://api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/resources/extensions/pi-deck-todo.ts?ref=main");
 	// 文件名带 # / 空格 / 中文时不能拼出坏 URL（# 会被当 fragment 截断路径）
-	assert.equal(atomGitContentsApiUrl("docs/我的 文件#1.md", "main"), "https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/docs/%E6%88%91%E7%9A%84%20%E6%96%87%E4%BB%B6%231.md?ref=main");
+	assert.equal(atomGitContentsApiUrl("docs/我的 文件#1.md", "main"), "https://api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/docs/%E6%88%91%E7%9A%84%20%E6%96%87%E4%BB%B6%231.md?ref=main");
 	// 分支名带斜杠：必须编码进 query，不能泄进路径
 	assert.ok(atomGitContentsApiUrl("README.md", "feat/x").endsWith("?ref=feat%2Fx"));
 });
 
 test("gitHubRawFileUrl：仍是 raw 直链（GitHub 侧未被前端接管）", () => {
-	assert.equal(gitHubRawFileUrl("resources/pi-ai-catalog.json", "main"), "https://raw.githubusercontent.com/ayuayue/PiDeck/main/resources/pi-ai-catalog.json");
+	assert.equal(gitHubRawFileUrl("resources/pi-ai-catalog.json", "main"), "https://raw.githubusercontent.com/TIAN3379/PiDeck_BIOS/main/resources/pi-ai-catalog.json");
 });
 
 test("repoFileSourceEntries：github 源 raw 优先，其余源 AtomGit 优先，两条都在", () => {

@@ -12,4 +12,4 @@
  */
 declare const __PIDECK_DEV_BUILD__: boolean;
 
-export const APP_DEEP_LINK_SCHEME = __PIDECK_DEV_BUILD__ ? "pideck-dev" : "pideck";
+export const APP_DEEP_LINK_SCHEME = __PIDECK_DEV_BUILD__ ? "bios-agent-dev" : "bios-agent";

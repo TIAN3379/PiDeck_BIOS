@@ -32,6 +32,11 @@ test("解析 pideck://session/ 协议 URL（通知点击主路径）", () => {
 	expectTarget(argv, { sessionId: SESSION_ID, agentId: undefined });
 });
 
+test("解析 bios-agent://session/ 新品牌协议 URL", () => {
+	const argv = ["C:\\Program Files\\BIOS Agent\\BIOS Agent.exe", `bios-agent://session/${SESSION_ID}`];
+	expectTarget(argv, { sessionId: SESSION_ID });
+});
+
 test("解析 pideck://agent/ 兼容格式（旧 toast 兜底）", () => {
 	const argv = ["PiDeck.exe", `pideck://agent/${AGENT_ID}`];
 	expectTarget(argv, { sessionId: undefined, agentId: AGENT_ID });

@@ -91,7 +91,7 @@ test("installFromIndex：指定 Release tag 时 runtime 归档跟随同一应用
 	const { installer, calls } = makeInstaller({ releaseTag: "v0.7.6-beta" });
 	const result = await installer.installFromIndex();
 	assert.equal(result.ok, true);
-	assert.equal(calls.installFromUrl[0].archiveUrl, `https://atomgit.com/ayuayue/PiDeck/releases/download/v0.7.6-beta/dsh-runtime-${process.platform}-${process.arch}.tgz`);
+	assert.equal(calls.installFromUrl[0].archiveUrl, `https://atomgit.com/TIAN3379/PiDeck_BIOS/releases/download/v0.7.6-beta/dsh-runtime-${process.platform}-${process.arch}.tgz`);
 });
 
 test("installFromIndex：file:// 归档不改写，离线验证直连本地文件", async () => {

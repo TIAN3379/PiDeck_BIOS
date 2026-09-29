@@ -126,7 +126,7 @@ test("formatAiPrompt embeds project context when provided", () => {
 	};
 	const out = formatAiPrompt(makeReport(), CONTEXT, projectContext);
 	assert.ok(out.includes("## 项目上下文（PiDeck）"), "should include project context section");
-	assert.ok(out.includes("项目地址（源码仓库）：https://github.com/ayuayue/PiDeck"), "should point at the GitHub repo (local source is usually absent)");
+	assert.ok(out.includes("项目地址（源码仓库）：https://github.com/TIAN3379/PiDeck_BIOS"), "should point at the BIOS Agent GitHub repo");
 	assert.ok(out.includes("- 禁止 any"), "should embed AGENTS.md content");
 	assert.ok(out.includes("pideck-doctor"), "should list project skills");
 	assert.ok(out.includes("/skill:pideck-doctor"), "should hint at the diagnostic skill");

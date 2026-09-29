@@ -11,8 +11,8 @@
  * 返回 undefined 表示本次唤起不是通知点击，仅聚焦窗口即可。
  */
 const FOCUS_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const SESSION_RE = new RegExp(`pideck(?:-dev)?://session/(${FOCUS_UUID})`, "i");
-const AGENT_RE = new RegExp(`pideck(?:-dev)?://agent/(${FOCUS_UUID})`, "i");
+const SESSION_RE = new RegExp(`(?:bios-agent(?:-dev)?|pideck(?:-dev)?)://session/(${FOCUS_UUID})`, "i");
+const AGENT_RE = new RegExp(`(?:bios-agent(?:-dev)?|pideck(?:-dev)?)://agent/(${FOCUS_UUID})`, "i");
 
 const OPEN_PROJECT_FLAG = "--open-project";
 

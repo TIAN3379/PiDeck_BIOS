@@ -196,7 +196,7 @@ export function formatAiPrompt(report: HealthReport, context: HealthReportContex
 		lines.push(`## 项目上下文（${projectContext.projectName || projectContext.projectId}）`);
 		// 项目地址给 GitHub 仓库而不是本地路径：分析者（外部 AI / 群友）通常没有本地源码，
 		// 仓库地址才是唯一始终可访问的定位方式；本地开发场景 pi 的 cwd 本就是项目根，无需指路。
-		lines.push(`项目地址（源码仓库）：https://github.com/ayuayue/PiDeck`);
+		lines.push(`项目地址（源码仓库）：https://github.com/TIAN3379/PiDeck_BIOS`);
 		lines.push("");
 		lines.push(`本次分析基于 PiDeck 工程。项目根目录的 AGENTS.md 记录了编码规范、架构约束与测试门禁，` + `以下为内容${projectContext.agentsMdTruncated ? "（超出上限已截断，可让 pi 读取项目根目录完整版）" : ""}：`);
 		lines.push("");

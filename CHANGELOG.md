@@ -1,3 +1,13 @@
+## v0.8.0 - 2026-09-30
+
+### 🚀 New Features
+- **First BIOS Agent self-use release** - Rebranded the app name, packages, Windows App ID, protocol, repository links, issue reporting, and automatic update source.
+- **Launch from a desktop icon** - The Windows NSIS installer creates Desktop and Start Menu shortcuts, so no development command is needed after installation.
+
+### 🧰 Maintenance
+- **Upstream compatibility preserved** - The PiDeck MIT license and contributor attribution remain intact; internal `PIDECK_*` environment variables and extension filenames stay unchanged for compatibility.
+- **Removed upstream AtomGit auto-push** - Disabled the repository pre-push mirror hook and automatic mirror workflows. BIOS Agent publishes and updates only through its own GitHub repository.
+
 ## v0.7.8-beta - 2026-09-28
 
 ### 🚀 New Features

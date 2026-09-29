@@ -115,13 +115,13 @@ test("★ 构建期 define（__PIDECK_DEV_BUILD__）有默认值且可被覆盖"
 	// helper 不给默认值的话，任何 import 到 deepLinkScheme / channelIdentity 的
 	// 生产模块（AgentManager 链路上 53 个测试）全部 ReferenceError 而非断言失败。
 	// 默认取 stable 通道；测 dev 通道的用例（channelIdentity.test.mjs）用 globals 覆盖。
-	assert.equal(createTsSandbox()("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "pideck");
+	assert.equal(createTsSandbox()("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "bios-agent");
 	assert.equal(createTsSandbox()("src/main/update/channelIdentity.ts").resolveUpdateChannel(), "stable");
-	assert.equal(createTsSandbox({ globals: { __PIDECK_DEV_BUILD__: true } })("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "pideck-dev");
+	assert.equal(createTsSandbox({ globals: { __PIDECK_DEV_BUILD__: true } })("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "bios-agent-dev");
 	assert.equal(createTsSandbox({ globals: { __PIDECK_DEV_BUILD__: true } })("src/main/update/channelIdentity.ts").resolveUpdateChannel(), "dev");
 
 	// loadTsCommonJs 走完整依赖图，同一份默认值必须成立（否则整条 AgentManager 链断）
-	assert.equal(loadTsCommonJs("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "pideck");
+	assert.equal(loadTsCommonJs("src/main/utils/deepLinkScheme.ts").APP_DEEP_LINK_SCHEME, "bios-agent");
 	assert.equal(loadTsCommonJs("src/main/update/channelIdentity.ts", { globals: { __PIDECK_DEV_BUILD__: true } }).resolveUpdateChannel(), "dev");
 });
 

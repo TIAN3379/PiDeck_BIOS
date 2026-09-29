@@ -244,8 +244,8 @@ Gitmoji 对应关系：
 
 	// ── 更新检测：检查永远自动；自动下载默认开启（v0.7.4 起取代 disableUpdateCheck）──
 	autoDownloadUpdates: true,
-	// 更新源：默认国内 AtomGit 源（第一首选）；用户可切 GitHub 官方源（见 updateSources.ts）
-	updateSource: "atomgit",
+	// BIOS Agent 由自己的 GitHub Releases 发布和更新。
+	updateSource: "github",
 	// 自定义镜像前缀（保留向下兼容字段），空串 = 未填
 	customUpdateSourceUrl: "",
 
@@ -358,11 +358,8 @@ export class SettingsStore {
 			if (persistedMonoFont === "commit-mono") {
 				this.settings.fontFamilyMono = "system-mono";
 			}
-			// 兼容迁移：更新源默认 github → atomgit（一次性，写标记后尊重用户显式选择）。
-			if (migrateUpdateSourceToAtomgit(this.settings)) {
-				// 迁移后立即落盘：防止后续任一次保存把未迁移状态写回（与宽度迁移同策略）
-				void this.save().catch(() => undefined);
-			}
+			// BIOS Agent 没有 AtomGit 镜像；继承到旧值时统一回到自己的 GitHub Releases。
+			this.settings.updateSource = "github";
 			// 忙碌时投递行为来自旧 JSON 时可能是任意值；回落默认，避免发送链路带着坏语义。
 			this.settings.busySendDelivery = parseBusySendDelivery(this.settings.busySendDelivery);
 			// 兼容迁移：旧版 contentMaxWidth(px) → chatContentWidthPct(%)。

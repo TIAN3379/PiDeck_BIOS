@@ -48,7 +48,7 @@ test("dock keeps the three actions and delegates the homepage link to AboutPopov
 	const about = readFileSync("src/renderer/src/components/app/AboutPopover.tsx", "utf8");
 	// 官网入口走站点自定义域名（docs-site/public/CNAME）：github.io 会 301 到它，
 	// 且该域名不随仓库 owner 变化，与 tokendance 侧 TOKENDANCE_APP_URL 同源。
-	assert.match(about, /WEBSITE_URL = "https:\/\/pideck\.caoayu\.top\/"/);
+	assert.match(about, /WEBSITE_URL = "https:\/\/github\.com\/TIAN3379\/PiDeck_BIOS"/);
 	assert.match(about, /label=\{t\("about\.website"\)\}/);
 });
 

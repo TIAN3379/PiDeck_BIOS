@@ -33,7 +33,7 @@ test("in-app brand surfaces use the Pi glyph, not the spider mark", () => {
 	assert.match(about, /<PiLogoCanvas size=\{40\} playOnClick \/>/);
 	assert.doesNotMatch(about, /autoPlay/);
 	// beUI 两行字标（5fcca0b8）：wordmark 由 TextShimmer 承载，不再用 aria-hidden span
-	assert.match(lockup, />\s*PiDeck\s*<\/TextShimmer>/);
+	assert.match(lockup, />\s*BIOS Agent\s*<\/TextShimmer>/);
 	// 侧栏字标扫光必须几分钟一轮；回退到 60s 会让常驻品牌位太勤。
 	assert.match(lockup, /REST_MS = 5 \* 60_000/);
 	assert.doesNotMatch(lockup, /REST_MS = 60_000/);
@@ -51,7 +51,7 @@ test("in-app brand surfaces use the Pi glyph, not the spider mark", () => {
 	assert.match(boot, PI_GLYPH);
 	assert.match(webBrand, /<PiLogoCanvas size=\{18\} playOnClick \/>/);
 	assert.doesNotMatch(webBrand, /autoPlay/);
-	assert.match(webBrand, />\s*PiDeck\s*</);
+	assert.match(webBrand, />\s*BIOS Agent\s*</);
 	assert.match(webTimeline, /<LogoMark size=\{66\} \/>/);
 	for (const source of [mark, lockup, app, boot, webBrand, webTimeline]) {
 		assert.doesNotMatch(source, /M7\.5 15\.5C3\.5 14/);

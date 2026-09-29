@@ -6,14 +6,14 @@
  */
 
 import type { UpdateSourceId } from "../../shared/types/settings";
-import { ATOMGIT_HOST, atomGitLatestReleaseApiUrl, UPDATE_SOURCE_MIRRORS, buildCustomSourceFeedUrl, normalizeCustomMirrorHost } from "../../shared/updateSources";
+import { normalizeCustomMirrorHost } from "../../shared/updateSources";
 
 export { normalizeCustomMirrorHost }; // 再导出，供调用点单一来源
 
-/** 校验设置里的更新源 id 是否已知；未知值回退 atomgit。 */
+/** BIOS Agent 只从自己的 GitHub Releases 更新；旧 AtomGit 设置回退到 GitHub。 */
 export function normalizeUpdateSource(source: unknown): UpdateSourceId {
-	const id = typeof source === "string" ? (source as UpdateSourceId) : "atomgit";
-	return id === "atomgit" || id === "github" ? id : "atomgit";
+	void source;
+	return "github";
 }
 
 /** 镜像展示信息（设置页下拉/列表用）：id + 显示名 labelKey + 完整 feed URL。 */
@@ -29,16 +29,7 @@ export type UpdateSourceOption = {
  * 更新源下拉选项（atomgit 第一首选，github 官方次选）。
  */
 export function updateSourceOptions(): UpdateSourceOption[] {
-	const options: UpdateSourceOption[] = [
-		{
-			id: "atomgit",
-			labelKey: "atomgit",
-			host: ATOMGIT_HOST,
-			feedUrl: buildCustomSourceFeedUrl(ATOMGIT_HOST),
-		},
-		{ id: "github", labelKey: "github", host: null, feedUrl: null },
-	];
-	return options;
+	return [{ id: "github", labelKey: "github", host: null, feedUrl: null }];
 }
 
 /**
@@ -47,10 +38,8 @@ export function updateSourceOptions(): UpdateSourceOption[] {
  * atomgit 源返回 AtomGit generic feed baseUrl。
  */
 export function updateSourceFeedUrl(source: UpdateSourceId, _customHost?: string | null): string | null {
-	if (source === "github") return null;
-	const mirror = UPDATE_SOURCE_MIRRORS.find((m) => m.id === source);
-	if (!mirror) return buildCustomSourceFeedUrl(ATOMGIT_HOST);
-	return buildCustomSourceFeedUrl(mirror.host);
+	void source;
+	return null;
 }
 
 /**
@@ -59,6 +48,6 @@ export function updateSourceFeedUrl(source: UpdateSourceId, _customHost?: string
  * github 源返回 null → 主进程走官方 GitHub `/releases/latest` 重定向。
  */
 export function updateSourceLatestReleaseUrl(source: UpdateSourceId, _customHost?: string | null): string | null {
-	if (source === "github") return null;
-	return atomGitLatestReleaseApiUrl();
+	void source;
+	return null;
 }

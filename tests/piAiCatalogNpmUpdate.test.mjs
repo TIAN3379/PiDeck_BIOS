@@ -258,7 +258,7 @@ test("catalog: 镜像源（atomgit）优先走 AtomGit contents API 并生效", 
 		// <host>/<owner>/<repo>/raw/<ref>/<path> 已被 GitCode 前端接管（返回 SPA HTML + 验证码 SDK），
 		// 因此镜像源改走 AtomGit OpenAPI contents（base64 信封，客户端需解码）。
 		assert.ok(
-			seen.some((u) => u.startsWith("https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/resources/pi-ai-catalog.manifest.json?ref=main")),
+			seen.some((u) => u.startsWith("https://api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/resources/pi-ai-catalog.manifest.json?ref=main")),
 			`分支请求应优先走 AtomGit contents API，实际: ${JSON.stringify(seen)}`,
 		);
 		assert.equal(updater.getStatus().overlay?.packageVersion, "9.9.9");
@@ -288,7 +288,7 @@ test("catalog: atomgit 返回非 JSON（SPA HTML）时回落 GitHub raw 并生�
 		assert.equal(result.ok, true, "AtomGit 形态不识别时不应整单失败");
 		assert.equal(result.updated, true);
 		assert.ok(
-			seen.some((u) => u.startsWith("https://raw.githubusercontent.com/ayuayue/PiDeck/main/resources/")),
+			seen.some((u) => u.startsWith("https://raw.githubusercontent.com/TIAN3379/PiDeck_BIOS/main/resources/")),
 			`应回落到 GitHub raw，实际: ${JSON.stringify(seen)}`,
 		);
 		assert.equal(updater.getStatus().overlay?.packageVersion, "9.9.9");
@@ -318,7 +318,7 @@ test("catalog: 未知源 id 仍按「AtomGit 优先 → GitHub raw」取件", as
 		});
 		const result = await updater.update("main");
 		assert.equal(result.ok, true);
-		assert.ok(seen[0].startsWith("https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/"), `非 github 源应 AtomGit OpenAPI 优先，实际首个请求: ${seen[0]}`);
+		assert.ok(seen[0].startsWith("https://api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/"), `非 github 源应 AtomGit OpenAPI 优先，实际首个请求: ${seen[0]}`);
 	} finally {
 		cleanup(dir);
 	}

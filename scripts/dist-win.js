@@ -35,7 +35,7 @@ console.log(`\n✅ 打包完成！产物在 release/ 目录下`);
 const releaseDir = path.join(root, "release");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const productName = packageJson.build?.productName ?? packageJson.name;
-const artifactPrefix = `${productName}-${packageJson.version}-`;
+const artifactPrefix = `${productName.replace(/\s+/g, "-")}-${packageJson.version}-`;
 const setupAsset = `${artifactPrefix}setup.exe`;
 const setupBlockmap = `${setupAsset}.blockmap`;
 const requiredUpdaterAssets = ["latest.yml", setupAsset, setupBlockmap];

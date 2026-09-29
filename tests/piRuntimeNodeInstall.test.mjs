@@ -57,8 +57,8 @@ test("契约：版本、哈希表、镜像回退链与 URL 拼接", () => {
 	assert.equal(urls.length, 5);
 	assert.equal(urls[0], "https://npmmirror.com/mirrors/node/v24.13.0/node-v24.13.0-win-x64.zip");
 	// 自有 Release 资产：与 DSH runner node 共用同一份官方完整 zip（sha256 与官方一致）
-	assert.equal(urls[1], "https://atomgit.com/ayuayue/PiDeck/releases/download/latest/node-v24.13.0-win-x64.zip");
-	assert.equal(urls[2], "https://github.com/ayuayue/PiDeck/releases/latest/download/node-v24.13.0-win-x64.zip");
+	assert.equal(urls[1], "https://atomgit.com/TIAN3379/PiDeck_BIOS/releases/download/latest/node-v24.13.0-win-x64.zip");
+	assert.equal(urls[2], "https://github.com/TIAN3379/PiDeck_BIOS/releases/latest/download/node-v24.13.0-win-x64.zip");
 	assert.equal(urls[3], "https://mirrors.huaweicloud.com/nodejs/v24.13.0/node-v24.13.0-win-x64.zip");
 	assert.equal(urls[4], officialPiRuntimeNodeUrl("win32", "x64"));
 	// 非 Windows：Release 上没有对应资产，回退链不含自有源

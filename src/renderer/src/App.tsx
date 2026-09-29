@@ -185,7 +185,7 @@ export function App() {
 						<path fill="url(#root-loading-logo-silver)" d="M517.36 400H634.72V634.72H517.36Z" />
 					</svg>
 				</div>
-				<strong className="text-[40px] font-bold tracking-[0.06em]">PiDeck</strong>
+				<strong className="text-[40px] font-bold tracking-[0.06em]">BIOS Agent</strong>
 				<span>{t("app.preloadMissing")}</span>
 			</div>
 		);
@@ -818,7 +818,7 @@ export function App() {
 	const [webServiceChanging, setWebServiceChanging] = useState(false);
 	const [appInfo, setAppInfo] = useState<AppInfo>({
 		version: "-",
-		releasesUrl: "https://github.com/ayuayue/PiDeck/releases",
+		releasesUrl: "https://github.com/TIAN3379/PiDeck_BIOS/releases",
 		// 同步判定，避免 Mac 首帧在 appInfo IPC 返回前误画 Win 窗口按钮
 		platform: detectRendererPlatform(),
 		homeDir: "",
@@ -1701,7 +1701,7 @@ export function App() {
 			.then((info) => {
 				setAppInfo(info);
 				// 与窗口标题一致：开发态功能分支时文档标题带分支名
-				document.title = info.devBranch ? `PiDeck · ${info.devBranch}` : "PiDeck";
+				document.title = info.devBranch ? `BIOS Agent · ${info.devBranch}` : "BIOS Agent";
 			})
 			.catch(() => undefined);
 		void api.imagegen

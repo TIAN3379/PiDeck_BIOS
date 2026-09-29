@@ -1,24 +1,19 @@
-# PiDeck
+# BIOS Agent
 
 [English](README.en.md) · [LinuxDO 友链](https://linux.do)
 
-**一个用于管理多个 [Pi](https://pi.dev)和[DSH](https://github.com/deepseek-ai/deepseek-harness)编码 Agent 会话的开源桌面工作台（pi desktop workbench）。**
+**一个面向个人二次开发的本地 Agent 桌面工作台，可通过安装后的桌面图标直接启动。**
 
-> PiDeck = **pi desktop**：把 pi 编码 Agent 装进桌面应用。如果你在 GitHub 搜索「pi desktop」「pi 客户端」「pi GUI」，找的正是它。
+> BIOS Agent 基于 [PiDeck](https://github.com/ayuayue/PiDeck) 二次开发，继续遵循 MIT License，并保留原项目贡献者署名。
 
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.7.7-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 
-国内 AtomGit 托管：https://atomgit.com/ayuayue/PiDeck
-<!-- 预留 AtomGit G-Star 徽章位（替换占位链接后启用）
-<p>
-  <a href="https://atomgit.com/ayuayue/PiDeck"><img alt="AtomGit G-Star" src="https://atomgit.com/ayuayue/PiDeck/star/new_badge.svg"></a>
-</p>
--->
+项目仓库：https://github.com/TIAN3379/PiDeck_BIOS
 
 
 <!-- star-history:start -->
@@ -34,6 +29,8 @@
 ---
 
 ## 这是什么
+
+**BIOS Agent** 是由 TIAN3379 维护的个人 Agent 桌面应用发行版。本阶段以 Windows 自用、双击启动和持续二次开发为主；底层仍沿用 PiDeck 的 Electron 工作台架构，并通过外部 `pi` CLI 提供 Agent 能力。
 
 **PiDeck** 是一个开源的 pi 和 DSH 桌面工作台，用于在本地项目目录中统一管理 pi Agent 会话，并支持导入 Codex、Claude 本地会话以便统一浏览和恢复。基于 Electron + TypeScript 构建，提供多项目工作区、AI 会话管理、Git 集成、内置终端、模型配置和插件扩展能力，让本地 AI 编码助手在多项目环境中保持统一、可追溯、可配置。
 
@@ -250,9 +247,11 @@ PiDeck
 
 **Windows**、**macOS**、**Linux** 平台的预构建安装包在 GitHub Release 中发布：
 
-👉 **[GitHub Releases](https://github.com/ayuayue/PiDeck/releases)**
+👉 **[BIOS Agent GitHub Releases](https://github.com/TIAN3379/PiDeck_BIOS/releases)**
 
-> PiDeck 需要单独安装 `pi` CLI 并确保其加入系统 `PATH`。
+安装 `BIOS-Agent-<版本>-setup.exe` 后，安装器会创建桌面快捷方式和开始菜单入口，之后可直接双击 `BIOS Agent` 图标启动。
+
+> BIOS Agent 需要单独安装 `pi` CLI 并确保其加入系统 `PATH`。
 
 环境要求：
 
@@ -271,8 +270,9 @@ pi --mode rpc
 ## 🧰 快速开始（从源码运行）
 
 ```bash
-git clone https://github.com/ayuayue/PiDeck.git
-cd PiDeck
+git clone https://github.com/TIAN3379/PiDeck_BIOS.git
+cd PiDeck_BIOS
+git switch BIOS_Agent
 npm install
 npm run make-icon
 npm run dev
@@ -306,7 +306,7 @@ A：应用默认发送匿名、低频的 `app_heartbeat` 使用统计（可在�
 
 **Q：遇到问题如何反馈？**
 
-A：欢迎加入文末 QQ 群 / 微信群反馈（也可加作者微信 `caoayu97`），或到 [GitHub Issues](https://github.com/ayuayue/PiDeck/issues) 提交问题；排查问题时可在设置页导出日志。
+A：请到 [BIOS Agent GitHub Issues](https://github.com/TIAN3379/PiDeck_BIOS/issues) 提交问题；排查问题时可在设置页导出日志。
 
 ---
 

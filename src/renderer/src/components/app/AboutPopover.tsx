@@ -10,7 +10,7 @@ import { Button } from "../ui-shadcn/button";
 import { ChangelogDialog } from "./settings/ChangelogDialog";
 
 /** 官网入口：站点自己的自定义域名（CNAME 即是它），不随仓库 owner / 改名漂移；点击强制系统浏览器打开。 */
-const WEBSITE_URL = "https://pideck.caoayu.top/";
+const WEBSITE_URL = "https://github.com/TIAN3379/PiDeck_BIOS";
 
 interface AboutPopoverProps {
 	/** 应用/pi/DSH/pi-ai 版本与时间信息，由 App 从主进程 AppInfo IPC 拉取后传入。 */
@@ -47,7 +47,7 @@ export function AboutPopover(props: AboutPopoverProps) {
 					<div className="flex items-center gap-3">
 						<PiLogoCanvas size={40} playOnClick />
 						<div className="min-w-0 flex-1">
-							<div className="font-[PiDeckDepartureMono] text-lg font-normal uppercase leading-tight tracking-wide text-foreground">PiDeck</div>
+							<div className="font-[PiDeckDepartureMono] text-lg font-normal uppercase leading-tight tracking-wide text-foreground">BIOS Agent</div>
 							{/* 版本号用等宽小字：此前是带 ⓘ 图标的胶囊徽标，图标语义与「查看版本信息」
                   重复，胶囊边框在 40px logo 旁显得笨重；改为纯文本与弹框内版本行同源观感 */}
 							<div className="font-mono text-[11px] leading-tight tabular-nums text-muted-foreground">v{info.version}</div>

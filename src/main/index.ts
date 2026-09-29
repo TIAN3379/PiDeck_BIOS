@@ -126,8 +126,8 @@ app.commandLine.appendSwitch("js-flags", mainProcessJsFlags());
 // Windows 系统通知必须设置 AppUserModelID，否则通知不显示、点击事件不触发。
 // dev 与正式版使用不同 AppID，避免通知中心归属混淆（与 dev userData 隔离思路一致）。
 if (process.platform === "win32") {
-	const devAppId = devUserDataDirName === DEFAULT_DEV_USER_DATA_NAME ? "com.ayuayue.pi-desktop-dev" : `com.ayuayue.pi-desktop-dev.${sanitizeDevBranchSegment(devGitBranch ?? "detached")}`;
-	app.setAppUserModelId(isDevBuild ? devAppId : "com.ayuayue.pi-desktop");
+	const devAppId = devUserDataDirName === DEFAULT_DEV_USER_DATA_NAME ? "com.tian3379.bios-agent-dev" : `com.tian3379.bios-agent-dev.${sanitizeDevBranchSegment(devGitBranch ?? "detached")}`;
+	app.setAppUserModelId(isDevBuild ? devAppId : "com.tian3379.bios-agent");
 }
 
 // 注册 deep link 自定义协议：系统通知点击（toast activationType="protocol"）通过该协议唤起应用，
@@ -1308,7 +1308,7 @@ function setupTray() {
 	// iconPath 由 electron-vite 的 ?asset 后缀自动解析，打包后也能正确定位
 	const icon = nativeImage.createFromPath(iconPath);
 	tray = new Tray(icon.resize({ width: 16, height: 16 }));
-	tray.setToolTip("PiDeck");
+	tray.setToolTip("BIOS Agent");
 	// C12：退出清理登记（before-quit 统一 runAll）
 	quitCleanup.register("tray", () => {
 		tray?.destroy();
@@ -1396,7 +1396,7 @@ function printStartupInfo() {
 		console.log("%c  Persistent installationType: %c${persistentInstallationType}", "color: #6b7280;", "color: #8b5cf6; font-weight: bold;");
 		console.log("");
 		console.log("%c🐛 Found a bug? Report at:", "color: #6b7280;");
-		console.log("%c  https://github.com/ayuayue/PiDeck/issues", "color: #3b82f6; text-decoration: underline;");
+		console.log("%c  https://github.com/TIAN3379/PiDeck_BIOS/issues", "color: #3b82f6; text-decoration: underline;");
 		console.log("");
 		console.log("%c🎉 Easter egg: You found it! Thanks for exploring.", "color: #ec4899; font-weight: bold;");
 		console.log("");
@@ -1591,7 +1591,7 @@ async function createWindow() {
 		minWidth: MIN_WINDOW_WIDTH,
 		minHeight: MIN_WINDOW_HEIGHT,
 		// 多 worktree 并行 dev：标题带分支名，任务栏/Alt-Tab 一眼区分窗口
-		title: isolateDevByGitBranch && !isSharedDevBranch(devGitBranch) ? `PiDeck · ${devGitBranch}` : "PiDeck",
+		title: isolateDevByGitBranch && !isSharedDevBranch(devGitBranch) ? `BIOS Agent · ${devGitBranch}` : "BIOS Agent",
 		icon: iconPath,
 		frame: windowOptions.frame,
 		titleBarStyle: windowOptions.titleBarStyle,

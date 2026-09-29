@@ -419,25 +419,13 @@ test("pack script pre-flights entry files before tarring", () => {
 	assert.match(pruneRules, /export function runtimeEntryResolvableOnDisk/);
 });
 
-// 2026-09 发版自动化链：push tag 后应无人值守完成「构建 → runtime tgz → AtomGit 同步」。
-// 这里把链路契约固化：事件衔接、平台覆盖、PAT 要求、资产稳定窗口。
-// （背景：v0.7.5 曾因 runtime tgz 缺平台 + 同名资产被静默跳过，镜像用户升到旧包。）
-// 2026-09 起平台覆盖改由 release.yml 内 pack-dsh-runtime job 交叉打包全 6 平台
-// （不再需要原生 runner 矩阵 + post-release-sidecars 补缺），sidecars 仅保留
-// sync-atomgit 触发兑底。
-test("发版自动化链：release → pack-dsh-runtime/sidecars → sync-atomgit 事件衔接完整", () => {
+// BIOS Agent 只在自己的 GitHub 仓库发布。release.yml 仍负责跨平台 runtime 资产，
+// 但不再把用户 push 扩散到上游维护者的 AtomGit 自动化链。
+test("发版自动化链：GitHub Release 覆盖全部 runtime 平台且无 AtomGit 自动同步", () => {
 	const release = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf8");
-	const sidecars = readFileSync(join(repoRoot, ".github/workflows/post-release-sidecars.yml"), "utf8");
-	const sync = readFileSync(join(repoRoot, ".github/workflows/sync-atomgit.yml"), "utf8");
-
-	// 触发链：release.yml 用 PAT 发布（广播 release: published）→ sidecars 监听 published
-	// → sidecars 结尾用 PAT workflow_dispatch 触发 sync-atomgit（sync 自身也监听 published）。
 	assert.match(release, /token: \$\{\{ secrets\.RELEASE_PAT \}\}/, "softprops 必须用 PAT 发布");
-	assert.match(sidecars, /release:\s*\n\s*types:\s*\[published\]/);
-	assert.match(sidecars, /gh workflow run sync-atomgit\.yml/);
-	assert.match(sidecars, /GH_TOKEN: \$\{\{ secrets\.RELEASE_PAT \}\}/, "触发下游必须用 PAT（GITHUB_TOKEN 不再触发 workflow）");
-	assert.match(sync, /types:\s*\[published\]/);
-	assert.match(sync, /workflow_dispatch/);
+	assert.equal(existsSync(join(repoRoot, ".github/workflows/post-release-sidecars.yml")), false);
+	assert.equal(existsSync(join(repoRoot, ".github/workflows/sync-atomgit.yml")), false);
 
 	// 平台覆盖：release.yml 的 pack-dsh-runtime job 必须交叉打满 6 平台
 	// （win32/darwin/linux × x64/arm64），linux 强制 glibc（非 Linux 宿主上 npm 检测
@@ -455,18 +443,5 @@ test("发版自动化链：release → pack-dsh-runtime/sidecars → sync-atomgi
 	assert.match(release, /--target-os \$\{\{ matrix\.os \}\} --target-arch \$\{\{ matrix\.arch \}\}/);
 	// 归档校验必须带同一组 --target-* 参数（原生包在位断言按目标平台检查）。
 	assert.match(release, /check-dsh-asar\.mjs --target-os \$\{\{ matrix\.os \}\} --target-arch \$\{\{ matrix\.arch \}\}/);
-	// sidecars 不再打包/上传 runtime（补发职责已移除，仅保留 sync-atomgit 触发）。
-	assert.doesNotMatch(sidecars, /pack-dsh-runtime\.mjs/);
-	assert.doesNotMatch(sidecars, /gh release upload/);
-
-	// sidecars 上传目标必须来自 release 事件本体且限定 v*（禁止 sidecar tag 抢 latest）。
-	assert.match(sidecars, /github\.event\.release\.tag_name/);
-	assert.match(sidecars, /\^v\[0-9\]/);
-
-	// sync-atomgit 必须等资产清单稳定再同步（release:published 触发时构建 job 还在传资产）。
-	assert.match(sync, /ASSET_WAIT_DEADLINE_SECONDS/);
-	assert.match(sync, /ASSET_STABLE_REQUIRED/);
-	assert.match(sync, /releases\/tags\/\$\{TAG\}/);
-	// 预期 runtime tgz 总数 = 6（release.yml 交叉打满 6 平台）。
-	assert.match(sync, /-ge 6/);
+	assert.doesNotMatch(release, /sync-atomgit|atomgit\.com/i);
 });

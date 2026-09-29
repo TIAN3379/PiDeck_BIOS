@@ -81,8 +81,8 @@ test("collectRecyclableRuntimes：保留最新兼容版与指定版本，其余�
 test("runtime 索引挂 latest 应用 Release，禁止独立 dsh-runtime tag", () => {
 	assert.equal(dshRuntimeIndexFileName("win32", "x64"), "dsh-runtime-win32-x64-releases.json");
 	assert.equal(dshRuntimeArchiveName("darwin", "arm64"), "dsh-runtime-darwin-arm64.tgz");
-	assert.equal(defaultDshRuntimeIndexUrl("atomgit", "win32", "x64"), "https://atomgit.com/ayuayue/PiDeck/releases/download/latest/dsh-runtime-win32-x64-releases.json");
-	assert.equal(defaultDshRuntimeIndexUrl("github", "linux", "arm64"), "https://github.com/ayuayue/PiDeck/releases/latest/download/dsh-runtime-linux-arm64-releases.json");
+	assert.equal(defaultDshRuntimeIndexUrl("atomgit", "win32", "x64"), "https://atomgit.com/TIAN3379/PiDeck_BIOS/releases/download/latest/dsh-runtime-win32-x64-releases.json");
+	assert.equal(defaultDshRuntimeIndexUrl("github", "linux", "arm64"), "https://github.com/TIAN3379/PiDeck_BIOS/releases/latest/download/dsh-runtime-linux-arm64-releases.json");
 	assert.doesNotMatch(defaultDshRuntimeIndexUrl("github", "win32", "x64"), /\/dsh-runtime\//, "独立 sidecar tag 会抢走 GitHub /releases/latest");
 	assert.equal(resolveDshRuntimeIndexUrl({ updateSource: "github", platform: "win32", arch: "x64" }), defaultDshRuntimeIndexUrl("github", "win32", "x64"));
 	assert.equal(
@@ -104,8 +104,8 @@ test("runtime 索引挂 latest 应用 Release，禁止独立 dsh-runtime tag", (
 	assert.equal(resolveDshRuntimeReleaseUrl(placeholder, "atomgit", "win32", "x64"), dshRuntimeAssetDownloadUrl("atomgit", dshRuntimeArchiveName("win32", "x64")));
 	assert.equal(resolveDshRuntimeReleaseUrl({ ...placeholder, url: "https://example.test/old-dsh-runtime-tag.tgz" }, "github", "win32", "x64"), dshRuntimeAssetDownloadUrl("github", dshRuntimeArchiveName("win32", "x64")), "旧索引里的 http(s) 占位也改写，避免直连 sidecar tag");
 	assert.equal(resolveDshRuntimeReleaseUrl({ ...placeholder, url: "file:///C:/tmp/runtime.tgz" }, "atomgit", "win32", "x64"), "file:///C:/tmp/runtime.tgz", "file:// 离线验证不改写");
-	assert.equal(resolveDshRuntimeReleaseUrl(placeholder, "github", "win32", "x64", "v0.7.6-beta"), "https://github.com/ayuayue/PiDeck/releases/download/v0.7.6-beta/dsh-runtime-win32-x64.tgz", "有明确 Release tag 时下载同一应用版本的 runtime");
-	assert.equal(resolveDshRuntimeReleaseUrl(placeholder, "atomgit", "win32", "x64", "v0.7.6-beta"), "https://atomgit.com/ayuayue/PiDeck/releases/download/v0.7.6-beta/dsh-runtime-win32-x64.tgz", "AtomGit 也必须跟随同一应用 Release tag，不能回退 latest");
+	assert.equal(resolveDshRuntimeReleaseUrl(placeholder, "github", "win32", "x64", "v0.7.6-beta"), "https://github.com/TIAN3379/PiDeck_BIOS/releases/download/v0.7.6-beta/dsh-runtime-win32-x64.tgz", "有明确 Release tag 时下载同一应用版本的 runtime");
+	assert.equal(resolveDshRuntimeReleaseUrl(placeholder, "atomgit", "win32", "x64", "v0.7.6-beta"), "https://atomgit.com/TIAN3379/PiDeck_BIOS/releases/download/v0.7.6-beta/dsh-runtime-win32-x64.tgz", "AtomGit 也必须跟随同一应用 Release tag，不能回退 latest");
 });
 
 test("selectRelease：与 selectRuntime 同样按兼容区间 + 取最新", () => {

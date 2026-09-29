@@ -1,6 +1,6 @@
 name: Build Windows
 
-# 仅手动触发，从最新的 main 分支构建 Windows 安装包
+# 仅手动触发，从 BIOS_Agent 产品分支构建 Windows 安装包
 on:
   workflow_dispatch:
 
@@ -17,10 +17,10 @@ jobs:
         arch: [x64, arm64]
 
     steps:
-      - name: Checkout repository (main)
+      - name: Checkout repository (BIOS_Agent)
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: BIOS_Agent
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,7 +42,7 @@ jobs:
       - name: Upload Windows ${{ matrix.arch }} artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pi-desktop-windows-${{ matrix.arch }}
+          name: bios-agent-windows-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             release/*.exe

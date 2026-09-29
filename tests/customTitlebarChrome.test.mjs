@@ -125,7 +125,7 @@ test("brand lockup is larger inside the 40px titlebar", () => {
 	// 功能分支时分支名只保留在 title/aria-label，不上视觉
 	assert.match(brand, /PiLogoCanvas size=\{18\}/);
 	assert.match(brand, /brand-wordmark/);
-	assert.match(brand, /PiDeck · \$\{branch\}/);
+	assert.match(brand, /BIOS Agent · \$\{branch\}/);
 	assert.match(sidebar, /list-toolbar flex h-10/);
 	assert.doesNotMatch(sidebar, /list-toggle-native floating/);
 });

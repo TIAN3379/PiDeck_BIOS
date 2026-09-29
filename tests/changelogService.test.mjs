@@ -50,8 +50,8 @@ function atomgitContentsResponse(markdown, { status = 200 } = {}) {
 }
 
 /** OpenAPI contents 接口的匿名 URL（与 buildChangelogUrls 的拼法保持一致）。 */
-const ATOMGIT_API_URL = "https://api.atomgit.com/api/v5/repos/ayuayue/PiDeck/contents/CHANGELOG.zh-CN.md?ref=main";
-const GITHUB_RAW_URL = "https://raw.githubusercontent.com/ayuayue/PiDeck/main/CHANGELOG.zh-CN.md";
+const ATOMGIT_API_URL = "https://api.atomgit.com/api/v5/repos/TIAN3379/PiDeck_BIOS/contents/CHANGELOG.zh-CN.md?ref=main";
+const GITHUB_RAW_URL = "https://raw.githubusercontent.com/TIAN3379/PiDeck_BIOS/main/CHANGELOG.zh-CN.md";
 
 /** 按 URL 分派响应的 fetch 替身；未列出的 URL 抛网络错。 */
 function fetchByUrl(map, calls = []) {
@@ -87,10 +87,10 @@ test("buildChangelogUrls prefers AtomGit by default and GitHub when source is gi
 	assert.equal(zh[1].id, "github");
 	// atomgit 必须走 OpenAPI contents 接口（匿名 raw 已被 GitCode SPA 接管拿不到文件），
 	// 且带 ref 参数；GitHub 保持 raw 直链。
-	assert.match(zh[0].url, /^https:\/\/api\.atomgit\.com\/api\/v5\/repos\/ayuayue\/PiDeck\/contents\//);
+	assert.match(zh[0].url, /^https:\/\/api\.atomgit\.com\/api\/v5\/repos\/TIAN3379\/PiDeck_BIOS\/contents\//);
 	assert.match(zh[0].url, /CHANGELOG\.zh-CN\.md\?ref=main$/);
 	assert.doesNotMatch(zh[0].url, /\/raw\//);
-	assert.match(zh[1].url, /^https:\/\/raw\.githubusercontent\.com\/ayuayue\/PiDeck\/main\/CHANGELOG\.zh-CN\.md$/);
+	assert.match(zh[1].url, /^https:\/\/raw\.githubusercontent\.com\/TIAN3379\/PiDeck_BIOS\/main\/CHANGELOG\.zh-CN\.md$/);
 
 	// 用户显式选官方源：GitHub 提前
 	const gh = buildChangelogUrls({ source: "github", branch: "main", language: "zh" });
@@ -235,6 +235,6 @@ test("ChangelogService aborts a hung request via the timeout instead of hanging"
 
 test("changelogPageUrl points at the AtomGit blob page for the fallback link", () => {
 	const service = new ChangelogService({ branch: "main" });
-	assert.equal(service.changelogPageUrl("zh"), "https://atomgit.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md");
-	assert.equal(service.changelogPageUrl("en"), "https://atomgit.com/ayuayue/PiDeck/blob/main/CHANGELOG.md");
+	assert.equal(service.changelogPageUrl("zh"), "https://atomgit.com/TIAN3379/PiDeck_BIOS/blob/main/CHANGELOG.zh-CN.md");
+	assert.equal(service.changelogPageUrl("en"), "https://atomgit.com/TIAN3379/PiDeck_BIOS/blob/main/CHANGELOG.md");
 });

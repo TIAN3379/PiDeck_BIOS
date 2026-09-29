@@ -1,31 +1,35 @@
 {
-  "name": "pi-desktop",
-  "version": "0.7.8-beta",
+  "name": "bios-agent-desktop",
+  "version": "0.8.0",
   "dshRuntimeVersion": "0.1.5-rc.1",
   "packageManager": "npm@11.6.2",
   "engines": {
     "npm": "^11.6.2"
   },
-  "description": "PiDeck is an open-source desktop workbench to manage multiple pi AI coding agents across local project folders with session history, Git integration, terminal, and config management.",
+  "description": "BIOS Agent is a personal desktop workbench for managing local AI coding agents, sessions, Git workflows, terminals, and configuration.",
   "private": true,
   "license": "MIT",
   "author": {
-    "name": "ayuayue",
-    "email": "ayuayue@users.noreply.github.com"
+    "name": "TIAN3379",
+    "email": "337953811@qq.com"
   },
   "contributors": [
+    {
+      "name": "ayuayue",
+      "url": "https://github.com/ayuayue"
+    },
     {
       "name": "1900EasonJin",
       "url": "https://github.com/1900EasonJin"
     }
   ],
-  "homepage": "https://github.com/ayuayue/PiDeck#readme",
+  "homepage": "https://github.com/TIAN3379/PiDeck_BIOS#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ayuayue/PiDeck.git"
+    "url": "git+https://github.com/TIAN3379/PiDeck_BIOS.git"
   },
   "bugs": {
-    "url": "https://github.com/ayuayue/PiDeck/issues"
+    "url": "https://github.com/TIAN3379/PiDeck_BIOS/issues"
   },
   "keywords": [
     "pi",
@@ -103,8 +107,6 @@
     "docs:build": "vitepress build docs-site",
     "docs:preview": "vitepress preview docs-site",
     "postinstall": "node scripts/fix-pty-permissions.js",
-    "prepare": "node scripts/install-git-hooks.mjs",
-    "hooks:install": "node scripts/install-git-hooks.mjs",
     "sync:main": "node scripts/sync-main.mjs",
     "typecheck": "tsc --noEmit",
     "make-icon": "node scripts/make-icon.js",
@@ -128,13 +130,13 @@
     "undici": "^6.28.0"
   },
   "build": {
-    "appId": "com.ayuayue.pi-desktop",
-    "productName": "PiDeck",
+    "appId": "com.tian3379.bios-agent",
+    "productName": "BIOS Agent",
     "protocols": [
       {
-        "name": "PiDeck Agent Link",
+        "name": "BIOS Agent Link",
         "schemes": [
-          "pideck"
+          "bios-agent"
         ]
       }
     ],
@@ -238,17 +240,17 @@
         "portable",
         "zip"
       ],
-      "artifactName": "${productName}-${version}-win.${ext}"
+      "artifactName": "BIOS-Agent-${version}-win.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "${productName}-${version}-setup.${ext}"
+      "artifactName": "BIOS-Agent-${version}-setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}"
+      "artifactName": "BIOS-Agent-${version}-portable.${ext}"
     },
     "mac": {
       "icon": "build/icon.icns",
@@ -266,15 +268,15 @@
         "tar.gz"
       ],
       "category": "Development",
-      "maintainer": "ayuayue <ayuayue@users.noreply.github.com>"
+      "maintainer": "TIAN3379 <337953811@qq.com>"
     },
     "appImage": {
-      "artifactName": "${productName}-${arch}.${ext}"
+      "artifactName": "BIOS-Agent-${version}-${arch}.${ext}"
     },
     "publish": {
       "provider": "github",
-      "owner": "ayuayue",
-      "repo": "PiDeck"
+      "owner": "TIAN3379",
+      "repo": "PiDeck_BIOS"
     }
   },
   "devDependencies": {

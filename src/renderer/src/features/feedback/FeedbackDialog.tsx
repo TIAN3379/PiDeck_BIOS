@@ -61,7 +61,7 @@ export function FeedbackDialog({ open, project, appInfo, onClose, onToast, onOpe
 	if (!open) return null;
 
 	const issueTitle = `${t("feedback.issueTitle")}${feedback.context.description.trim().split("\n")[0].slice(0, 60) || t("feedback.issueTitleEmpty")}`;
-	const githubUrl = `https://github.com/ayuayue/PiDeck/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(feedback.text)}`;
+	const githubUrl = `https://github.com/TIAN3379/PiDeck_BIOS/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(feedback.text)}`;
 
 	const handleCopy = async () => {
 		const ok = await feedback.copyText();
@@ -287,7 +287,7 @@ export function FeedbackDialog({ open, project, appInfo, onClose, onToast, onOpe
 										<Bug size={14} aria-hidden="true" />
 										<span className="ml-1.5">{t("feedback.openIssue")}</span>
 									</Button>
-									<Button variant="secondary" size="sm" onClick={() => onOpenExternal?.("https://github.com/ayuayue/PiDeck")} disabled={!onOpenExternal}>
+									<Button variant="secondary" size="sm" onClick={() => onOpenExternal?.("https://github.com/TIAN3379/PiDeck_BIOS")} disabled={!onOpenExternal}>
 										{t("feedback.authorGithub")}
 									</Button>
 								</div>

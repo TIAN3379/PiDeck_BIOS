@@ -8,7 +8,7 @@ import { Input } from "../ui-shadcn/input";
 // 保留原生：.browser-tab-close（16px 微型关闭钮，Button 最小档 icon-xs 24px 无法替代）。
 
 /** 浏览器面板默认首页：官网自定义域名（与站点 CNAME 一致，不随仓库 owner 变化）。 */
-const DEFAULT_HOME = "https://pideck.caoayu.top/";
+const DEFAULT_HOME = "https://github.com/TIAN3379/PiDeck_BIOS";
 
 type DeviceType = "pc" | "mobile" | "tablet";
 
@@ -64,7 +64,7 @@ export const moduleState: { tabs: TabEntry[]; activeTabId: string | null; device
 function ensureInitialTab() {
 	if (moduleState.tabs.length > 0) return;
 	const id = genTabId();
-	moduleState.tabs = [{ id, title: "PiDeck", url: DEFAULT_HOME }];
+	moduleState.tabs = [{ id, title: "BIOS Agent", url: DEFAULT_HOME }];
 	moduleState.activeTabId = id;
 }
 
