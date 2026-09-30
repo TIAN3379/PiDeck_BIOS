@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.8.0-blue)
+![Version](https://img.shields.io/badge/version-0.9.0-blue)
 
 项目仓库：https://github.com/TIAN3379/PiDeck_BIOS
 
@@ -32,11 +32,11 @@
 
 **BIOS Agent** 是由 TIAN3379 维护的个人 Agent 桌面应用发行版。本阶段以 Windows 自用、双击启动和持续二次开发为主；底层仍沿用 PiDeck 的 Electron 工作台架构，并通过外部 `pi` CLI 提供 Agent 能力。
 
-**PiDeck** 是一个开源的 pi 和 DSH 桌面工作台，用于在本地项目目录中统一管理 pi Agent 会话，并支持导入 Codex、Claude 本地会话以便统一浏览和恢复。基于 Electron + TypeScript 构建，提供多项目工作区、AI 会话管理、Git 集成、内置终端、模型配置和插件扩展能力，让本地 AI 编码助手在多项目环境中保持统一、可追溯、可配置。
+**PiDeck** 是一个开源的 pi Agent 桌面工作台，用于在本地项目目录中统一管理 pi Agent 会话，并支持导入 Codex、Claude 本地会话以便统一浏览和恢复。基于 Electron + TypeScript 构建，提供多项目工作区、AI 会话管理、Git 集成、内置终端、模型配置和插件扩展能力，让本地 AI 编码助手在多项目环境中保持统一、可追溯、可配置。
 
 **适合谁用：** 希望在桌面端同时管理多个本地项目的 AI 编程助手会话、需要统一查看会话历史与 Git 状态、并希望以图形化方式管理 pi 配置的开发者。
 
-`PiDeck` **不是** pi 的分支。它是一个轻量 Electron 外壳，通过启动多个 `pi --mode rpc` 进程，将项目管理、会话管理、对话界面、配置管理和工具编排整合到一个原生桌面应用中——所有 Agent 能力由 pi 原生提供，会话文件也由 pi 原生读写，PiDeck 不复刻、不劫持。除 pi 外，PiDeck 还深融合了 **DSH（DeepSeek Harness）** 后端，详见 [DSH 后端](#-dsh-后端)。
+`PiDeck` **不是** pi 的分支。它是一个轻量 Electron 外壳，通过启动多个 `pi --mode rpc` 进程，将项目管理、会话管理、对话界面、配置管理和工具编排整合到一个原生桌面应用中——所有 Agent 能力由 pi 原生提供，会话文件也由 pi 原生读写，PiDeck 不复刻、不劫持。
 
 ---
 
@@ -66,7 +66,6 @@
     - [模型与配置](#模型与配置)
     - [扩展与生态](#扩展与生态)
     - [桌面与系统集成](#桌面与系统集成)
-  - [🐳 DSH 后端](#-dsh-后端)
   - [🏗️ 工作原理](#-工作原理)
   - [📦 下载安装](#-下载安装)
   - [🧰 快速开始（从源码运行）](#-快速开始从源码运行)
@@ -85,7 +84,7 @@
 ## ✨ 核心亮点
 
 - 🖥️ **多项目多会话并行** —— 一个窗口管理多个本地项目的全部 Agent 会话，项目间完全隔离。
-- 🔌 **三种会话后端** —— pi、DSH（DeepSeek Harness）、生图模式并存，同一项目下自由切换。
+- 🔌 **双会话后端** —— pi 与生图模式并存，同一项目下自由切换。
 - 🧠 **上下文感知输入** —— `@` 文件引用、`/` 斜线命令、`!` Shell 执行，全部在同一个输入框。
 - 🗂️ **会话资产化** —— 历史浏览与恢复、Codex / Claude 会话导入、一键导出 HTML。
 - 🛠️ **配置可视化** —— pi 的 `models.json` / `auth.json` / `settings.json` 免手写 JSON，连接测试一键直达。
@@ -97,25 +96,13 @@
 
 ## 📋 更新日志
 
-> **最新版本 v0.7.7**（2026-09-22）
+> **最新版本 v0.9.0**（2026-10-01）
 
-### v0.7.7 更新亮点
-- 🚀 **工作区文件按名称搜索（#215）**
-- 🚀 **从其他目录导入会话（项目移动 / 改名后找回历史）**
-- 🚀 **外部资源导入（MCP / 技能 / 提示词）**
-- 🚀 **严格工具采样可显式开关（`compat.supportsStrictMode`）**
-- 🚀 **供应商、模型与认证的隐藏与自定义排序**
-- 🚀 **新增「切换模型」与「思考强度循环」快捷键（Ctrl+M / Ctrl+T，macOS ⌘⌥M / ⌘⌥T）**
-- 🚀 **会话 Tab 悬停提示显示工作区**
-- 🚀 **长时间任务的耗时显示小时档**
-- 🚀 **DSH host 可手动停止（跨重启持久）**
-- 🚀 **pi 环境引导支持一键安装便携 Node 与 pi CLI**
-- 🚀 **DSH runtime 改为单 runner 交叉打包全平台**
-- 🚀 **模型目录更新到 pi 0.86.1（1443 个模型）**
-- ✨ **第三方中转站拉不到模型 / 手填模型也用不了已修复**
-- ✨ **Provider 的 User-Agent 收敛为单个可输入下拉并扩充预设**
-- ✨ **DSH 配置目录共用风险现在会明确提示（#189）**
-- ✨ **公告提醒不再反复弹**
+### v0.9.0 更新亮点
+- 🚀 **应用收敛为 Pi + ImageGen 双后端架构**
+- 🚀 **DSH 后端已整体移除**
+- 🚀 **更新与打包链路去掉 DSH**
+- 🚀 **文案与测试随裁剪收缩**
 
 [查看完整更新日志 →](CHANGELOG.zh-CN.md)
 
@@ -136,7 +123,7 @@
 
 | 功能 | 说明 |
 |---|---|
-| **双 Agent 后端（pi / DSH）** | 同一项目下可创建 pi 或 DSH 会话并自由切换浏览，详见下方 [DSH 后端](#-dsh-后端)。 |
+| **双会话后端（pi / 生图）** | 同一项目下可创建 pi 会话或生图会话并自由切换浏览。 |
 | **生图模式** | 独立生图后端（OpenAI 兼容 /images/generations，支持 OpenAI / 火山方舟 / SiliconFlow 等），在会话中一键切换生图。 |
 | **计划模式 (Plan Mode)** | Composer 工具栏切换计划模式，Agent 先生成计划，逐条确认后执行，取消后返回选单。 |
 | **Ask 并行问询** | 在后台创建独立问询会话并行提问，可携带主会话上下文，答案一键引用回主输入框。 |
@@ -189,23 +176,8 @@
 | **通知** | 全局通知升级为卡片 toast，Ask 并行问询有独立系统通知开关，后台问题可保持静默。 |
 | **主动更新** | 应用更新始终后台检查，`autoDownloadUpdates` 默认开启；下载完成后由用户在设置页确认「重启并安装」。Windows/Linux 使用包内 updater，macOS 打开 GitHub Release 手动安装；Pi CLI 检查独立运行。 |
 | **飞书机器人** | 会话可绑定飞书机器人，在飞书群里同步消息与状态。 |
-| **局域网 Web 服务** | 设置中启动本机 Web 服务，局域网设备通过 IP + 端口访问网页版，支持双后端会话浏览与 DSH 工具面板。 |
+| **局域网 Web 服务** | 设置中启动本机 Web 服务，局域网设备通过 IP + 端口访问网页版，支持双会话后端浏览。 |
 | **进程监控 / 日志管理** | 设置页内置进程监控与缓存日志管理，排查问题不用翻目录。 |
-
----
-
-## 🐳 DSH 后端
-
-除 pi 外，PiDeck 还深融合了 **DSH（DeepSeek Harness，DeepSeek 官方 Agent Harness）**：同一项目下 pi 与 DSH 会话并存、自由切换浏览，会话列表与头部均有 pi / DSH 徽标区分。
-
-- **零端口深融合** —— DSH host 以 utilityProcess 内嵌引导运行，无 `dsh web`、无监听端口、无后台 HTTP，懒启动不拖慢应用打开速度。
-- **完整会话能力** —— 历史分页浏览、fork（从锚点裁剪分叉，fork 点文案回填输入框）、`/compact` 压缩上下文；应用重启后自动恢复原会话。
-- **审批与提问桥** —— DSH 的审批请求 / 提问通过桌面 Ask 弹窗应答，与 pi 会话体验一致。
-- **DSH 配置管理页** —— 设置页 DSH 分页：settings / credentials 可视化编辑（schema 驱动表单）、host 级模型目录、host 状态与重启。
-- **技能目录与命令补全** —— 会话工具面板展示可调用的 DSH 技能（`/name` 直呼），Composer `/` 菜单实时枚举 host 注册的命令（含用户/插件注册）。
-- **用量查询与导出** —— DSH 模型配置页同款供应商用量显示，凭据读取 DSH 官方凭据库；历史会话可导出为自包含 HTML。
-
-**启用方式：** 在设置页的 DSH 分页完成配置后，新建会话时选择 DSH 后端即可。
 
 ---
 
@@ -216,7 +188,6 @@ PiDeck
 ├─ Electron 主进程
 │  ├─ 管理项目记录
 │  ├─ 启动 pi --mode rpc 进程（每个会话一个独立进程）
-│  ├─ 内嵌 DSH host（utilityProcess，无端口、无后台 HTTP）
 │  ├─ 管理 Agent 绑定的本地 pty 终端
 │  ├─ 桥接文件、会话、Git 操作
 │  ├─ 检查应用与 Pi CLI 更新
@@ -239,7 +210,7 @@ PiDeck
    └─ 使用 pi 原生会话 / 工具 / 模型 / 上下文
 ```
 
-核心设计原则：**一个 Agent 会话 = 一个 pi RPC 进程**，确保会话隔离，让 pi 继续负责其原生能力；PiDeck 与 pi 之间只通过 stdio JSON-RPC 通信。DSH 后端以 utilityProcess 内嵌引导，同样不引入额外网络端口。
+核心设计原则：**一个 Agent 会话 = 一个 pi RPC 进程**，确保会话隔离，让 pi 继续负责其原生能力；PiDeck 与 pi 之间只通过 stdio JSON-RPC 通信。
 
 ---
 
@@ -286,7 +257,7 @@ npm run dev
 
 **Q：PiDeck 和 pi 是什么关系？会改动我的会话文件吗？**
 
-A：PiDeck 是 pi 的桌面外壳（不是分支）：Agent 行为、工具调用、会话读写、模型调用全部由 pi 原生完成，PiDeck 只负责窗口管理、进程生命周期、会话浏览、Git 面板、终端和设置这些「框架层」的事，两者通过 stdio JSON-RPC 通信。pi / DSH 会话仍由各自后端原生读写，PiDeck 不改变原有会话格式；导入的 Codex / Claude 会话会转换为 PiDeck 历史副本，不影响原文件。
+A：PiDeck 是 pi 的桌面外壳（不是分支）：Agent 行为、工具调用、会话读写、模型调用全部由 pi 原生完成，PiDeck 只负责窗口管理、进程生命周期、会话浏览、Git 面板、终端和设置这些「框架层」的事，两者通过 stdio JSON-RPC 通信。pi 会话仍由 pi 原生读写，PiDeck 不改变原有会话格式；导入的 Codex / Claude 会话会转换为 PiDeck 历史副本，不影响原文件。
 
 **Q：启动后提示找不到 pi？**
 
@@ -294,11 +265,7 @@ A：PiDeck 依赖系统 `PATH` 中的 `pi` 命令。先在终端执行 `pi --ver
 
 **Q：支持哪些模型？在哪配置？**
 
-A：模型能力完全由 pi 的配置决定。PiDeck 提供可视化编辑器管理 `models.json` / `auth.json` / `settings.json`，支持连接测试；DSH 后端使用 DeepSeek 系模型，生图模式使用独立配置的生图供应商（OpenAI / 火山方舟 / SiliconFlow 等）。
-
-**Q：DSH 是什么？怎么启用？**
-
-A：DSH（DeepSeek Harness）是 DeepSeek 官方的 Agent Harness，PiDeck 对其做了深融合，能力清单见上文 [DSH 后端](#-dsh-后端)专节。在设置页的 DSH 分页完成配置后，新建会话时选择 DSH 后端即可。
+A：模型能力完全由 pi 的配置决定。PiDeck 提供可视化编辑器管理 `models.json` / `auth.json` / `settings.json`，支持连接测试；生图模式使用独立配置的生图供应商（OpenAI / 火山方舟 / SiliconFlow 等）。
 
 **Q：会收集我的数据吗？**
 

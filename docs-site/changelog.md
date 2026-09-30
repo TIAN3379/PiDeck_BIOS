@@ -10,6 +10,24 @@ description: PiDeck 每个版本的发布记录：新功能、问题修复与体
 - [中文 CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
 - [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
 
+## v0.9.0
+
+发布时间：2026-10-01
+
+- 🚀 **应用收敛为 Pi + ImageGen 双后端架构**
+- 🚀 **DSH 后端已整体移除**
+- 🚀 **更新与打包链路去掉 DSH**
+- 🚀 **文案与测试随裁剪收缩**
+
+## v0.8.0
+
+发布时间：2026-09-30
+
+- 🚀 **BIOS Agent 首个自用版本**
+- 🚀 **桌面图标直接启动**
+- 🚀 **保留上游兼容边界**
+- 🚀 **移除原作者 AtomGit 自动推送**
+
 ## v0.7.7
 
 发布时间：2026-09-22

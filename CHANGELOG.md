@@ -1,3 +1,15 @@
+## v0.9.0 - 2026-10-01
+
+### 🚀 New Features
+- **App converged on a Pi + ImageGen two-backend architecture** - The desktop app no longer shows or starts any DSH functionality: the DSH config pages and provider panel, the DSH tool panel, permission presets, the goal bar, the DSH runtime/node install entry, and the DSH update and packaging chain are all gone. Creating a session now offers only Pi and ImageGen, which means a faster start and a cleaner UI. The app name, the PiDeck MIT license and the contributor attribution are unchanged.
+
+### ⚠️ Breaking Changes
+- **The DSH backend has been removed entirely** - If your default backend was DSH, the app now starts Pi instead; no manual configuration change is needed. Sessions that ran on DSH no longer appear in the sidebar or the activity page (the session files themselves stay untouched on disk). The legacy `dshSessionId`, `agentPreset` and `permissionPreset` fields in `settings.json` / the catalog are read-only compatibility only: they are neither displayed nor consumed, and their presence can no longer break startup or lose data.
+
+### 🧰 Maintenance
+- **DSH removed from the update and packaging chain** - The `publish-dsh-runtime` and `publish-dsh-runner-node` workflows and their packaging scripts are gone, and the workflow_dispatch tag dropdown is trimmed to match.
+- **Copy and tests trimmed with the crop** - 800 unreferenced DSH keys were removed from both renderer locale dictionaries and the main-process copy (388 per locale + 24 in the main process); DSH-only unit tests and E2E specs were deleted, the remaining tests now assert the Pi / ImageGen contract, and all 6154 test cases pass.
+
 ## v0.8.0 - 2026-09-30
 
 ### 🚀 New Features

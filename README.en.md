@@ -11,7 +11,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.8.0-blue)
+![Version](https://img.shields.io/badge/version-0.9.0-blue)
 
 <!-- star-history:start -->
 <picture>
@@ -29,11 +29,11 @@
 
 **BIOS Agent** is a personal Agent desktop application maintained by TIAN3379. The current focus is a self-use Windows distribution, normal double-click launching, and incremental secondary development. It retains PiDeck's Electron workbench architecture and delegates Agent behavior to the external `pi` CLI.
 
-**PiDeck** is an open-source desktop workbench for pi and DSH that manages pi Agent sessions across local project folders, with import support for local Codex and Claude sessions so you can browse and restore them in one place. Built with Electron + TypeScript, it provides multi-project workspace management, AI session history, Git integration, built-in terminal, visual config management, and plugin extensions — so local AI coding assistants stay consistent, traceable, and configurable across projects.
+**PiDeck** is an open-source desktop workbench for pi that manages pi Agent sessions across local project folders, with import support for local Codex and Claude sessions so you can browse and restore them in one place. Built with Electron + TypeScript, it provides multi-project workspace management, AI session history, Git integration, built-in terminal, visual config management, and plugin extensions — so local AI coding assistants stay consistent, traceable, and configurable across projects.
 
 **Who it's for:** Developers who want to manage multiple local-project AI coding assistant sessions from a desktop app, review session history and Git status in one place, and configure pi through visual editors instead of raw JSON files.
 
-`PiDeck` is **not** a fork of pi. It is a lightweight Electron shell that orchestrates multiple `pi --mode rpc` processes, providing a native desktop UI for projects, sessions, conversations, configuration, and tool orchestration — all powered by pi's native agent capabilities, with session files read and written natively by pi. Beyond pi, PiDeck also deeply integrates the **DSH (DeepSeek Harness)** backend — see [DSH Backend](#-dsh-backend).
+`PiDeck` is **not** a fork of pi. It is a lightweight Electron shell that orchestrates multiple `pi --mode rpc` processes, providing a native desktop UI for projects, sessions, conversations, configuration, and tool orchestration — all powered by pi's native agent capabilities, with session files read and written natively by pi.
 
 ---
 
@@ -52,7 +52,6 @@
     - [Models & Configuration](#models--configuration)
     - [Extensions & Ecosystem](#extensions--ecosystem)
     - [Desktop & System Integration](#desktop--system-integration)
-  - [🐳 DSH Backend](#-dsh-backend)
   - [🏗️ How It Works](#-how-it-works)
   - [📦 Download](#-download)
   - [🧰 Quick Start (from Source)](#-quick-start-from-source)
@@ -71,7 +70,7 @@
 ## ✨ Highlights
 
 - 🖥️ **Multi-project, multi-session in parallel** — manage every agent session across your local projects from one window, fully isolated per project.
-- 🔌 **Three session backends** — pi, DSH (DeepSeek Harness), and Image Generation side by side, freely switchable within the same project.
+- 🔌 **Two session backends** — pi and Image Generation side by side, freely switchable within the same project.
 - 🧠 **Context-aware composer** — `@` file references, `/` slash commands, and `!` shell execution, all in one input box.
 - 🗂️ **Sessions as assets** — browse and restore history, import Codex / Claude sessions, one-click HTML export.
 - 🛠️ **Visual configuration** — edit pi's `models.json` / `auth.json` / `settings.json` without hand-writing JSON, with one-click connection tests.
@@ -83,25 +82,13 @@
 
 ## 📋 Changelog
 
-> **Latest: v0.7.7** (2026-09-22)
+> **Latest: v0.9.0** (2026-10-01)
 
-### v0.7.7 Release Highlights
-- 🚀 **Search workspace files by name (#215)**
-- 🚀 **Import sessions from another directory (recover history after a move or rename)**
-- 🚀 **Import external resources (MCP / skills / prompt templates)**
-- 🚀 **Strict tool sampling can be switched explicitly (`compat.supportsStrictMode`)**
-- 🚀 **Hide and reorder providers, models and auth entries**
-- 🚀 **New “cycle model” and “cycle thinking effort” shortcuts (Ctrl+M / Ctrl+T, macOS ⌘⌥M / ⌘⌥T)**
-- 🚀 **Session tab hover tooltips show the workspace**
-- 🚀 **Hour-scale durations for long tasks**
-- 🚀 **DSH host can be stopped manually (persisted across restarts)**
-- 🚀 **The pi environment guide installs portable Node and the pi CLI in one click**
-- 🚀 **DSH runtime archives are cross-packed from a single runner**
-- 🚀 **The model catalogue moves to pi 0.86.1 (1443 models)**
-- ✨ **Third-party relays no longer fail to list models — or to use a manually typed one**
-- ✨ **Provider User-Agent collapsed into a single editable dropdown, with a much fuller preset list**
-- ✨ **Shared DSH config directory is now called out (#189)**
-- ✨ **Announcement toasts no longer repeat forever**
+### v0.9.0 Release Highlights
+- 🚀 **App converged on a Pi + ImageGen two-backend architecture**
+- 🚀 **The DSH backend has been removed entirely**
+- 🚀 **DSH removed from the update and packaging chain**
+- 🚀 **Copy and tests trimmed with the crop**
 
 [View Full Changelog →](CHANGELOG.md)
 
@@ -122,7 +109,7 @@
 
 | Feature | Description |
 |---|---|
-| **Dual Agent Backends (pi / DSH)** | Create pi or DSH sessions under the same project and switch between them freely — see [DSH Backend](#-dsh-backend) below. |
+| **Two session backends (pi / Image Generation)** | Create pi or Image Generation sessions under the same project and switch between them freely. |
 | **Image Generation Mode** | A standalone image-generation backend (OpenAI-compatible `/images/generations`; OpenAI / Volcengine / SiliconFlow, etc.), switchable inside a session. |
 | **Plan Mode** | Switch to Plan Mode from the composer toolbar — the agent generates a plan, executes step by step with confirmation, and returns to the menu on cancel. |
 | **Ask Parallel Queries** | Spin up standalone background query sessions that run in parallel, optionally carrying the main-session context, with one-click quoting back into the main composer. |
@@ -175,23 +162,8 @@
 | **Notifications** | Global notifications as card toasts; a dedicated Ask system-notification toggle keeps background queries silent. |
 | **Application Updates** | App-update checks always run in the background and `autoDownloadUpdates` defaults to enabled; after download, the user confirms **Restart and install** in Settings. Windows/Linux use the bundled updater, while macOS opens the GitHub Release for manual installation; Pi CLI checks run independently. |
 | **Feishu Bot** | Bind a session to a Feishu bot to sync messages and status into a Feishu group. |
-| **LAN Web Service** | Start a local web service from Settings and open the web edition from any device on the LAN, with dual-backend session browsing and the DSH tool panel. |
+| **LAN Web Service** | Start a local web service from Settings and open the web edition from any device on the LAN, with browsing for both session backends. |
 | **Process Monitor / Log Management** | Built-in process monitoring and cache/log management in Settings — no more digging through directories. |
-
----
-
-## 🐳 DSH Backend
-
-Beyond pi, PiDeck deeply integrates **DSH (DeepSeek Harness, DeepSeek's official Agent Harness)**: pi and DSH sessions coexist under the same project and can be browsed side by side, with pi / DSH badges on session rows and headers.
-
-- **Zero-port deep fusion** — the DSH host runs embedded in a utilityProcess: no `dsh web`, no listening ports, no background HTTP; lazy startup never slows app launch.
-- **Full session capabilities** — paginated history, fork (branch from an anchor with the fork-point text backfilled into the composer), `/compact` context compression; sessions restore automatically after an app restart.
-- **Approval & question bridge** — DSH approval requests and questions are answered through the desktop Ask dialog, matching the pi session experience.
-- **DSH configuration page** — the DSH tab in Settings: schema-driven visual editors for settings/credentials, host-level model catalog, host status & restart.
-- **Skill catalog & command completion** — the session tool panel lists invokable DSH skills (call them with `/name`), and the composer `/` menu enumerates host-registered commands in real time (including user/plugin ones).
-- **Usage queries & export** — the same provider usage display as the pi side, with credentials read from DSH's official credential store; history sessions export to self-contained HTML.
-
-**To enable:** finish configuration in the DSH tab of Settings, then choose the DSH backend when creating a session.
 
 ---
 
@@ -202,7 +174,6 @@ PiDeck
 ├─ Electron Main Process
 │  ├─ Manages project records
 │  ├─ Spawns one pi --mode rpc process per agent session
-│  ├─ Embeds the DSH host (utilityProcess — no ports, no background HTTP)
 │  ├─ Manages agent-scoped local pty terminals
 │  ├─ Bridges file / session / git operations
 │  ├─ Checks for app and Pi CLI updates
@@ -225,7 +196,7 @@ PiDeck
    └─ Native pi sessions / tools / models / context
 ```
 
-Core design principle: **one agent session = one pi RPC process**, keeping sessions isolated and letting pi own its native behavior; PiDeck and pi communicate only over stdio JSON-RPC. The DSH backend runs embedded in a utilityProcess and likewise introduces no extra network ports.
+Core design principle: **one agent session = one pi RPC process**, keeping sessions isolated and letting pi own its native behavior; PiDeck and pi communicate only over stdio JSON-RPC.
 
 ---
 
@@ -272,7 +243,7 @@ Requirements: Node.js 20+, npm.
 
 **Q: What is the relationship between PiDeck and pi? Does PiDeck modify my session files?**
 
-A: PiDeck is a desktop shell for pi (not a fork): agent behavior, tool calls, session I/O, and model calls are all handled natively by pi, while PiDeck takes care of the "framework" layer — window management, process lifecycle, session browsing, the Git panel, terminal, and settings — communicating over stdio JSON-RPC only. pi / DSH sessions are still read and written natively by their own backends, and PiDeck never changes the original session format. Imported Codex / Claude sessions become PiDeck history copies and leave the original files untouched.
+A: PiDeck is a desktop shell for pi (not a fork): agent behavior, tool calls, session I/O, and model calls are all handled natively by pi, while PiDeck takes care of the "framework" layer — window management, process lifecycle, session browsing, the Git panel, terminal, and settings — communicating over stdio JSON-RPC only. pi sessions are still read and written natively by pi, and PiDeck never changes the original session format. Imported Codex / Claude sessions become PiDeck history copies and leave the original files untouched.
 
 **Q: PiDeck says it cannot find pi on startup?**
 
@@ -280,11 +251,7 @@ A: PiDeck relies on the `pi` command being available in your system `PATH`. Run 
 
 **Q: Which models are supported? Where do I configure them?**
 
-A: Model capabilities are entirely determined by pi's configuration. PiDeck ships visual editors for `models.json` / `auth.json` / `settings.json` with connection tests; the DSH backend uses DeepSeek models, and Image Generation mode uses separately configured image providers (OpenAI / Volcengine / SiliconFlow, etc.).
-
-**Q: What is DSH? How do I enable it?**
-
-A: DSH (DeepSeek Harness) is DeepSeek's official Agent Harness, deeply integrated by PiDeck — see the [DSH Backend](#-dsh-backend) section for the capability list. Finish configuration in the DSH tab of Settings, then choose the DSH backend when creating a session.
+A: Model capabilities are entirely determined by pi's configuration. PiDeck ships visual editors for `models.json` / `auth.json` / `settings.json` with connection tests; Image Generation mode uses separately configured image providers (OpenAI / Volcengine / SiliconFlow, etc.).
 
 **Q: Does it collect my data?**
 
