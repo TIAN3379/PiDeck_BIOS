@@ -48,7 +48,7 @@ export function ComposerPickerHost(props: ComposerPickerHostProps) {
 		return <PromptTemplatePicker templates={props.templates} onClose={props.onClose} onPick={props.onInsertTemplate} onInsertContent={props.onInsertTemplateContent} />;
 	}
 	if (props.picker === "skill") {
-		return <ComposerSkillPicker backend={preference.isDshSession ? "dsh" : "pi"} projectId={preference.projectId} agentId={preference.agentId} onClose={props.onClose} onPick={props.onInsertSkill} onInsertContent={props.onInsertSkillContent} />;
+		return <ComposerSkillPicker projectId={preference.projectId} onClose={props.onClose} onPick={props.onInsertSkill} onInsertContent={props.onInsertSkillContent} />;
 	}
 	if (props.picker === "model") {
 		// DSH 会话的模型归属 host（agent-default-model），不读 pi 的欢迎页偏好：
@@ -69,20 +69,16 @@ export function ComposerPickerHost(props: ComposerPickerHostProps) {
 				favoriteModels={preference.favoriteModels}
 				onToggleFavorite={(provider, modelId) => void preference.toggleFavorite(provider, modelId)}
 				recentProviders={preference.recentProviders}
-				// 自定义顺序随会话后端：DSH 目录分组是 route 名，用 dshProviderOrder
-				providerOrder={preference.isDshSession ? preference.dshProviderOrder : preference.providerOrder}
+				providerOrder={preference.providerOrder}
 				hiddenProviders={preference.hiddenProviders}
 				hiddenModels={preference.hiddenModels}
 				onToggleHideModel={(provider, modelId) => void preference.toggleHideModel(provider, modelId)}
-				// 用量查询链路随会话后端：DSH 目录的 provider 是 route 名，配置/凭据走 dsh 链路
-				backend={preference.isDshSession ? "dsh" : "pi"}
 			/>
 		);
 	}
 	if (props.picker === "thinking") {
 		// 档位表由 controller 解析（runtime 精确档位 > capability cache > 兼容全量）：
-		// DSH 只有当前模型明确声明 reasoningEfforts 时才裁剪，目录未加载/未识别模型时
-		// 回退全量；能力判断由 DSH / pi-ai 后端最终处理，前端不因本地元数据缺失剥夺切换入口。
+		// 能力判断由 pi 后端最终处理，前端不因本地元数据缺失剥夺切换入口。
 		return <ThinkingPicker current={preference.currentThinkingLevel} levels={preference.thinkingLevels} onClose={props.onClose} onPick={(level) => void preference.applyThinking(level)} />;
 	}
 	return (

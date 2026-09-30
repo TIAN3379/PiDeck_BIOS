@@ -59,7 +59,7 @@ test("does not restore an unsubmitted draft after the catalog is reloaded", asyn
 // 回归：DSH 草稿必须跨重启保留（host 会话由 $DSH_HOME 持久化，catalog 只是映射）。
 // 仅清除 pi 后端（backend !== "dsh"）的草稿；dsh draft（含带 dshSessionId 的异常
 // 中间态）与 active 条目都应原样保留。
-test("keeps dsh drafts across reload while clearing pi drafts", async () => {
+test("clears every unsubmitted draft across reload", async () => {
 	const { SessionCatalog } = loadCatalog();
 	const dir = await mkdtemp(join(tmpdir(), "pideck-catalog-dsh-draft-"));
 	const filePath = join(dir, "sessions.json");
@@ -94,16 +94,16 @@ test("keeps dsh drafts across reload while clearing pi drafts", async () => {
 		const catalog = new SessionCatalog(filePath);
 		await catalog.load();
 		const ids = new Map(catalog.listEntries().map((item) => [item.id, item]));
-		assert.equal(ids.size, 3, "pi draft should be cleared on load");
-		assert.equal(ids.get("dsh-draft")?.status, "draft", "dsh draft without dshSessionId must survive");
-		assert.equal(ids.get("dsh-draft-with-session")?.status === "draft" && ids.get("dsh-draft-with-session")?.dshSessionId === "session-host-orphan", true, "dsh draft with dshSessionId (abnormal mid-state) must survive");
+		assert.equal(ids.size, 1, "all drafts should be cleared on load");
 		assert.equal(ids.get("active")?.status, "active", "active entry preserved");
 		assert.equal(ids.get("pi-draft"), undefined, "pi draft removed from memory");
-		// 清理结果应落盘：磁盘上也不再有 pi draft
+		assert.equal(ids.get("dsh-draft"), undefined);
+		assert.equal(ids.get("dsh-draft-with-session"), undefined);
+		// 清理结果应落盘：磁盘上也不再有 draft
 		const persisted = JSON.parse(await readFile(filePath, "utf8"));
 		const persistedIds = persisted.sessions.map((item) => item.id);
-		assert.ok(persistedIds.includes("dsh-draft"), "dsh draft persisted after cleanup");
-		assert.ok(persistedIds.includes("dsh-draft-with-session"), "dsh mid-state draft persisted after cleanup");
+		assert.ok(!persistedIds.includes("dsh-draft"));
+		assert.ok(!persistedIds.includes("dsh-draft-with-session"));
 		assert.ok(!persistedIds.includes("pi-draft"), "pi draft not persisted after cleanup");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
@@ -136,7 +136,7 @@ test("persists an active session backend switch from pi to dsh", async () => {
 	}
 });
 
-test("persists DSH session id so a restarted app can attach the same host session", async () => {
+test("legacy DSH draft metadata is removed on restart", async () => {
 	const { SessionCatalog } = loadCatalog();
 	const dir = await mkdtemp(join(tmpdir(), "pideck-catalog-dsh-"));
 	try {
@@ -157,12 +157,10 @@ test("persists DSH session id so a restarted app can attach the same host sessio
 		assert.equal(record?.dshSessionId, "session-host-abc123");
 		assert.equal(record?.filePath, undefined, "DSH 会话不落 pi 会话文件");
 		assert.equal(record?.status, "draft", "预热只绑 host id，不能把空草稿抬成 active");
-		// 重启后 catalog 重载：dshSessionId 存活，Coordinator 可据此 attach 旧会话。
+		// DSH runtime 已移除：重启时按普通未提交草稿清理旧映射。
 		const reloaded = new SessionCatalog(join(dir, "sessions.json"));
 		await reloaded.load();
-		const restored = reloaded.getRecord(draft.id);
-		assert.equal(restored?.backend, "dsh");
-		assert.equal(restored?.dshSessionId, "session-host-abc123");
+		assert.equal(reloaded.getRecord(draft.id), undefined);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -680,7 +678,7 @@ test("maps scanned child parent paths to desktop session IDs and survives reload
 	}
 });
 
-test("DSH attachRuntime ignores zstd filePath and only promotes draft when asked", async () => {
+test("legacy runtime metadata follows the normal file attachment path", async () => {
 	const { SessionCatalog } = loadCatalog();
 	const dir = await mkdtemp(join(tmpdir(), "pideck-catalog-dsh-promote-"));
 	try {
@@ -698,8 +696,8 @@ test("DSH attachRuntime ignores zstd filePath and only promotes draft when asked
 			dshSessionId: "session-host-abc123",
 		});
 		const warmed = catalog.getRecord(draft.id);
-		assert.equal(warmed?.filePath, undefined, "zstd 不得写入 filePath");
-		assert.equal(warmed?.status, "draft");
+		assert.equal(warmed?.filePath, "C:\\Users\\me\\.dsh\\sessions\\ws\\session-1\\session.jsonl.zst");
+		assert.equal(warmed?.status, "active");
 		await catalog.attachRuntime({
 			sessionId: draft.id,
 			dshSessionId: "session-host-abc123",
@@ -742,22 +740,6 @@ test("runtime event attachment rejects active origin changes but accepts metadat
 			},
 		),
 		true,
-	);
-	assert.equal(
-		canAttachRuntimeMetadata(
-			{
-				...active,
-				backend: "dsh",
-				filePath: undefined,
-				status: "draft",
-			},
-			{
-				sessionPath: "C:/Users/me/.dsh/sessions/ws/session-1/session.jsonl.zst",
-				backend: "dsh",
-			},
-		),
-		false,
-		"DSH zstd 路径不得走 pi 文件配对",
 	);
 });
 

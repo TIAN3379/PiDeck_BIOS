@@ -206,9 +206,7 @@ export type ProxyApplyStrategy =
 	/** 会话正在运行（且可重启）：保存后自动重启进程，代理立即生效 */
 	| "restart-now"
 	/** 无进程：下次启动会话时自然生效，无需额外动作 */
-	| "next-start"
-	/** DSH 共享 host：不能按会话重启（会波及所有 DSH 会话），只提示 */
-	| "dsh-host-restart";
+	| "next-start";
 
 /**
  * 决定「会话代理设置」保存后如何生效（纯函数，可单测）。
@@ -217,11 +215,9 @@ export type ProxyApplyStrategy =
  * 统一提示「重启该会话后生效」，用户得自己走「停止 → 启动」两步；本函数存在的意义就是
  * 把这套判定收敛掉，让 UI 在可重启时直接自动重启（一步生效）。
  *
- * - DSH 优先判定：其会话共享单一 host，按会话重启会杀掉全部 DSH 会话，永远不自动重启。
- * - 只有 live（starting/idle/running）才值得重启：终态进程已死，下次启动自然读新配置。
+ * 只有 live（starting/idle/running）才值得重启：终态进程已死，下次启动自然读新配置。
  */
-export function resolveProxyApplyStrategy(input: { backend?: string; hasBinding: boolean; isLive: boolean }): ProxyApplyStrategy {
-	if (input.backend === "dsh") return "dsh-host-restart";
+export function resolveProxyApplyStrategy(input: { hasBinding: boolean; isLive: boolean }): ProxyApplyStrategy {
 	if (input.hasBinding && input.isLive) return "restart-now";
 	return "next-start";
 }

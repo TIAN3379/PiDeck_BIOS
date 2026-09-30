@@ -14,7 +14,6 @@ import { probeAllMirrors, type MirrorHealthResult } from "../update/mirrorHealth
 import { ChangelogService, type ChangelogLanguage } from "../update/ChangelogService";
 import { normalizeUpdateSource } from "../update/updateSources";
 import type { RpcLogEntry } from "../../shared/types/rpcLog";
-import { DSH_BUNDLED_RUNTIME_DIRNAME, readBundledRuntime, readDeclaredDshVersion } from "../dsh/runtime/DshRuntimeManager";
 import { resolveAppTimes } from "../utils/appInfoTimes";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -33,10 +32,6 @@ import type { RpcLogger } from "../logging/RpcLogger";
 import type { SessionRuntimeCoordinator } from "../sessions/SessionRuntimeCoordinator";
 import { resolveConfigProxyTarget } from "../sessions/sessionProxyPolicy";
 import { setConfiguredGitPath } from "../git/gitExecutable";
-import { detectDshRunnerNode } from "../dsh/dshRunnerNode";
-import { DSH_RUNNER_NODE_ENV } from "../dsh/dshRunnerNodeSidecar";
-import { installDshRunnerNodeSidecar } from "../dsh/dshRunnerNodeInstall";
-import { createNetDownloader, fetchDshRunnerNodeIndex } from "../dsh/runtime/dshRuntimeIo";
 import { refreshShortcutBindings } from "../appShortcuts";
 import type { ConfigProxyMode } from "../../shared/types/fetchedModel";
 import type { SkillManager } from "../skills/SkillManager";
@@ -52,17 +47,14 @@ import type { PiModelCapabilityCache } from "../pi/PiModelCapabilityCache";
 import { getPiAiCatalogIndex, readBuiltinPiAiCatalogVersion } from "../pi/piAiBuiltinCatalog";
 import { resolveModelSpecFromCatalogs } from "../pi/modelCapabilityResolver";
 import { getProcessSnapshot } from "../process/ProcessMonitor";
-import { buildDshHostMonitorRow, isDshHostMonitorId } from "../process/dshHostMonitor";
 import type { AgentProcessMetric, DiagnosticsSnapshot, ProcessMetricsSnapshot } from "../../shared/types";
 import type { DiagnosticsMonitor } from "../diagnostics/DiagnosticsMonitor";
 import { getWslExe, decodeWslOutput, parseWslDistroList } from "../wsl/wslExe";
 import { listWebNetworkAddresses } from "../web/WebNetwork";
 import { toggleMainWindowDevTools } from "../devTools";
-import { applyProviderMigration, previewProviderMigration, type ProviderMigrationDeps } from "../config/providerMigrationService";
 import { USAGE_PROBE_CANDIDATES } from "../config/providerUsageProbe";
 import { saveUsageProbeForProvider } from "../config/userUsageProbes";
 import type { UsageProbeProviderConfig, UsageProbeTestInput } from "../../shared/types/providerUsage";
-import type { ProviderMigrationDirection } from "../../shared/types/providerMigration";
 import type { McpConfigFile, McpServerDefinition } from "../../shared/types/mcp";
 import type { HealthExportResult, HealthReport, HealthReportContext, HealthReportFormat } from "../../shared/types";
 import type { EnvironmentDoctor } from "../health/EnvironmentDoctor";
@@ -121,33 +113,19 @@ export type SystemIpcDeps = {
 	appLogger: AppLogger;
 	rpcLogger: RpcLogger;
 	sessionRuntimeCoordinator: SessionRuntimeCoordinator;
-	/** pi 环境引导：便携 Node 安装器（下载/解压 IO 由 index.ts 装配 DSH 同源实现）；未装配 = 引导入口降级不可用。 */
+	/** pi 环境引导：便携 Node 安装器；未装配 = 引导入口降级不可用。 */
 	piRuntimeNodeInstaller?: import("../pi/runtimeNodeInstall").RuntimeNodeInstallerDeps;
-	/** DSH 后端判定（G17：RPC 日志按 backend 分流）。 */
-	isDshAgent?: (agentId: string) => boolean;
-	/** DSH RPC 日志开关（G17；未装配 = 无 DSH 后端）。 */
-	setDshRpcLogging?: (agentId: string, enabled: boolean) => void;
-	/** DSH RPC 日志状态查询（G17）。 */
-	isDshRpcLogging?: (agentId: string) => boolean;
 	/** 开发诊断采样（设置开关热启停） */
 	diagnosticsMonitor?: DiagnosticsMonitor;
 	/** 进程监控停止 agent：按 agentId 走完整会话停止链路（含 detach 推送），装配层注入 */
 	stopAgentFromMonitor: (agentId: string) => Promise<SessionCommandResult<SessionRuntimeTarget | undefined>>;
-	/** DSH host utilityProcess pid；未 fork 返回 undefined。 */
-	getDshHostPid?: () => number | undefined;
-	/** 当前挂在 host 上的 DSH 会话（监控行展示用，不各自占 pid）。 */
-	listDshMonitorSessions?: () => Array<{ title?: string }>;
-	/** 停止 DSH host：先卸会话再 dispose，不能走 pi stopAgentById。 */
-	stopDshHostFromMonitor?: () => Promise<SessionCommandResult<undefined>>;
-	/** 单供应商 pi↔DSH 互迁（不为此拉起 host）。 */
-	providerMigration?: ProviderMigrationDeps;
 	/** 全局 Pi 模型 capability snapshot（启动/配置变更时 hydration，picker 只读）。 */
 	modelCapabilityCache: PiModelCapabilityCache;
 	/** 内置 TokenDance 模型目录（live fetch + userData 缓存）；未装配 = 列表不注入。 */
 	tokendanceCatalog?: TokendanceCatalogStore;
 	/** 内置 TokenDance OAuth 授权流程（PKCE verifier 内存持有）；未装配 = 授权入口不可用。 */
 	tokendanceAuth?: TokendanceAuthStore;
-	/** TokenDance 一键安装（写入 pi models.json + DSH llm-pi-ai）；未装配 = 配置入口不可用。 */
+	/** TokenDance 一键安装（写入 pi models.json）；未装配 = 配置入口不可用。 */
 	tokendanceInstall?: (apiKey?: string) => Promise<TokendanceInstallResult>;
 	/** 环境体检编排器（问题反馈页一键排障）。 */
 	environmentDoctor?: EnvironmentDoctor;
@@ -193,10 +171,6 @@ export type SystemIpcDeps = {
 	restartWebService?: (settings: AppSettings) => Promise<void>;
 	/** Session catalog set identity context */
 	setSessionCatalogIdentityContext?: (ctx: { wslDistro?: string; wslUser?: string }) => void;
-	/** DSH host 重启（改 runner node 路径后写入 fork env）。 */
-	restartDshHost?: () => Promise<boolean>;
-	/** host 是否已 fork；未启动时改路径不必立刻重启。 */
-	dshHostIsStarted?: () => boolean;
 	/** Configure WSL for various services — null 表示切回本机路径 */
 	configureSkillManagerWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
 	configurePromptManagerWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
@@ -204,12 +178,6 @@ export type SystemIpcDeps = {
 	configureConfigManagerWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
 	configureXuePromptManagerWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
 	configureAgentManagerWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
-	/**
-	 * DSH host 的 WSL 环境：DSH host 是 Windows 原生进程，workspace 解析与会话目录
-	 * 编码都必须是 Windows 主机路径。WSL 模式下项目记录是 /mnt/... 形式，缺了这层转换
-	 * 会让 workspace.resolve 直接失败（会话建不出来）。
-	 */
-	configureDshHostWsl?: (env: import("../wsl/WslPaths").WslEnvironment | null) => void;
 	/** Session command IPC error converter */
 	sessionCommandIpcError?: (error: import("../../shared/types").SessionCommandError) => Error;
 	/** 读取技能 SKILL.md 正文（装配层注入：路径白名单校验由 readSkillContent 完成）。 */
@@ -229,8 +197,6 @@ export type SystemIpcDeps = {
 	RELEASES_URL?: string;
 	/** 开发态 git 分支名（多 worktree 并行区分窗口）；正式包/共享分支为空。 */
 	devBranch?: string;
-	/** DSH 运行时管理器（读取启用中的 runtime 版本，随包 bundled manifest 兜底）。 */
-	dshRuntimeManager?: import("../dsh/runtime/DshRuntimeManager").DshRuntimeManager;
 	/** 后台更新检查服务（定时检查快照推送 / 已提示 / 跳过版本 / 立即检查 / 下载 / 安装）。 */
 	updateService?: {
 		getSnapshot: () => import("../../shared/types").AppUpdateStatusSnapshot;
@@ -298,20 +264,6 @@ async function probeSystemNpmVersion(piLocator: PiLocator): Promise<NpmAvailabil
 	}
 }
 
-/**
- * 解析「关于」面板要展示的 DSH 运行时版本：优先用户已激活/安装的 runtime（resolveActive），
- * 无则回退到随包 bundled runtime 清单；两者都没有（如 dev 模式未接 dsh-runtime）返回 undefined。
- */
-function resolveDshRuntimeVersion(manager: SystemIpcDeps["dshRuntimeManager"]): string | undefined {
-	const active = manager?.resolveActive();
-	if (active?.manifest.runtimeVersion) return active.manifest.runtimeVersion;
-	const bundled = readBundledRuntime(join(typeof process.resourcesPath === "string" ? process.resourcesPath : "", DSH_BUNDLED_RUNTIME_DIRNAME), app.getVersion());
-	if (bundled?.manifest.runtimeVersion) return bundled.manifest.runtimeVersion;
-	// 兜底：版本依赖（package.json 声明的 @deepseek-ai/dsh）。无论用户是否安装 runtime、
-	// dev 还是打包态（asar 内 package.json 可读），都能给出「本版本配套」的 dsh 版本。
-	return readDeclaredDshVersion(app.getAppPath());
-}
-
 export function registerSystemIpc(deps: SystemIpcDeps): void {
 	const {
 		piLocator,
@@ -323,9 +275,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		appLogger,
 		rpcLogger,
 		sessionRuntimeCoordinator,
-		isDshAgent,
-		setDshRpcLogging,
-		isDshRpcLogging,
 		getMainWindow,
 		mainCopy,
 		checkForAppUpdate,
@@ -347,15 +296,12 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		applyWebServiceSettings,
 		restartWebService,
 		setSessionCatalogIdentityContext,
-		restartDshHost,
-		dshHostIsStarted,
 		configureSkillManagerWsl,
 		configurePromptManagerWsl,
 		configureExtensionManagerWsl,
 		configureConfigManagerWsl,
 		configureXuePromptManagerWsl,
 		configureAgentManagerWsl,
-		configureDshHostWsl,
 		sessionCommandIpcError,
 		readSkillContent,
 		extensionManager,
@@ -364,7 +310,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		isQuitting,
 		RELEASES_URL,
 		devBranch,
-		providerMigration,
 		modelCapabilityCache,
 		tokendanceCatalog,
 		tokendanceAuth,
@@ -927,7 +872,7 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 
 	// ── 应用信息 ─────────────────────────────────────────────────────
 
-	// appInfo 现在包含 pi / DSH runtime / pi-ai 目录版本探测（pi 需要 spawn 一次进程），
+	// appInfo 包含 pi / pi-ai 目录版本探测（pi 需要 spawn 一次进程），
 	// 结果按进程生命周期缓存：并发请求共享同一 in-flight promise，失败也缓存，
 	// 避免每次打开/启动反复 spawn `pi --version` 拖慢路径。
 	let appInfoPromise: Promise<AppInfo> | undefined;
@@ -958,7 +903,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 				homeDir: app.getPath("home"),
 				devBranch: devBranch,
 				piVersion,
-				dshRuntimeVersion: resolveDshRuntimeVersion(deps.dshRuntimeManager),
 				piAiVersion: readBuiltinPiAiCatalogVersion(),
 				electronVersion: process.versions.electron ?? "",
 				chromeVersion: process.versions.chrome ?? "",
@@ -1049,22 +993,12 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 	});
 
 	ipcMain.handle(ipcChannels.processMetrics, async (): Promise<ProcessMetricsSnapshot> => {
-		const agents: Array<Pick<AgentProcessMetric, "agentId" | "pid" | "kind" | "sessionId" | "sessionTitle" | "sessionTitles">> = deps.agentManager.listAgentPids().map((agent) => {
+		const agents: Array<Pick<AgentProcessMetric, "agentId" | "pid" | "sessionId" | "sessionTitle">> = deps.agentManager.listAgentPids().map((agent) => {
 			// 进程监控表展示会话身份：按 agentId 反查关联的会话 id/标题，
 			// 让用户知道每个 agent 对应哪个会话（而不是只看到内部 id）
 			const sessionInfo = deps.sessionRuntimeCoordinator.getSessionInfoForAgent(agent.agentId);
-			return { ...agent, kind: "pi" as const, ...(sessionInfo ?? {}) };
+			return { ...agent, ...(sessionInfo ?? {}) };
 		});
-		// DSH 会话共享一个 utilityProcess：有 pid 时追加一行，不按会话伪造多个 pid。
-		const dshPid = deps.getDshHostPid?.();
-		if (dshPid) {
-			agents.push(
-				buildDshHostMonitorRow({
-					pid: dshPid,
-					sessions: deps.listDshMonitorSessions?.() ?? [],
-				}),
-			);
-		}
 		return getProcessSnapshot(agents);
 	});
 
@@ -1072,17 +1006,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		// 输入校验：agentId 必须是字符串，否则拒绝（渲染层数据不可信）
 		if (typeof agentId !== "string" || !agentId) {
 			throw new Error("invalid agentId");
-		}
-		// DSH host 行：停全部 DSH 会话 + dispose utilityProcess，不能当 pi agentId。
-		if (isDshHostMonitorId(agentId)) {
-			if (!deps.stopDshHostFromMonitor) {
-				throw new Error("DSH host stop is not available");
-			}
-			const hostResult = await deps.stopDshHostFromMonitor();
-			if (!hostResult.ok) {
-				throw new Error(hostResult.error.debugDetails ?? "failed to stop DSH host");
-			}
-			return;
 		}
 		// 走完整会话停止链路（coordinator 反查会话 + 解绑 + detach 推送），
 		// 不能只调 agentManager.stop——那会跳过会话状态收尾，渲染层运行标记不熄灭
@@ -1175,20 +1098,12 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		// target 校验失败时返回 false（而非 enabled）：此前静默返回 enabled 会让渲染层
 		// 弹「RPC 日志已打开」提醒框，实际主进程从未开启记录，导致弹窗永远无数据。
 		if (!agentId) return false;
-		// G17：DSH 会话的 RPC 日志走 DshAgentManager（领域调用记录），pi 走 AgentManager。
-		if (isDshAgent?.(agentId)) {
-			setDshRpcLogging?.(agentId, enabled);
-		} else {
-			agentManager.setRpcLogging(agentId, enabled);
-		}
+		agentManager.setRpcLogging(agentId, enabled);
 		return enabled;
 	});
 	ipcMain.handle(ipcChannels.rpcLoggingGet, async (_event, target: SessionRuntimeTarget) => {
 		const agentId = resolveRpcRuntimeAgent(target);
 		if (!agentId) return false;
-		if (isDshAgent?.(agentId)) {
-			return isDshRpcLogging?.(agentId) ?? false;
-		}
 		return agentManager.isRpcLogging(agentId);
 	});
 
@@ -1368,66 +1283,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 
 	// ── 设置 ─────────────────────────────────────────────────────────
 
-	ipcMain.handle(ipcChannels.dshDetectRunnerNode, async (_event, configuredPath?: unknown) => {
-		const configured = typeof configuredPath === "string" ? configuredPath : settingsStore.get().dshRunnerNodePath;
-		return detectDshRunnerNode({
-			configuredPath: configured,
-			envPath: process.env[DSH_RUNNER_NODE_ENV],
-			userDataPath: app.getPath("userData"),
-			resourcesPath: process.resourcesPath,
-			appPath: app.getAppPath(),
-		});
-	});
-	let runnerNodeInstallInflight: Promise<import("../../shared/types/dshRunnerNode").DshRunnerNodeInstallResult> | null = null;
-	ipcMain.handle(ipcChannels.dshInstallRunnerNode, async () => {
-		if (process.platform !== "win32") {
-			return { ok: false, error: "仅 Windows 需要单独的 Node 24 沙箱副本" };
-		}
-		if (runnerNodeInstallInflight) return runnerNodeInstallInflight;
-		runnerNodeInstallInflight = (async () => {
-			const settings = settingsStore.get();
-			const result = await installDshRunnerNodeSidecar({
-				userDataPath: app.getPath("userData"),
-				platform: process.platform,
-				updateSource: normalizeUpdateSource(settings.updateSource),
-				indexUrl: process.env.DSH_RUNNER_NODE_INDEX_URL || settings.dshRunnerNodeIndexUrl,
-				download: createNetDownloader((scope, message, detail) => {
-					void appLogger.info(scope, message, detail);
-				}),
-				fetchIndex: (url) =>
-					fetchDshRunnerNodeIndex(url, (scope, message, detail) => {
-						void appLogger.info(scope, message, detail);
-					}),
-			});
-			if (result.ok && restartDshHost && dshHostIsStarted?.()) {
-				void restartDshHost().catch((error) => {
-					void appLogger.warn("dsh", "Failed to restart DSH host after installing runner node", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				});
-			}
-			return result;
-		})().finally(() => {
-			runnerNodeInstallInflight = null;
-		});
-		return runnerNodeInstallInflight;
-	});
-	ipcMain.handle(ipcChannels.dshChooseRunnerNode, async () => {
-		const options = {
-			properties: ["openFile" as const],
-			filters:
-				process.platform === "win32"
-					? [
-							{ name: "Node", extensions: ["exe"] },
-							{ name: "All Files", extensions: ["*"] },
-						]
-					: [{ name: "All Files", extensions: ["*"] }],
-		};
-		const mainWindow = getMainWindow();
-		const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-		return result.canceled ? null : (result.filePaths[0] ?? null);
-	});
-
 	ipcMain.handle(ipcChannels.settingsGet, () => settingsStore.get());
 
 	ipcMain.handle(ipcChannels.settingsUpdate, async (_event, patch: Partial<AppSettings>) => {
@@ -1440,16 +1295,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		// Git 可执行文件路径：立即同步给 git 子进程解析器，保存后无需重启即生效。
 		if ("gitExecutablePath" in patch) {
 			setConfiguredGitPath(settings.gitExecutablePath);
-		}
-		// DSH runner 的 node 路径写入 host fork env：已运行的 host 必须重启才生效。
-		if ("dshRunnerNodePath" in patch && prevSettings.dshRunnerNodePath !== settings.dshRunnerNodePath) {
-			if (restartDshHost && dshHostIsStarted?.()) {
-				void restartDshHost().catch((error) => {
-					void appLogger.warn("dsh", "Failed to restart DSH host after runner node path change", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				});
-			}
 		}
 		// 自动下载更新开关：立即下发到 electron-updater（含检查期间的 autoDownload 切换）。
 		if ("autoDownloadUpdates" in patch) {
@@ -1516,7 +1361,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 				if (configureConfigManagerWsl) configureConfigManagerWsl(environment);
 				if (configureXuePromptManagerWsl) configureXuePromptManagerWsl(environment);
 				if (configureAgentManagerWsl) configureAgentManagerWsl(environment);
-				if (configureDshHostWsl) configureDshHostWsl(environment);
 			} else {
 				if (clearSessionScannerWsl) clearSessionScannerWsl();
 				if (configureSkillManagerWsl) configureSkillManagerWsl(null);
@@ -1525,7 +1369,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 				if (configureConfigManagerWsl) configureConfigManagerWsl(null);
 				if (configureXuePromptManagerWsl) configureXuePromptManagerWsl(null);
 				if (configureAgentManagerWsl) configureAgentManagerWsl(null);
-				if (configureDshHostWsl) configureDshHostWsl(null);
 			}
 		}
 		if ("customPiPath" in patch || "wslEnabled" in patch || "wslDistro" in patch || "wslUser" in patch) {
@@ -1607,35 +1450,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 
 	ipcMain.handle(ipcChannels.configGetModels, () => configManager.getModelsConfig());
 	// 预览/执行单供应商互迁：方向必须是枚举，供应商名在服务层再校验。
-	ipcMain.handle(ipcChannels.configPreviewProviderMigration, async (_event, direction: unknown) => {
-		if (direction !== "pi-to-dsh" && direction !== "dsh-to-pi") {
-			throw new Error("invalid migration direction");
-		}
-		if (!providerMigration) throw new Error("provider migration is not available");
-		return previewProviderMigration(providerMigration, direction as ProviderMigrationDirection);
-	});
-	ipcMain.handle(ipcChannels.configApplyProviderMigration, async (_event, direction: unknown, provider: unknown) => {
-		if (direction !== "pi-to-dsh" && direction !== "dsh-to-pi") {
-			throw new Error("invalid migration direction");
-		}
-		if (typeof provider !== "string") throw new Error("invalid provider name");
-		if (!providerMigration) throw new Error("provider migration is not available");
-		const result = await applyProviderMigration(providerMigration, direction as ProviderMigrationDirection, provider);
-		if (result.ok) {
-			void refreshPiModelCatalogs().catch(() => undefined);
-		}
-		void appLogger.info("config", "Provider migration applied", {
-			direction,
-			provider,
-			ok: result.ok,
-			copiedKey: result.copiedKey,
-			wroteViaHost: result.wroteViaHost,
-			// 失败时记录具体原因（OAuth 拒绝 / 对面没有 / catalog 缺失 / provider not found），
-			// 否则“点迁移报错”只能靠打断点查，日志里看不出是哪条失败分支。
-			...(result.error ? { error: result.error } : {}),
-		});
-		return result;
-	});
 	ipcMain.handle(ipcChannels.configGetAuth, () => configManager.getAuthConfig());
 	ipcMain.handle(ipcChannels.configGetSettings, () => configManager.getSettingsConfig());
 	ipcMain.handle(ipcChannels.configGetTrust, () => configManager.getTrustConfig());
@@ -1802,11 +1616,11 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 	ipcMain.handle(ipcChannels.configInstallTokendance, async (_event, payload: unknown) => {
 		// 边界校验：apiKey 为可选字符串（渲染层入参不可信）；Key 不写日志。
 		if (!tokendanceInstall) {
-			return { ok: false, modelCount: 0, piSaved: false, dshSaved: false, error: "TokenDance install unavailable" };
+			return { ok: false, modelCount: 0, piSaved: false, error: "TokenDance install unavailable" };
 		}
 		const apiKey = payload && typeof payload === "object" ? (payload as { apiKey?: unknown }).apiKey : undefined;
 		if (typeof apiKey !== "undefined" && typeof apiKey !== "string") {
-			return { ok: false, modelCount: 0, piSaved: false, dshSaved: false, error: "Invalid install input" };
+			return { ok: false, modelCount: 0, piSaved: false, error: "Invalid install input" };
 		}
 		try {
 			const result = await tokendanceInstall(typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined);
@@ -1814,10 +1628,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 				ok: result.ok,
 				modelCount: result.modelCount,
 				piSaved: result.piSaved,
-				dshSaved: result.dshSaved,
-				dshWroteViaHost: result.dshWroteViaHost,
-				// 失败原因仅诊断用（DSH schema 拒绝等），不含任何 Key 内容
-				dshError: result.dshError,
 			});
 			if (result.ok) {
 				// 写盘后立即失效 model capability 快照：watcher（250ms debounce）会接管刷新
@@ -1830,7 +1640,7 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 			void appLogger.warn("config", "TokenDance install failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return { ok: false, modelCount: 0, piSaved: false, dshSaved: false, error: "TokenDance install failed" };
+			return { ok: false, modelCount: 0, piSaved: false, error: "TokenDance install failed" };
 		}
 	});
 	ipcMain.handle(ipcChannels.configTestProvider, async (_event, payload: unknown) => {
@@ -1883,19 +1693,16 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 			await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 		}
 	});
-	ipcMain.handle(ipcChannels.configFetchUsage, async (_event, payload: { provider: string; backend?: "pi" | "dsh" }) => {
+	ipcMain.handle(ipcChannels.configFetchUsage, async (_event, payload: { provider: string }) => {
 		// 1) 边界校验：provider 名必须是有限的非空字符串，避免把任意 IPC 载荷当路径/URL 用。
 		const provider = payload?.provider?.trim() ?? "";
 		if (!provider || provider.length > 128) {
 			return { success: false, error: "Invalid provider name" };
 		}
-		// backend 白名单：pi（缺省）/ dsh（DSH 链路：$DSH_HOME 配置 + 凭据库）。
-		const backend = payload?.backend === "dsh" ? "dsh" : "pi";
 		// 2) 主进程按 provider 名路由：门控（未开启）→ 端点解析 → 模板探测，key 不出主进程。
-		const result = await configManager.fetchProviderUsage(provider, backend);
+		const result = await configManager.fetchProviderUsage(provider);
 		void appLogger.info("config", "Provider usage fetched", {
 			provider,
-			backend,
 			success: result.success,
 			error: result.error,
 		});
@@ -1904,38 +1711,34 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 	// ── 用量查询配置（usage-probes.json；学 cc-switch：per-provider 开关 + 模板） ──
 	// 读取：该 provider 已保存配置 + 内置模板自动识别（弹窗打开时拉取）。
 	ipcMain.handle(ipcChannels.configGetUsageProbes, async (_event, payload: unknown) => {
-		const raw = payload && typeof payload === "object" ? (payload as { provider?: unknown; backend?: unknown }) : {};
+		const raw = payload && typeof payload === "object" ? (payload as { provider?: unknown }) : {};
 		const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
 		if (!provider || provider.length > 128) {
 			return { success: false, error: "Invalid provider name" };
 		}
-		const backend = raw.backend === "dsh" ? "dsh" : "pi";
-		return configManager.getUsageProbeSettings(provider, backend);
+		return configManager.getUsageProbeSettings(provider);
 	});
 	// 按 provider 合并保存：入口校验与落盘同一套规则，零错误才写（保留文件里其它 providers 与旧 probes）。
 	ipcMain.handle(ipcChannels.configSaveUsageProbes, async (_event, payload: unknown) => {
-		const input = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as { provider?: unknown; config?: unknown; backend?: unknown }) : {};
+		const input = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as { provider?: unknown; config?: unknown }) : {};
 		const provider = typeof input.provider === "string" ? input.provider.trim() : "";
 		if (!provider || provider.length > 128) {
 			return { ok: false, error: "Invalid provider name" };
 		}
-		const backend = input.backend === "dsh" ? "dsh" : "pi";
-		const result = await saveUsageProbeForProvider(configManager.getUsageProbeConfigDir(backend), provider, input.config as UsageProbeProviderConfig);
+		const result = await saveUsageProbeForProvider(configManager.getUsageProbeConfigDir(), provider, input.config as UsageProbeProviderConfig);
 		// 日志只记 provider 与结果；apiKey/accessToken 等字段一律不落日志。
 		void appLogger.info("config", "Usage probe config saved", {
 			provider,
-			backend,
 			ok: result.ok,
 		});
 		return result;
 	});
 	// 批量状态表（徽章开关 / 启动预热选源）：只回开关/模板/间隔，不回传任何密钥。
 	ipcMain.handle(ipcChannels.configListUsageProbeStates, async (_event, payload: unknown) => {
-		const raw = payload && typeof payload === "object" ? (payload as { backend?: unknown; providers?: unknown }) : {};
-		const backend = raw.backend === "dsh" ? "dsh" : "pi";
+		const raw = payload && typeof payload === "object" ? (payload as { providers?: unknown }) : {};
 		// 渲染层数据不可信：只接受字符串数组，并限制条目数（防超大 payload 触发 N 次解析）。
 		const providers = Array.isArray(raw.providers) ? raw.providers.filter((name): name is string => typeof name === "string").slice(0, 512) : [];
-		return configManager.listUsageProbeStates(backend, providers);
+		return configManager.listUsageProbeStates(providers);
 	});
 	// 单条模板测试（弹窗「测试」按钮）：按模板 id + 覆盖字段构建候选，主进程解析端点与密钥。
 	ipcMain.handle(ipcChannels.configTestUsageProbe, async (_event, payload: unknown) => {
@@ -1956,7 +1759,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		}
 		const result = await configManager.testUsageProbe({
 			provider,
-			backend: input.backend === "dsh" ? "dsh" : "pi",
 			...(template ? { template } : {}),
 			...(typeof input.apiKey === "string" ? { apiKey: input.apiKey } : {}),
 			...(typeof input.baseUrl === "string" ? { baseUrl: input.baseUrl } : {}),
@@ -1974,7 +1776,6 @@ export function registerSystemIpc(deps: SystemIpcDeps): void {
 		});
 		void appLogger.info("config", "Usage probe tested", {
 			provider,
-			backend: input.backend === "dsh" ? "dsh" : "pi",
 			template: template ?? "(auto)",
 			success: result.success,
 		});

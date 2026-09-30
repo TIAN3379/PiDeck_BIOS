@@ -1,9 +1,8 @@
 import { t, type TranslationKey } from "../i18n";
 
 /**
- * Pi / DSH 配置关闭确认：列出**全部**脏 tab（不再只点第一个）。
+ * 配置关闭确认：列出**全部**脏 tab（不再只点第一个）。
  * 配置页大多是整页草稿（没有设置页那样的字段黄点目录），所以 item 用该 tab 自己的导航名。
- * DSH 子页脏标记是 `dsh:<navId>`；Pi 侧与 dirtyTabs 编码一致。
  */
 
 /** 单条变更项：后端名 + 导航项名（均为 i18n key，渲染时再翻译）。 */
@@ -25,26 +24,7 @@ type CatalogEntry = {
 	itemKeyFor: (key: string) => TranslationKey;
 };
 
-const DSH_NAV_ITEM_KEYS: Record<string, TranslationKey> = {
-	overview: "config.dsh.tab.overview",
-	models: "config.dsh.tab.models",
-	presets: "config.dsh.tab.presets",
-	plugins: "config.dsh.tab.plugins",
-	security: "config.dsh.tab.security",
-	auth: "config.dsh.tab.auth",
-	raw: "config.dsh.tab.raw",
-};
-
 const CATALOG: readonly CatalogEntry[] = [
-	{
-		match: (key) => key === "dsh" || key.startsWith("dsh:"),
-		tabKey: "config.backend.dsh",
-		itemKeyFor: (key) => {
-			if (key === "dsh") return "config.dsh.title";
-			const nav = key.slice("dsh:".length).split(":")[0] ?? "";
-			return DSH_NAV_ITEM_KEYS[nav] ?? "config.dsh.title";
-		},
-	},
 	{ match: (key) => key === "config:models", tabKey: "config.backend.pi", itemKeyFor: () => "config.nav.models" },
 	{ match: (key) => key === "config:auth", tabKey: "config.backend.pi", itemKeyFor: () => "config.nav.auth" },
 	{ match: (key) => key === "config:settings", tabKey: "config.backend.pi", itemKeyFor: () => "config.nav.settings" },

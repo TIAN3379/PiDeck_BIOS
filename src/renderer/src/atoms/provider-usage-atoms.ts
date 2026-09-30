@@ -77,9 +77,8 @@ export const invalidateProviderUsageAtom = atom(null, (_get, set, provider: stri
 /**
  * provider(cacheKey) → 用量查询状态（生效开关/是否已配置/是否内置识别/模板/间隔）。
  *
- * key 与用量缓存同规则：pi 链路就是 provider 名，dsh 链路是 `dsh:<provider>`
- * （usageCacheKey），因此 pi/dsh 同名供应商互不覆盖。缺失 = 尚未加载（徽章按「开」处理，
- * 与历史行为一致：无状态信息时不主动阻塞查询）。
+ * key 与用量缓存同规则（usageCacheKey = provider 名）。
+ * 缺失 = 尚未加载（徽章按「开」处理，与历史行为一致：无状态信息时不主动阻塞查询）。
  */
 const providerUsageStatesAtom = atom<Record<string, UsageProbeProviderState>>({});
 
@@ -95,13 +94,12 @@ export const mergeProviderUsageStatesAtom = atom(null, (_get, set, entries: Reco
 });
 
 /**
- * 状态表加载阶段（按 backend）：idle = 从未请求（无消费方加载器）、loading = 请求中、
- * ready = 已回过一次。自动查询据此决定「状态未知时要不要等」：
- * loading 期间不抢发（否则关掉的供应商会在状态表回来前白打一轮 HTTP）；
- * idle/ready 时未知 provider 按开处理（圆球面板/选择器可能查表外 provider）。
+ * 状态表加载阶段：idle = 从未请求（无消费方加载器）、loading = 请求中、ready = 已回过一次。
+ * 自动查询据此决定「状态未知时要不要等」：loading 期间不抢发（否则关掉的供应商会在状态表
+ * 回来前白打一轮 HTTP）；idle/ready 时未知 provider 按开处理（圆球面板/选择器可能查表外 provider）。
  */
-export const providerUsageStatesStatusAtom = atom<Record<string, "idle" | "loading" | "ready">>({});
+export const providerUsageStatesStatusAtom = atom<"idle" | "loading" | "ready">("idle");
 
-export const markProviderUsageStatesStatusAtom = atom(null, (_get, set, backend: string, status: "idle" | "loading" | "ready") => {
-	set(providerUsageStatesStatusAtom, (current) => ({ ...current, [backend]: status }));
+export const markProviderUsageStatesStatusAtom = atom(null, (_get, set, status: "idle" | "loading" | "ready") => {
+	set(providerUsageStatesStatusAtom, status);
 });

@@ -36,11 +36,9 @@ test("本地 models.json 的 input 勾选覆盖 CLI images 列", () => {
 	assert.equal(modelSupportsNativeImages([{ provider: "openai", id: "gpt-4o", images: true }], { provider: "openai", modelId: "gpt-4o" }, localOff), false);
 });
 
-test("视觉桥 UI：原生看图 / DSH 不显示转换中，未知目录保持静默", () => {
-	assert.equal(resolveVisionBridgeExpected({ backend: "dsh", modelSupportsImages: true }), false);
-	assert.equal(resolveVisionBridgeExpected({ backend: "pi", modelSupportsImages: true }), false);
-	assert.equal(resolveVisionBridgeExpected({ backend: "pi", modelSupportsImages: null }), null);
-	assert.equal(resolveVisionBridgeExpected({ backend: "pi", modelSupportsImages: false }), true);
+test("视觉桥 UI：原生看图不显示转换中，未知目录保持静默", () => {
+	assert.equal(resolveVisionBridgeExpected({ modelSupportsImages: true }), false);
+	assert.equal(resolveVisionBridgeExpected({ modelSupportsImages: null }), null);
 	assert.equal(resolveVisionBridgeExpected({ modelSupportsImages: false }), true);
 });
 

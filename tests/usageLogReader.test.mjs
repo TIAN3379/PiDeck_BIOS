@@ -215,7 +215,7 @@ test("custom parseLine is used instead of the pi-tracker array parser", async ()
 		const path = join(dir, "records.jsonl");
 		const row = JSON.stringify({
 			time: 1710000000000,
-			sessionId: "dsh-1",
+			sessionId: "s-custom",
 			provider: "deepseek",
 			model: "flash",
 			inputTokens: 10,
@@ -226,11 +226,33 @@ test("custom parseLine is used instead of the pi-tracker array parser", async ()
 			priced: true,
 		});
 		await writeFile(path, row + "\n");
-		const { parseDshBillLogLine } = await import("../src/main/usageStats/dshBillLogParser.ts");
-		const custom = new UsageLogReader({ parseLine: parseDshBillLogLine });
+		// 本用例只验证「注入的 parseLine 会替代默认数组解析器」，因此用测试内本地 parser，
+		// 不依赖任何生产侧的专用日志解析模块。
+		const parseObjectLine = (line) => {
+			try {
+				const parsed = JSON.parse(line);
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+				return {
+					ts: parsed.time,
+					sid: parsed.sessionId,
+					cwd: "",
+					model: `${parsed.provider}/${parsed.model}`,
+					input: parsed.inputTokens,
+					output: parsed.outputTokens,
+					cacheRead: parsed.cacheReadTokens,
+					cacheWrite: parsed.cacheWriteTokens,
+					totalTokens: parsed.inputTokens + parsed.outputTokens,
+					cost: parsed.usd,
+					costKnown: parsed.priced === true,
+				};
+			} catch {
+				return null;
+			}
+		};
+		const custom = new UsageLogReader({ parseLine: parseObjectLine });
 		const result = await custom.readIncremental(path, null);
 		assert.equal(result.newRecords.length, 1);
-		assert.equal(result.newRecords[0].sid, "dsh-1");
+		assert.equal(result.newRecords[0].sid, "s-custom");
 		assert.equal(result.newRecords[0].model, "deepseek/flash");
 		assert.equal(result.skippedLines, 0);
 	} finally {

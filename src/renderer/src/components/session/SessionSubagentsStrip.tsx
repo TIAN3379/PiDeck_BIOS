@@ -219,123 +219,6 @@ const PiSubagentEntryRow = (props: {
 };
 
 /* ------------------------------------------------------------------ */
-/* DSH 子代理                                                           */
-/* ------------------------------------------------------------------ */
-
-type DshSubagentEntry = {
-	id: string;
-	label?: string;
-	activity: "running" | "inactive";
-	hasChildren: boolean;
-	mode: "one-shot" | "continuable";
-	kind: "child" | "diagnostic";
-};
-
-/**
- * DSH 子代理轮询：挂载拉一次；有运行中的子代理时保持 3s 刷新（状态灯实时），
- * 全空闲停表，避免空转 IPC。与 DshAgentToolsPanel 的静态拉取相比，横栏需要
- * 跟随子代理生命周期展示「运行中」状态。
- */
-function useDshSubagents(agentId: string | undefined): DshSubagentEntry[] {
-	const [entries, setEntries] = useState<DshSubagentEntry[]>([]);
-	useEffect(() => {
-		if (!agentId) return;
-		let cancelled = false;
-		let timer = 0;
-		const load = async () => {
-			const items = await desktopApi.sessions.listDshSubagents(agentId).catch(() => [] as DshSubagentEntry[]);
-			if (cancelled) return;
-			setEntries(items);
-			// 运行中才保持轮询；全空闲停表（load 自身可被 interval 复用，注意
-			// timer 判 0 避免重复起表）
-			const hasRunning = items.some((e) => e.activity === "running");
-			if (hasRunning && timer === 0) {
-				timer = window.setInterval(load, 3000);
-			} else if (!hasRunning && timer !== 0) {
-				window.clearInterval(timer);
-				timer = 0;
-			}
-		};
-		void load();
-		return () => {
-			cancelled = true;
-			if (timer) window.clearInterval(timer);
-		};
-	}, [agentId]);
-	return entries;
-}
-
-/** 单条 DSH 子代理：点击行展开只读 transcript（readDshSubagentHistory）。 */
-const DshSubagentEntryRow = (props: { agentId: string; entry: DshSubagentEntry }) => {
-	const { entry } = props;
-	const { collapsed, toggleCollapsed } = useComposerWidgetCollapsed(`dsh-subagent:${entry.id}`, true);
-	const [transcript, setTranscript] = useState<Array<{ role: string; text: string }> | null>(null);
-	const [transcriptLoading, setTranscriptLoading] = useState(false);
-	const [transcriptError, setTranscriptError] = useState(false);
-
-	const toggle = useCallback(async () => {
-		if (!collapsed) {
-			toggleCollapsed();
-			return;
-		}
-		// 展开前现拉 transcript：与工具面板一致，避免先展开再补数据造成跳动
-		setTranscriptLoading(true);
-		setTranscriptError(false);
-		const page = await desktopApi.sessions.readDshSubagentHistory(props.agentId, entry.id).catch(() => null);
-		setTranscriptLoading(false);
-		if (page) {
-			setTranscript(
-				page.messages.map((message) => ({
-					role: message.role,
-					// 转录是纯文本出口：折叠自包含引用块，避免露出 <quoted_context> 等 XML 原文。
-					text: replaceExpandedRefBlocksWithLabels(message.text),
-				})),
-			);
-		} else {
-			setTranscriptError(true);
-		}
-		toggleCollapsed();
-	}, [collapsed, entry.id, props.agentId, toggleCollapsed]);
-
-	return (
-		<li className="rounded hover:bg-muted/40">
-			<button type="button" className="flex min-w-0 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] leading-5 hover:bg-muted/60" aria-expanded={!collapsed} onClick={() => void toggle()}>
-				<span className="grid size-5 shrink-0 place-items-center">{entry.activity === "running" ? <Loader2 size={14} className="animate-pideck-spin text-[var(--color-accent)]" /> : <span className="size-2 rounded-full bg-muted-foreground/60" aria-hidden="true" />}</span>
-				<span className="min-w-0 flex-1 truncate font-medium text-foreground">{entry.label ?? entry.id}</span>
-				{entry.activity === "running" && (
-					<span className="inline-flex shrink-0 items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-						<Loader2 size={11} className="animate-pideck-spin" aria-hidden="true" />
-						{t("dshTools.subagentRunning")}
-					</span>
-				)}
-				{entry.kind === "diagnostic" && <span className="shrink-0 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">{t("dshTools.subagentDiagnostic")}</span>}
-				<span className="shrink-0 text-[11px] text-text-tertiary">{entry.mode === "continuable" ? t("dshTools.subagentContinuable") : t("dshTools.subagentOneShot")}</span>
-				<ChevronDown size={13} className={`shrink-0 text-text-tertiary transition-transform ${collapsed ? "" : "rotate-180"}`} aria-hidden="true" />
-			</button>
-			{!collapsed && (
-				<div className="flex max-h-56 flex-col gap-1 overflow-y-auto border-t border-border-subtle px-2 py-1.5">
-					{transcriptLoading && (
-						<p className="flex items-center gap-1.5 px-1 text-xs text-text-tertiary">
-							<Loader2 size={13} className="animate-pideck-spin" aria-hidden="true" />
-							{t("dshTools.loading")}
-						</p>
-					)}
-					{!transcriptLoading && transcriptError && <p className="px-1 text-xs text-[var(--color-danger)]">{t("dshTools.subagentTranscriptError")}</p>}
-					{!transcriptLoading && !transcriptError && (transcript?.length ?? 0) === 0 && <p className="px-1 text-xs text-text-tertiary">{t("dshTools.subagentTranscriptEmpty")}</p>}
-					{!transcriptLoading &&
-						transcript?.map((message, index) => (
-							<div key={index} className={`flex flex-col gap-0.5 rounded-md px-2 py-1 ${message.role === "user" ? "bg-accent/30" : "bg-bg-panel"}`}>
-								<span className="text-[11px] text-text-tertiary">{message.role === "user" ? t("dshTools.roleUser") : t("dshTools.roleAssistant")}</span>
-								<span className="whitespace-pre-wrap break-words text-xs text-foreground">{message.text || "…"}</span>
-							</div>
-						))}
-				</div>
-			)}
-		</li>
-	);
-};
-
-/* ------------------------------------------------------------------ */
 /* 横栏本体                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -344,19 +227,13 @@ export function SessionSubagentsStrip(props: {
 	/** 打开子会话只读视图（SessionView 透传 openSidebarSessionById 通路） */
 	onOpenChildSession?: (sessionId: string) => void;
 }) {
-	const runtime = useAtomValue(sessionRuntimeBySessionIdAtomFamily(props.sessionId));
-	const isDsh = runtime?.backend === "dsh";
-	const agentId = runtime?.agentId;
-
 	const { collapsed, toggleCollapsed } = useComposerWidgetCollapsed(`subagents:${props.sessionId}`, true);
 
-	// pi：三源合并；DSH：轮询。两条数据通道只取其一，渲染层不区分后端
 	const piSubs = useSessionSubagents(props.sessionId);
-	const dshEntries = useDshSubagents(isDsh ? agentId : undefined);
-	const entries = isDsh ? dshEntries : piSubs.entries;
-	const running = isDsh ? dshEntries.filter((e) => e.activity === "running").length : piSubs.entries.filter((e) => e.status === "running" || e.status === "queued").length;
+	const entries = piSubs.entries;
+	const running = entries.filter((entry) => entry.status === "running" || entry.status === "queued").length;
 	// acp_delegate（billion-context）委托条目无子会话文件与完整结果文本，展开时提示产出位置
-	const hasAcpEntries = !isDsh && piSubs.entries.some((e) => e.via === "acp-delegate");
+	const hasAcpEntries = entries.some((entry) => entry.via === "acp-delegate");
 
 	// 无子代理：不渲染（「有那个显示那个」）。pi 空态细分（插件未装等）在展开
 	// 列表内用现有文案表达，折叠卡本身不常显空条
@@ -384,7 +261,9 @@ export function SessionSubagentsStrip(props: {
 			{!collapsed && (
 				<>
 					<ul className="mb-2 flex max-h-[240px] flex-col gap-1 overflow-y-auto overscroll-contain [contain:layout_paint] [scrollbar-gutter:stable] px-3 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-100 motion-reduce:animate-none">
-						{isDsh ? (entries as DshSubagentEntry[]).map((entry) => <DshSubagentEntryRow key={entry.id} agentId={agentId ?? ""} entry={entry} />) : entries.map((entry) => <PiSubagentEntryRow key={entry.id} entry={entry as PiSubagentEntry} sessionId={props.sessionId} onOpenChildSession={props.onOpenChildSession} />)}
+						{entries.map((entry) => (
+							<PiSubagentEntryRow key={entry.id} entry={entry} sessionId={props.sessionId} onOpenChildSession={props.onOpenChildSession} />
+						))}
 					</ul>
 					{hasAcpEntries && <p className="-mt-1 px-3 pb-2 text-[11px] leading-4 text-text-tertiary">{t("sessionSubagents.acpDelegateHint")}</p>}
 				</>

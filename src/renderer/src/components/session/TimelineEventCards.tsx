@@ -222,7 +222,7 @@ const RESPONDING_PHRASES: Record<RespondingKind, string[]> = {
 /**
  * 工具执行态文案：用 runtime 上报的真实工具名生成短语（「正在读取文件...」
  * 「正在执行命令...」），而不是「执行工具 / 读取文件 / 应用改动」的轮播猜测。
- * 工具名缺失时（旧 pi / DSH 快照未上报 executingToolName）退回通用「执行工具」；
+ * 工具名缺失时（旧快照未上报 executingToolName）退回通用「执行工具」；
  * 过长（扩展 / MCP 工具名）时截断——状态条是单行 nowrap，否则会把消息流撑宽。
  */
 function executingPhrases(toolName: string | undefined): string[] {
@@ -233,7 +233,7 @@ function executingPhrases(toolName: string | undefined): string[] {
 }
 
 export function RespondingIndicator(props: { isCompacting?: boolean; isStarting?: boolean; isExecutingTool?: boolean; executingToolName?: string; liveTextStreaming?: boolean; liveThinkingStreaming?: boolean }) {
-	// 判定抽到 deriveRespondingKind：pi / DSH 共用，状态条跟「此刻有没有字/工具」对齐。
+	// 判定抽到 deriveRespondingKind：状态条跟「此刻有没有字/工具」对齐。
 	const kind = deriveRespondingKind({
 		isCompacting: props.isCompacting,
 		isStarting: props.isStarting,

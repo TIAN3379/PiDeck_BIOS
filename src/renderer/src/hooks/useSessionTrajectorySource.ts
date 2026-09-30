@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { atom, useAtomValue, useSetAtom } from "jotai";
 import { desktopApi } from "../desktopApi";
 import type { SessionProcessEvent } from "../../../shared/types/trajectory";
-import type { SessionRecord } from "../../../shared/types";
-import { prependSessionHistoryPageAtom, prependSessionMessagePageAtom, sessionMessageCacheBySessionIdAtomFamily, sessionRecordByIdAtomFamily, type SessionMessageCacheEntry } from "../atoms";
-import { sessionHistoryUnavailableState } from "../utils/sessionHistoryAvailability";
+import { prependSessionHistoryPageAtom, prependSessionMessagePageAtom, sessionMessageCacheBySessionIdAtomFamily, type SessionMessageCacheEntry } from "../atoms";
 
 /** 与时间线 runtime 翻页对齐：一次补 3 轮，复用同一份消息缓存。 */
 const RUNTIME_HISTORY_TURN_PAGE_SIZE = 3;
 
 const EMPTY_CACHE_ATOM = atom<SessionMessageCacheEntry | undefined>(undefined);
-const EMPTY_RECORD_ATOM = atom<SessionRecord | undefined>(undefined);
 
 /**
  * 轨迹抽屉的数据源：只订本会话 cache family，把 runtime 历史前缀与窗口段拼成一条账本。
@@ -18,12 +15,6 @@ const EMPTY_RECORD_ATOM = atom<SessionRecord | undefined>(undefined);
  */
 export function useSessionTrajectorySource(sessionId: string | undefined) {
 	const cachedEntry = useAtomValue(sessionId ? sessionMessageCacheBySessionIdAtomFamily(sessionId) : EMPTY_CACHE_ATOM);
-	// dsh 会话的系统提示在 DSH harness 内部组装（persona + sections），文本从
-	// request/header 事件读取（readDshSystemPrompt）；pi 的 pi-system 模板只对 pi
-	// 会话是「参考系统提示」。按 backend 区分来源，否则 dsh 会话的轨迹会错误显示
-	// pi 的系统提示（2026-08 用户反馈）。
-	const record = useAtomValue(sessionId ? sessionRecordByIdAtomFamily(sessionId) : EMPTY_RECORD_ATOM);
-	const isDshSession = record?.backend === "dsh";
 	const prependMessagePage = useSetAtom(prependSessionMessagePageAtom);
 	const prependHistoryPage = useSetAtom(prependSessionHistoryPageAtom);
 	const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -49,41 +40,27 @@ export function useSessionTrajectorySource(sessionId: string | undefined) {
 			});
 	}, [sessionId, cachedEntry?.revision, cachedEntry?.updatedAt]);
 
-	// 系统提示参考：pi 会话加载本地 pi-system 模板（Pi 不落盘，仅作参考记录）；
-	// dsh 会话从 host 的 request/header 事件读当轮真实系统提示（harness 按
-	// persona + sections 在请求时组装，dsh-web 轨迹同源），未装配/无数据时不展示。
+	// 系统提示参考：Pi 不落盘，因此从本地 pi-system 模板读取。
 	useEffect(() => {
 		if (!sessionId) {
 			setSystemPrompt(undefined);
 			return;
 		}
 		let cancelled = false;
-		if (isDshSession) {
-			void desktopApi.sessions
-				.readDshSystemPrompt(sessionId)
-				.then((prompt) => {
-					if (cancelled) return;
-					setSystemPrompt(prompt);
-				})
-				.catch(() => {
-					if (!cancelled) setSystemPrompt(undefined);
-				});
-		} else {
-			void desktopApi.prompts
-				.list()
-				.then((result) => {
-					if (cancelled) return;
-					const prompt = result.templates.find((item) => item.name === "pi-system");
-					setSystemPrompt(prompt?.content);
-				})
-				.catch(() => {
-					if (!cancelled) setSystemPrompt(undefined);
-				});
-		}
+		void desktopApi.prompts
+			.list()
+			.then((result) => {
+				if (cancelled) return;
+				const prompt = result.templates.find((item) => item.name === "pi-system");
+				setSystemPrompt(prompt?.content);
+			})
+			.catch(() => {
+				if (!cancelled) setSystemPrompt(undefined);
+			});
 		return () => {
 			cancelled = true;
 		};
-	}, [sessionId, isDshSession]);
+	}, [sessionId]);
 
 	const messages = useMemo(() => {
 		if (!cachedEntry) return [];
@@ -111,10 +88,6 @@ export function useSessionTrajectorySource(sessionId: string | undefined) {
 				.readRecordMessagePage(sessionId, before, 100)
 				.then((page) => {
 					if (loadSequenceRef.current !== sequence) return;
-					// DSH host 被手动停止时返回「暂时读不了」的空页：不能当前缀写进缓存，
-					// 否则 total 归零、游标被清空，「加载更多」消失且无法重试。保持现状即可，
-					// 恢复路径由时间线的「启动 host」专态给出。
-					if (sessionHistoryUnavailableState(page)) return;
 					prependMessagePage({ sessionId, before, expectedRevision, page });
 				})
 				.finally(() => {
@@ -137,8 +110,6 @@ export function useSessionTrajectorySource(sessionId: string | undefined) {
 			})
 			.then((page) => {
 				if (loadSequenceRef.current !== sequence) return;
-				// 与 disk 翻页同源：host 被停时的空页不是新历史（否则同样的游标/total 损坏）。
-				if (sessionHistoryUnavailableState(page)) return;
 				prependHistoryPage({ sessionId, expectedRevision, before, page });
 			})
 			.finally(() => {
@@ -150,7 +121,6 @@ export function useSessionTrajectorySource(sessionId: string | undefined) {
 		messages,
 		processEvents,
 		systemPrompt,
-		isDshSession,
 		hasMoreMessages: hasMore,
 		isLoadingMoreMessages: hasMore ? isLoadingMore : false,
 		loadMore,

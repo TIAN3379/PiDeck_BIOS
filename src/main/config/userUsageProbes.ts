@@ -315,7 +315,7 @@ async function readUserUsageProbesNormalized(configDir: string): Promise<{
 
 	// 顶层是文档形态（对象）：probes 是旧版 AI 兜底数组，providers 映射由弹窗维护。
 	// 「文档里没有 probes 数组」是合法常态（新格式 { providers: [...] } 或空文档），
-	// 不能报「缺少 probes 数组」——DSH/pi 用量查询弹窗会把该错误当黄条显示（截图里的真实 bug）。
+	// 不能报「缺少 probes 数组」——用量查询弹窗会把该错误当黄条显示（截图里的真实 bug）。
 	// 只有 probes 键存在且不是数组时才是真正的结构错误。
 	if (!Array.isArray(parsed)) {
 		if (isRecord(parsed) && Array.isArray(parsed.probes)) {

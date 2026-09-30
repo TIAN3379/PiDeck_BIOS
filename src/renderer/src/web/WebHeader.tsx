@@ -5,7 +5,7 @@
  * 运行态来自 useChat status（submitted/streaming）与轮询的 runtime.status 兜底。
  */
 import { useState } from "react";
-import { Check, ChevronsUpDown, Menu, RefreshCw, Target } from "lucide-react";
+import { Check, ChevronsUpDown, Menu, RefreshCw } from "lucide-react";
 import type { AgentBackend, AvailableModel, SessionModelPreference } from "../../../shared/types";
 import { resolveModelDisplayName } from "../../../shared/modelDisplayName";
 import { Button } from "@/components/ui-shadcn/button";
@@ -30,9 +30,8 @@ export function WebHeader(props: {
 	onRefreshModels?: () => void;
 	onModelChange: (model: AvailableModel) => void;
 	onThinkingChange: (level: string) => void;
-	onOpenDshTools?: () => void;
 }) {
-	const { title, status, onOpenSidebar, model, thinkingLevel, models, backend, refreshingModels, onRefreshModels, onModelChange, onThinkingChange, onOpenDshTools } = props;
+	const { title, status, onOpenSidebar, model, thinkingLevel, models, backend, refreshingModels, onRefreshModels, onModelChange, onThinkingChange } = props;
 	// 允许窄屏换行：标题保留可用宽度，控制项在下一行展开，避免手机上相互挤压。
 	return (
 		<header className="chat-header flex min-w-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
@@ -41,19 +40,12 @@ export function WebHeader(props: {
 			</Button>
 			<div className="chat-title-block min-w-0 flex-1">
 				<strong className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold tracking-tight text-foreground" title={title}>
-					{/* 后端徽标（C18 同源）：与侧栏会话行一致，头部可辨 pi/dsh */}
+					{/* 后端徽标（C18 同源）：与侧栏会话行一致，头部可辨 pi/生图 */}
 					{backend && <SessionBackendMark backend={backend} className="size-4 shrink-0 rounded" />}
 					<span className="min-w-0 truncate">{title}</span>
 				</strong>
 			</div>
 			<div className="chat-header-actions flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
-				{/* S6.3：DSH 会话的 goals/subagents/skills 工具面板入口（仅 dsh 后端显示） */}
-				{backend === "dsh" && onOpenDshTools && (
-					<Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-caption text-muted-foreground hover:bg-muted/60 hover:text-foreground" onClick={onOpenDshTools} aria-label={t("web.dshTools")} title={t("web.dshTools")}>
-						<Target size={14} aria-hidden="true" />
-						<span className="hidden sm:inline">{t("web.dshTools")}</span>
-					</Button>
-				)}
 				<ModelPicker model={model} models={models} refreshing={refreshingModels} onRefresh={onRefreshModels} onChange={onModelChange} />
 				<Select value={thinkingLevel ?? "off"} onValueChange={onThinkingChange}>
 					<SelectTrigger size="sm" className="w-24 border-transparent bg-transparent px-2 text-caption text-muted-foreground hover:bg-muted/60" aria-label={t("web.thinking")} title={t("web.thinking")}>

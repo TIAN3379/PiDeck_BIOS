@@ -2,7 +2,7 @@ import type { ChatMessage } from "../../../../../shared/types";
 import type { TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn } from "./buildTrajectory";
 
 /**
- * 墙钟归一：DSH SessionEvent.time 与 pi JSONL 都是 epoch ms。
+ * 墙钟归一：会话事件 time 与 pi JSONL 都是 epoch ms。
  * 若误把秒当毫秒（~1e9），重试/过程事件会排到整段会话之前。
  */
 export function wallTime(value: number | undefined): number {
@@ -15,17 +15,19 @@ function asNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** 消息事件序号：meta.seq 优先，其次 dsh:${seq} 消息 id（投影器约定）。 */
+/** 消息事件序号：meta.seq 优先，其次 `<前缀>:<序号>` 形式的消息 id。
+ *  历史索引/实时投影的消息 id 都是这个形状（如 `msg:12`），
+ *  它是「同一轮内重试/工具/助手事件」相对顺序的唯一稳定依据。 */
 export function seqOfMessage(message: ChatMessage): number | undefined {
 	const fromMeta = asNumber(message.meta?.seq);
 	if (fromMeta !== undefined) return fromMeta;
-	const match = /^dsh:(\d+)$/.exec(message.id);
+	const match = /^[A-Za-z_-]+:(\d+)$/.exec(message.id);
 	if (!match) return undefined;
 	const seq = Number(match[1]);
 	return Number.isFinite(seq) ? seq : undefined;
 }
 
-/** 同 seq 时 thinking → assistant → tool，对齐 dsh-web expandAssistant 的展开顺序。 */
+/** 同 seq 时 thinking → assistant → tool。 */
 function kindTie(kind: TrajectoryRecordKind): number {
 	if (kind === "systemPrompt") return 0;
 	if (kind === "user") return 1;
@@ -38,8 +40,8 @@ function kindTie(kind: TrajectoryRecordKind): number {
 }
 
 /**
- * 账本顺序 = dsh-web layoutEntryOrder：初始系统提示最先，其余按 seq；
- * 无 seq 时退回墙钟。JS sort 稳定，同键保留折叠时的相对顺序。
+ * 账本顺序：初始系统提示最先，其余按 seq；无 seq 时退回墙钟。
+ * JS sort 稳定，同键保留折叠时的相对顺序。
  */
 export function compareTrajectoryRecords(left: TrajectoryRecord, right: TrajectoryRecord): number {
 	if (left.kind === "systemPrompt" && right.kind !== "systemPrompt") return -1;

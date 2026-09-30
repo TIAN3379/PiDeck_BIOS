@@ -21,7 +21,7 @@ export const ARCHIVED_SESSION_TOAST_MS = 4500;
  * DSH 会话不进该弹窗，要去「配置管理」DSH 页的「归档区」。
  */
 export function archivedSessionToastMessage(session: { backend?: AgentBackend }): string {
-	return session.backend === "dsh" ? t("app.sessionArchivedDsh") : t("app.sessionArchived");
+	return t("app.sessionArchived");
 }
 
 export type RefreshProjectSessions = (projectId: string, silent?: boolean) => Promise<SessionSummary[] | SessionRecord[] | undefined>;
@@ -53,7 +53,6 @@ export interface UseSessionActionsOptions {
 			unarchiveRecord: (archivedPath: string) => Promise<boolean>;
 			listArchived: () => Promise<ArchivedPiSession[]>;
 			deleteArchivedRecord: (archivedPath: string) => Promise<boolean>;
-			deleteArchivedDshSession: (dshSessionId: string) => Promise<boolean>;
 			createDraft: (input: { projectId: string; title: string; backend?: AgentBackend } & SessionLaunchPreferences) => Promise<SessionRecord>;
 			createAnonymous: (input: { projectId: string; title: string; backend?: AgentBackend } & SessionLaunchPreferences) => Promise<CreateAnonymousSessionResult>;
 		};
@@ -180,14 +179,6 @@ export function useSessionActions(options: UseSessionActionsOptions) {
 		if (projectId) await refreshProjectSessions(projectId);
 	}
 
-	/** 永久删除已归档 DSH 会话（host 目录移入回收站） */
-	async function deleteArchivedDshSession(dshSessionId: string) {
-		await api.sessions.deleteArchivedDshSession(dshSessionId);
-		showToast(t("app.sessionDeletedFromArchive"), 2200);
-		const projectId = sessionsProjectId ?? activeProjectId;
-		if (projectId) await refreshProjectSessions(projectId);
-	}
-
 	// ── Sidebar session actions ──
 	async function openSidebarSession(projectId: string, session: SessionSummary): Promise<string | undefined> {
 		const requestSequence = ++openSessionRequestRef.current;
@@ -250,8 +241,8 @@ export function useSessionActions(options: UseSessionActionsOptions) {
 		try {
 			const session = await api.sessions.createDraft({
 				projectId,
-				title: backend === "dsh" ? `${project.name} DSH` : `${project.name} agent`,
-				backend,
+				title: `${project.name} agent`,
+				backend: backend === "imagegen" ? "imagegen" : "pi",
 				...preferences,
 			});
 			upsertSession(session);
@@ -274,7 +265,7 @@ export function useSessionActions(options: UseSessionActionsOptions) {
 			const { session } = await api.sessions.createAnonymous({
 				projectId,
 				title: t("app.anonymousChatTitle", { name: project.name }),
-				backend,
+				backend: backend === "imagegen" ? "imagegen" : "pi",
 				...preferences,
 			});
 			upsertSession(session);
@@ -298,7 +289,6 @@ export function useSessionActions(options: UseSessionActionsOptions) {
 		unarchiveHistorySession,
 		listArchivedSessions,
 		deleteArchivedSession,
-		deleteArchivedDshSession,
 		openSidebarSession,
 		openSidebarSessionById,
 		copySidebarSession,

@@ -22,7 +22,5 @@ export function SessionTrajectoryPanel() {
 		);
 	}
 
-	return (
-		<SessionTrajectoryView sessionId={sessionId} messages={source.messages} processEvents={source.processEvents} systemPrompt={source.systemPrompt} isDsh={source.isDshSession} hasMoreMessages={source.hasMoreMessages} isLoadingMoreMessages={source.isLoadingMoreMessages} onLoadMore={source.loadMore} variant="drawer" />
-	);
+	return <SessionTrajectoryView sessionId={sessionId} messages={source.messages} processEvents={source.processEvents} systemPrompt={source.systemPrompt} hasMoreMessages={source.hasMoreMessages} isLoadingMoreMessages={source.isLoadingMoreMessages} onLoadMore={source.loadMore} variant="drawer" />;
 }

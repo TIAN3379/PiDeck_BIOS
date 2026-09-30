@@ -90,8 +90,8 @@ test("嵌套数组按结构比较：内容相同无差异，顺序变化算差�
 test("保存全部脏来源时 settings 排最后（它的重载会连带刷新 models/auth/raw）", () => {
 	// 顺序错（settings 先）会把尚未保存的 models/auth 草稿冲成磁盘内容，静默丢改动。
 	assert.deepEqual(Array.from(orderDirtyKeysForSave(["config:settings", "config:models", "config:auth"])), ["config:models", "config:auth", "config:settings"]);
-	// 其余键保持调用方相对顺序；dsh 不受影响。
-	assert.deepEqual(Array.from(orderDirtyKeysForSave(["dsh", "config:trust", "config:raw"])), ["dsh", "config:trust", "config:raw"]);
+	// 其余键保持调用方相对顺序。
+	assert.deepEqual(Array.from(orderDirtyKeysForSave(["security", "config:trust", "config:raw"])), ["security", "config:trust", "config:raw"]);
 	// 不含 settings 时原样返回；空输入得到空数组。
 	assert.deepEqual(Array.from(orderDirtyKeysForSave(["config:mcp"])), ["config:mcp"]);
 	assert.deepEqual(Array.from(orderDirtyKeysForSave([])), []);
@@ -102,7 +102,7 @@ test("保存全部脏来源时 settings 排最后（它的重载会连带刷新 
 test("嵌入配置管理的顶部保存仍复用 models 保存入口", () => {
 	const source = readFileSync("src/renderer/src/ConfigModal.tsx", "utf8");
 	// 新增/编辑 provider 是 models 页内子页面，不能因为内容切换而丢失顶部保存路由。
-	assert.match(source, /const currentTabKey = backendPane === "dsh" \? "dsh" : sectionTabValue\(section, tab\);/);
+	assert.match(source, /const currentTabKey = sectionTabValue\(section, tab\);/);
 	assert.match(source, /await saveByKey\(currentTabKey\);/);
 	assert.match(source, /模型页的新增\/编辑供应商是一个页内子页面/);
 });

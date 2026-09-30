@@ -11,10 +11,10 @@ import type { AgentBackend, SessionSource } from "../../shared/types";
  */
 
 /** 会话过滤类别：来源、DSH 后端或生图后端。 */
-export type SessionFilterPill = SessionSource | "dsh" | "imagegen";
+export type SessionFilterPill = SessionSource | "imagegen";
 
 /** 类别渲染顺序：来源顺序不变，dsh/imagegen 追加在末尾（视觉上不打断既有布局）。 */
-export const SESSION_FILTER_PILLS: readonly SessionFilterPill[] = ["pi", "codex", "claude", "qoder", "opencode", "zcode", "workbuddy", "cursor", "dsh", "imagegen"];
+export const SESSION_FILTER_PILLS: readonly SessionFilterPill[] = ["pi", "codex", "claude", "qoder", "opencode", "zcode", "workbuddy", "cursor", "imagegen"];
 
 /** 字符串是否为合法的过滤类别（持久化数据校验用）。 */
 export function isSessionFilterPill(value: unknown): value is SessionFilterPill {
@@ -26,7 +26,6 @@ export function isSessionFilterPill(value: unknown): value is SessionFilterPill 
  * 若不优先判定会同时命中 Pi 类别），否则按来源（缺省 "pi"）。
  */
 export function sessionPillOf(session: { source?: SessionSource; backend?: AgentBackend }): SessionFilterPill {
-	if (session.backend === "dsh") return "dsh";
 	if (session.backend === "imagegen") return "imagegen";
 	return session.source ?? "pi";
 }
@@ -100,7 +99,6 @@ export function parseSessionFilterState(raw: string | null | undefined): Session
 			}
 			if (!Array.isArray(value)) continue;
 			const pills = value.filter(isSessionFilterPill);
-			if (pills.includes("pi") && !pills.includes("dsh")) pills.push("dsh");
 			state[projectId] = new Set(pills);
 		}
 		return state;

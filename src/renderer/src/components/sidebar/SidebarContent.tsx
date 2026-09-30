@@ -1,6 +1,6 @@
 import { Activity, Bolt, CirclePlus, Clock, Folder, Globe, MessageSquare, Monitor, Moon, Search, Sun } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import type { AgentTab, AppThemeMode, ArchivedDshSession, ArchivedPiSession, Project, SessionRecord, SessionSummary, WorktreeEntry } from "../../../../shared/types";
+import type { AgentTab, AppThemeMode, ArchivedPiSession, Project, SessionRecord, SessionSummary, WorktreeEntry } from "../../../../shared/types";
 import { AgentContextMenu, DraftSessionContextMenu, ProjectContextMenu, SessionContextMenu, SessionManagerModal, SessionSourceFilterMenu, WorktreeCreateDialog, RpcLogOpenedDialog } from "./SidebarParts";
 import { RpcLogViewer } from "./RpcLogViewer";
 import { sessionRecordToSummary } from "../../atoms";
@@ -14,7 +14,6 @@ import { resolveSessionRunState, sessionRunCapabilities, type SessionRunAction }
 import { getBoundSidebarRuntimeAgent, getBoundSidebarRuntimeAgentByAgentId, type SidebarController, type SidebarRpcLog } from "../../hooks/useSidebarController";
 import type { SidebarRunControl } from "./SidebarComponents";
 import { sessionDisplayName } from "../../utils/sessionDisplayName";
-import { DshSearchResults } from "./DshSearchResults";
 import { ProjectTree } from "./ProjectTree";
 import { Button } from "../ui-shadcn/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui-shadcn/tooltip";
@@ -90,12 +89,6 @@ export type SidebarActions = {
 		listArchived: () => Promise<ArchivedPiSession[]>;
 		/** 永久删除已归档会话（pi 文件归档；移入回收站并移出索引） */
 		deleteArchived: (archivedPath: string) => Promise<void>;
-		/** 恢复 DSH 归档会话（host 目录移回 sessions 树并重建 catalog 记录） */
-		unarchiveDsh: (dshSessionId: string, projectId?: string) => Promise<void>;
-		/** 列出 DSH 归档会话（会话管理弹窗归档视图用；含标题） */
-		listArchivedDsh: () => Promise<ArchivedDshSession[]>;
-		/** 永久删除已归档 DSH 会话（host 目录移入回收站） */
-		deleteArchivedDsh: (dshSessionId: string) => Promise<void>;
 	};
 	agents: {
 		rename: (agent: AgentTab) => void;
@@ -343,16 +336,6 @@ export function SidebarContent(props: SidebarContentProps) {
 							</TabsTrigger>
 						</TabsList>
 					</Tabs>
-				)}
-
-				{/* G9：DSH 全文搜索结果（搜索词非空时展示；结果按 dshSessionId 映射回 catalog） */}
-				{controller.search.trim() && (
-					<DshSearchResults
-						query={controller.search}
-						onOpen={(projectId, sessionId) => {
-							void actions.sessions.open(projectId, sessionId);
-						}}
-					/>
 				)}
 
 				{/* 单一滚动区承载项目与展开内容，避免项目导航/详情双滚动和重复标题。
@@ -713,8 +696,7 @@ export function SidebarContent(props: SidebarContentProps) {
 						void actions.sessions.openFile(menuSession);
 						controller.closeMenu();
 					}}
-					// F5：DSH 会话无 filePath 但可复制 host 会话文件路径（主进程按 dshSessionId 推导）
-					hasFilePath={Boolean(menuSession.filePath) || menuSession.backend === "dsh"}
+					hasFilePath={Boolean(menuSession.filePath)}
 					canRpcLog={Boolean(menuSessionRuntimeAgent)}
 					rpcToggleDisabled={!menuSessionRuntimeAgent}
 					isRpcLogging={menuSessionRuntimeAgent ? controller.isAgentRpcLogging(menuSessionRuntimeAgent.id) : false}
@@ -782,9 +764,6 @@ export function SidebarContent(props: SidebarContentProps) {
 					onUnarchive={(archived) => actions.sessions.unarchive(archived, managerProject.id)}
 					listArchived={actions.sessions.listArchived}
 					deleteArchived={(archivedPath) => actions.sessions.deleteArchived(archivedPath)}
-					onUnarchiveDsh={(dshSessionId) => actions.sessions.unarchiveDsh(dshSessionId, managerProject.id)}
-					listArchivedDsh={actions.sessions.listArchivedDsh}
-					deleteArchivedDsh={(dshSessionId) => actions.sessions.deleteArchivedDsh(dshSessionId)}
 				/>
 			)}
 			{controller.worktreeCreateProjectId && (

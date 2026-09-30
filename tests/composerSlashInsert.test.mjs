@@ -32,19 +32,14 @@ test("命令名保持原样（kebab-case 与含空格的技术名）", () => {
 	assert.equal(appendSlashCommandToDraft("a", "my skill"), "a /my skill ");
 });
 
-test("技能调用 token 按后端分形：pi 用 /skill:名称，DSH 用裸名称", () => {
-	assert.equal(toSkillInvocationToken("pi", "grill-me"), "skill:grill-me");
-	assert.equal(toSkillInvocationToken("dsh", "grill-me"), "grill-me");
-	// 插入草稿后得到的完整命令（pi 形态经 appendSlashCommandToDraft 拼成 /skill:名称）
-	assert.equal(appendSlashCommandToDraft("", toSkillInvocationToken("pi", "grill-me")), "/skill:grill-me ");
-	assert.equal(appendSlashCommandToDraft("", toSkillInvocationToken("dsh", "grill-me")), "/grill-me ");
+test("技能调用 token 使用 /skill:名称", () => {
+	assert.equal(toSkillInvocationToken("grill-me"), "skill:grill-me");
+	assert.equal(appendSlashCommandToDraft("", toSkillInvocationToken("grill-me")), "/skill:grill-me ");
 });
 
 test("技能名与 pi 内建命令同名时不冲突（/skill: 前缀隔离命令空间）", () => {
 	// 例如技能名叫 review，不与 pi 的 /review 类命令抢名字；pi 技能命令空间是 skill:*。
-	assert.equal(toSkillInvocationToken("pi", "review"), "skill:review");
-	// 而 DSH 由宿主 dsh-tool-skill 把技能注册成裸命令，同名时宿主负责冲突仲裁。
-	assert.equal(toSkillInvocationToken("dsh", "review"), "review");
+	assert.equal(toSkillInvocationToken("review"), "skill:review");
 });
 
 test("插入完整内容：空草稿直接以正文开头，非空草稿换行衔接不粘连", () => {
@@ -70,10 +65,8 @@ test("插入完整内容：空正文返回原草稿（幂等，不产生空行�
 	assert.equal(appendContentToDraft("", ""), "");
 });
 
-test("insertSkillInvocation 与技能面板展示都走后端感知的 token（单一来源）", () => {
-	// controller：插入用 isDshBackend 决定形态，避免把 /skill:名 插进 DSH、把裸名插进 pi
-	assert.match(controller, /toSkillInvocationToken\(isDshBackend \? "dsh" : "pi", name\)/);
-	// 面板：选项标签与搜索词同步展示 /skill:名称（pi） / 名称（DSH）
-	assert.match(skillPicker, /toSkillInvocationToken\(props\.backend, skill\.name\)/);
+test("insertSkillInvocation 与技能面板展示共用 token 生成器", () => {
+	assert.match(controller, /toSkillInvocationToken\(name\)/);
+	assert.match(skillPicker, /toSkillInvocationToken\(skill\.name\)/);
 	assert.match(skillPicker, /keywords=\{\[skill\.name, skill\.description, skill\.whenToUse \?\? "",/);
 });

@@ -80,19 +80,19 @@ test("Pi picker probes runtime levels only for an idle cache miss", () => {
 test("thinking picker immediately uses cache or compatibility levels while Pi runtime probing is pending", () => {
 	const values = (input) => Array.from(resolveThinkingPickerLevels(input), (level) => level.value);
 	// 运行中的 Pi runtime RPC 尚未返回时，已经水合的 capability cache 必须立刻可用。
-	assert.deepEqual(values({ backend: "pi", cachedPiLevels: ["off", "high", "max"] }), ["off", "high", "max"]);
+	assert.deepEqual(values({ cachedPiLevels: ["off", "high", "max"] }), ["off", "high", "max"]);
 	// 缓存也没有时不能让菜单转圈；继续给用户兼容全量档位，后端做最终校验。
-	assert.deepEqual(values({ backend: "pi" }), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+	assert.deepEqual(values({}), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	// 只有后端明确返回空数组时才表示没有可选档位。
-	assert.deepEqual(values({ backend: "pi", runtimePiLevels: [] }), []);
+	assert.deepEqual(values({ runtimePiLevels: [] }), []);
 	// 统一标准：cache 是唯一展示源；两者同时存在（runtime 探测后 cache 才刷新）时以 cache 为准。
-	assert.deepEqual(values({ backend: "pi", cachedPiLevels: ["off", "high", "max"], runtimePiLevels: ["off"] }), ["off", "high", "max"]);
+	assert.deepEqual(values({ cachedPiLevels: ["off", "high", "max"], runtimePiLevels: ["off"] }), ["off", "high", "max"]);
 });
 
-test("DSH missing reasoning metadata falls back to selectable full levels", () => {
+test("missing capability metadata falls back to selectable full levels", () => {
 	const values = (input) => Array.from(resolveThinkingPickerLevels(input), (level) => level.value);
-	assert.deepEqual(values({ backend: "dsh" }), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-	assert.deepEqual(values({ backend: "dsh", dshReasoningEfforts: [{ id: "off" }, { id: "high" }] }), ["off", "high"]);
+	// 目录未就绪 / capability probe 失败时给兼容全量档位，后端做最终校验。
+	assert.deepEqual(values({}), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 	// 运行中只在 idle 时做没有缓存的后台探测；探测不再是弹窗 loading 的前置条件。
 	assert.match(pickerSource, /runtime\?\.status !== "idle"/);
 	assert.match(pickerSource, /cachedModel\?\.thinkingLevels !== undefined/);

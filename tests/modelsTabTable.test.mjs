@@ -68,20 +68,18 @@ test("provider card keeps model count + inline usage in the header, drops the us
 	assert.doesNotMatch(tabSource, /leading=/);
 });
 
-test("both provider entries share ProviderConnectionForm (no per-entry divergence)", () => {
+test("provider entries share ProviderConnectionForm (no per-entry divergence)", () => {
 	const formSource = readFileSync("src/renderer/src/config/ProviderConnectionForm.tsx", "utf8");
 	// 连接字段 + 测试连接 + 兼容性：两处入口都复用同一组件，不再各写一套
 	assert.match(tabSource, /<ProviderConnectionForm/);
 	assert.match(dialogSource, /<ProviderConnectionForm/);
 	const endpointsSource = readFileSync("src/renderer/src/config/ProviderEndpointFields.tsx", "utf8");
-	const dshDialogSource = readFileSync("src/renderer/src/config/AddDshProviderDialog.tsx", "utf8");
-	// 连接字段由 Pi/DSH 共用子组件持有；Pi 的测试/兼容性仍留在原表单。
+	// 连接字段由 Pi 的两个入口共用子组件持有；测试/兼容性仍留在原表单。
 	assert.match(formSource, /<ProviderEndpointFields\s/);
-	assert.match(dshDialogSource, /<ProviderEndpointFields\s/);
 	assert.match(endpointsSource, /config\.field\.baseUrl/);
 	assert.match(endpointsSource, /config\.field\.apiType/);
 	assert.match(endpointsSource, /config\.field\.apiKey/);
-	assert.match(endpointsSource, /config\.dsh\.baseUrlHint/);
+	assert.doesNotMatch(endpointsSource, /config\.dsh\./);
 	assert.match(formSource, /config\.field\.userAgent/);
 	assert.match(formSource, /config\.compatibility/);
 	assert.match(formSource, /config\.testModel/);

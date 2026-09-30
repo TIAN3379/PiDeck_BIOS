@@ -15,7 +15,7 @@
  * 所以 cwd 必须用 realpathSync(dir)：构建发生在包的真实目录（源码所在处），祖先链上
  * 自然有仓库 node_modules/.bin，且编译产物 lib/ 正好落回仓库包目录（归档需要它）。
  * 前提是仓库根装了完整 dev 依赖（tsc / @types/node / @deepseek-ai/* 类型）——见
- * .github/workflows/{release,publish-dsh-runtime}.yml 里「不做 --omit=dev」的注释。
+ * .github/workflows/release.yml 里「不做 --omit=dev」的注释。
  */
 import { realpathSync } from "node:fs";
 

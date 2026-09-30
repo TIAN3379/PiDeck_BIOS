@@ -293,7 +293,7 @@ export function askEchoToolMessage(placement: AskEchoPlacement): ChatMessage {
 		...(questionCards.length > 1 ? { questions: questionCards } : {}),
 	};
 	return {
-		id: `dsh-ask-echo:${placement.echo.requestId}`,
+		id: `ask-echo:${placement.echo.requestId}`,
 		agentId: placement.agentId,
 		role: "tool",
 		text: "",
@@ -310,7 +310,7 @@ export function askEchoToolMessage(placement: AskEchoPlacement): ChatMessage {
  */
 export function injectAskEchoMessage(messages: ChatMessage[], placement: AskEchoPlacement | undefined): ChatMessage[] {
 	if (!placement) return messages;
-	const echoId = `dsh-ask-echo:${placement.echo.requestId}`;
+	const echoId = `ask-echo:${placement.echo.requestId}`;
 	if (messages.some((message) => message.id === echoId)) return messages;
 	const synthetic = askEchoToolMessage(placement);
 	if (!placement.anchorMessageId) return [synthetic, ...messages];

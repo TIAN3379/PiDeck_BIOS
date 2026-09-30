@@ -183,11 +183,6 @@ export function SessionTodoStrip(props: { sessionId: string }) {
 	const linesByKey = useMemo<WidgetLines[]>(() => {
 		// DSH 不产出 Pi widget，优先消费其运行时的结构化 todos；
 		// Pi 活会话仍以 widget 为实时真源；历史会话用快照兜底。
-		if (runtime?.backend === "dsh") {
-			const todos = runtime.state?.todos;
-			if (!Array.isArray(todos) || todos.length === 0) return [];
-			return [{ key: "dsh-todos", lines: todoItemsToLines(runtimeTodosToItems(todos)) }];
-		}
 		if (!coherent) {
 			const snapshot = sessionTodoSnapshotToItems(todoSnapshot);
 			return snapshot.length > 0 ? [{ key: "snapshot", lines: todoItemsToLines(snapshot) }] : [];
@@ -198,7 +193,7 @@ export function SessionTodoStrip(props: { sessionId: string }) {
 			if (raw?.length) result.push({ key, lines: raw });
 		}
 		return result;
-	}, [coherent, runtime?.backend, runtime?.state?.todos, todoSnapshot, widgets]);
+	}, [coherent, todoSnapshot, widgets]);
 
 	// A source stays dismissed only while its raw lines stay identical. Keep raw metadata here
 	// until after the decision so a new plan with matching tasks becomes visible again.

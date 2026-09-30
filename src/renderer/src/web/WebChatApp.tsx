@@ -22,7 +22,6 @@ import { WebSidebar } from "./WebSidebar";
 import { WebHeader, type WebHeaderStatus } from "./WebHeader";
 import { WebTimeline } from "./WebTimeline";
 import { WebComposer } from "./WebComposer";
-import { WebDshToolsPanel } from "./WebDshToolsPanel";
 import { chatMessagesToUiMessages, createProject, createSession, deleteProject, fetchMessagePage, fetchModels, fetchState, getWebAuthHeaders, respondToUi, setRuntimeModel, setRuntimeThinking, updateSessionRecord } from "./webApi";
 import type { AgentUiResponse } from "../../../shared/types";
 import type { WebProject, WebState } from "./webTypes";
@@ -63,8 +62,6 @@ export function WebChatApp() {
 	// 手机端默认把聊天作为主画面，项目树通过抽屉按需打开，避免列表占满首屏。
 	const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 	const [uiResponding, setUiResponding] = useState(false);
-	// S6.3：DSH 工具面板（goals/subagents/skills）开关
-	const [dshToolsOpen, setDshToolsOpen] = useState(false);
 
 	// ── 本组件自持的 per-session 消息缓存（useChat 切换 id 会重建 Chat 实例） ──
 	const messagesBySessionRef = useRef<Record<string, UIMessage[]>>({});
@@ -432,7 +429,6 @@ export function WebChatApp() {
 					onRefreshModels={() => void refreshModels()}
 					onModelChange={(model) => void handleModelChange(model)}
 					onThinkingChange={(level) => void handleThinkingChange(level)}
-					onOpenDshTools={() => setDshToolsOpen(true)}
 				/>
 				<WebTimeline
 					messages={messages}
@@ -449,8 +445,6 @@ export function WebChatApp() {
 				/>
 				<WebComposer disabled={Boolean(creatingProjectId)} streaming={streaming} onSend={handleSend} onStop={() => stop()} />
 			</main>
-			{/* S6.3：DSH 工具面板（仅 dsh 会话头部按钮触发） */}
-			{dshToolsOpen && activeSessionId && <WebDshToolsPanel sessionId={activeSessionId} onClose={() => setDshToolsOpen(false)} />}
 		</div>
 	);
 }

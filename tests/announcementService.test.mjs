@@ -57,16 +57,10 @@ const updateSourcesMod = loadTsModule("src/shared/updateSources.ts", {});
 const announcementSourcesMod = loadTsModule("src/shared/announcementSources.ts", {
 	"./updateSources": updateSourcesMod,
 });
-const dshManifestMod = loadTsModule("src/shared/types/dshRuntimeManifest.ts", {
-	// dshRuntimeManifest 自身引用 ../updateSources（相对 src/shared/types/ 解析；
-	// 43f8b7c2 统一 DSH runtime 分发时新增），缺了会在预加载时直接抛 unexpected require
-	"../updateSources": updateSourcesMod,
-});
 const svcMod = loadTsModule("src/main/announcements/AnnouncementService.ts", {
 	"node:fs": require("node:fs"),
 	"node:path": require("node:path"),
 	"../../shared/announcementSources": announcementSourcesMod,
-	"../../shared/types/dshRuntimeManifest": dshManifestMod,
 });
 
 /** 临时 userData 目录（每个用例独立，用完清理）。 */

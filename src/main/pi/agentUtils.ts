@@ -211,7 +211,9 @@ export function inferTitleFromMessages(messages: ChatMessage[]): string | undefi
 /** 判断 Agent 标题是否为默认/占位标题（仅此时允许首轮回话自动改名）。
  *  必须覆盖 catalog 草稿名（session.newTitle：「新会话」/「New session」）和 DSH 占位名，
  *  不能只认 `${project} agent`——漏判则 refreshAutoTitle 直接 return，侧栏一直停在占位名。
- *  pi 文件名时间戳 / catalog 清掉时间戳后的 Untitled 也算占位，否则历史会话加载后无法用首条消息补名。 */
+ *  pi 文件名时间戳 / catalog 清掉时间戳后的 Untitled 也算占位，否则历史会话加载后无法用首条消息补名。
+ *  `session.dshUntitled`（「DSH 会话」）与 `${project.name} DSH` 是 legacy compatibility：
+ *  DSH 后端已删除，但旧 catalog 里仍存着这类默认标题，识别它才能让旧会话被首条消息重命名。 */
 export function isDefaultAgentTitle(title: string, project: Project, translate: (key: string, params?: Record<string, string | number>) => string): boolean {
 	const trimmed = title.replace(/\s+/g, " ").trim();
 	if (!trimmed) return true;

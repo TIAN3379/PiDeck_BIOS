@@ -264,7 +264,6 @@ export function canAttachRuntimeMetadata(entry: SessionCatalogEntry | undefined,
 	if (!entry || !tab.sessionPath) return false;
 	// DSH 的 sessionPath 是 host zstd 日志，不是 pi JSONL。走文件配对会把 zstd
 	// 写进 filePath，渲染层当成有历史去读，空会话输入时整页抽成「正在加载历史」。
-	if (entry.backend === "dsh" || tab.backend === "dsh") return false;
 	if (entry.status === "draft" && !entry.filePath) return true;
 	if (!entry.filePath) return false;
 	const environment = tab.sessionEnvironment ?? entry.environment;
@@ -350,9 +349,9 @@ export class SessionCatalog {
 		// catalog 只是 id 映射；即使“创建后激活链路未走完”（attachRuntime 未把
 		// status 置 active），重启后用户仍应在侧栏看到并重新激活它。若在此清掉，
 		// host 侧会话会变成孤儿且无法从侧栏访问。带 dshSessionId 的异常中间态同样保留。
-		const staleDrafts = this.entries.filter((entry) => entry.status === "draft" && entry.backend !== "dsh");
+		const staleDrafts = this.entries.filter((entry) => entry.status === "draft");
 		if (staleDrafts.length > 0) {
-			this.entries = this.entries.filter((entry) => entry.status !== "draft" || entry.backend === "dsh");
+			this.entries = this.entries.filter((entry) => entry.status !== "draft");
 			try {
 				await this.writeSnapshot(this.entries);
 			} catch {
@@ -403,42 +402,6 @@ export class SessionCatalog {
 			}
 		}
 
-		// 兼容旧数据：DSH 会话曾只按文件分支 attach（filePath/piSessionId 落盘，
-		// dshSessionId 缺失）——标题同步（findByDshSessionId）与重启后 attach 恢复
-		// 旧会话都依赖 dshSessionId。加载时把 backend=dsh 且缺 dshSessionId 的
-		// 记录用 piSessionId（当时存的就是 host 会话 id）补齐。
-		const migratedDsh = this.entries.some((entry) => entry.backend === "dsh" && !entry.dshSessionId && entry.piSessionId);
-		if (migratedDsh) {
-			for (const entry of this.entries) {
-				if (entry.backend === "dsh" && !entry.dshSessionId && entry.piSessionId) {
-					entry.dshSessionId = entry.piSessionId;
-				}
-			}
-			try {
-				await this.writeSnapshot(this.entries);
-			} catch {
-				// 迁移是 best-effort；内存已生效，下一次启动仍会重试。
-			}
-		}
-
-		// 兼容旧数据：早期版本把 DSH 会话当 pi 会话 attach（filePath=host zstd 文件、
-		// piSessionId=host 会话 id 落盘）。pi 侧逻辑会把 zstd 文件当 pi 会话文件
-		// 处理（启动 pi exited code=1、导出/删除误判等）。dsh 条目只保留 dshSessionId，
-		// filePath/piSessionId 一律清除（dshSessionId 已在上方迁移补齐）。
-		const pollutedDsh = this.entries.some((entry) => entry.backend === "dsh" && (Boolean(entry.filePath) || Boolean(entry.piSessionId)));
-		if (pollutedDsh) {
-			for (const entry of this.entries) {
-				if (entry.backend !== "dsh") continue;
-				delete entry.filePath;
-				delete entry.piSessionId;
-				entry.originKey = undefined;
-			}
-			try {
-				await this.writeSnapshot(this.entries);
-			} catch {
-				// 迁移是 best-effort；内存已生效，下一次启动仍会重试。
-			}
-		}
 		this.loaded = true;
 		if (this.skipNextBackup) {
 			await this.writeSnapshot(this.entries);
@@ -456,21 +419,14 @@ export class SessionCatalog {
 		return entry ? cloneEntry(entry) : undefined;
 	}
 
-	/** 按 DSH host 会话 id 反查 catalog 记录（会话标题同步用；只读查询，不排队写）。
-	 *  transient 草稿尚未 attach host 会话（无 dshSessionId），只需查持久 entries。 */
-	findByDshSessionId(dshSessionId: string): SessionCatalogEntry | undefined {
-		this.assertLoaded();
-		const entry = this.entries.find((candidate) => candidate.dshSessionId === dshSessionId);
-		return entry ? cloneEntry(entry) : undefined;
-	}
-
-	/** 侧栏删除过的 DSH host 会话。自动同步跳过；手动导入会清掉。 */
+	/** legacy compatibility：侧栏删除过的 DSH host 会话墓碑（旧 catalog 字段）。
+	 *  DSH 自动同步已删除，保留读写只为旧数据不因字段缺失而报错。 */
 	listDismissedDshSessionIds(): Set<string> {
 		this.assertLoaded();
 		return new Set(this.dismissedDshSessionIds);
 	}
 
-	/** 删除 DSH 映射时记下墓碑，避免 host 目录还在时刷新又把会话导回来。 */
+	/** legacy compatibility：记下 DSH 会话删除墓碑（旧调用链，当前无生产调用方）。 */
 	async rememberDismissedDshSession(dshSessionId: string): Promise<void> {
 		this.assertLoaded();
 		const id = dshSessionId.trim();
@@ -621,9 +577,10 @@ export class SessionCatalog {
 		 * titleOrigin: "manual".
 		 */
 		titleOrigin?: SessionTitleOrigin;
-		/** DSH agent 预设（会话「模式」）草稿期预选；外部会话导入时来自 host 会话 header。 */
+		/** legacy compatibility：DSH agent 预设；旧数据原样回写，无运行时会消费。 */
 		agentPreset?: string;
-		/** 外部（dsh-web 等）会话导入：host 会话已存在，条目直接置 active（重启不清理）。 */
+		/** legacy compatibility：外部 DSH 会话导入的身份字段（host 会话 id）。DSH 后端已删除，
+		 *  该分支保留只为继续读取/回写旧 catalog 数据，不再有任何导入方传入它。 */
 		dshSessionId?: string;
 		/**
 		 * DSH 外部会话的真实活跃时间（磁盘日志文件 mtime）。自动同步每轮全量重导，
@@ -634,8 +591,7 @@ export class SessionCatalog {
 		/** 纠正归属时保留已有真实标题；占位名（cwd 末段）由调用方决定是否覆盖。 */
 		keepExistingTitle?: boolean;
 		/**
-		 * 手动找回（配置页导入 / 归档恢复）才清删除墓碑。
-		 * 自动同步禁止带这个：否则删映射的同时刷新还在跑，createDraft 会把墓碑清掉再写回侧栏。
+		 * legacy compatibility：手动找回（配置页导入 / 归档恢复）才清 DSH 删除墓碑。
 		 */
 		restoreDismissed?: boolean;
 	}): Promise<SessionRecord> {
@@ -835,7 +791,7 @@ export class SessionCatalog {
 			const previousFilePath = entry.filePath;
 			// DSH 的 sessionPath 是 host zstd，不是 pi JSONL；写进 filePath 会让渲染层
 			// 把空会话当成有磁盘历史（起始页 / 骨架来回抽）。
-			if (filePath && entry.backend !== "dsh") entry.filePath = filePath;
+			if (filePath) entry.filePath = filePath;
 			if (input.piSessionId) entry.piSessionId = input.piSessionId;
 			if (input.dshSessionId) {
 				entry.dshSessionId = input.dshSessionId;

@@ -86,9 +86,6 @@ export type UsageProbeRecognition = {
 	category: UsageProbeTemplateCategory;
 };
 
-/** 用量查询的配置宿主：pi（~/.pi/agent/usage-probes.json）或 dsh（$DSH_HOME/usage-probes.json）。 */
-export type UsageProbeBackend = "pi" | "dsh";
-
 /**
  * 单 provider 的用量查询配置（~/.pi/agent/usage-probes.json 的 providers 映射条目）。
  * 内置命中的 provider 不写任何字段也生效（内置默认开）；显式 disabled=false 才关闭。
@@ -170,8 +167,6 @@ export type UsageProbeSettingsResult = {
 /** save-usage-probes 入参：按 provider 合并写（保留文件里其它 providers 与旧 probes 数组）。 */
 export type UsageProbeSaveInput = {
 	provider: string;
-	/** 配置宿主：pi 落 ~/.pi/agent，dsh 落 $DSH_HOME（缺省 pi）。 */
-	backend?: UsageProbeBackend;
 	config: UsageProbeProviderConfig;
 };
 
@@ -188,8 +183,6 @@ export type UsageProbeSaveResult = {
  */
 export type UsageProbeTestInput = {
 	provider: string;
-	/** 配置宿主（缺省 pi）；dsh = 端点走 pi-ai catalog 兜底、凭据从 $DSH_HOME/.credentials.yaml 读。 */
-	backend?: UsageProbeBackend;
 	/** "general" | "newapi" | "cookie" | "volcengine" | 内置 templateId（省略 = 自动识别）。 */
 	template?: string;
 	apiKey?: string;

@@ -48,8 +48,8 @@ function compile() {
 			return syncRequire(specifier);
 		}
 		if (specifier === "electron") return { net: { fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }) } };
-		// provider 名宽松校验（与 providerMigration.isSafeProviderName 同规则）。
-		if (specifier === "./providerMigration") {
+		// provider 名宽松校验（与 piProviderConfig.isSafeProviderName 同规则）。
+		if (specifier === "./piProviderConfig") {
 			return {
 				isSafeProviderName: (name) => typeof name === "string" && name.trim().length > 0 && name.trim().length <= 80 && !/[\\/]/.test(name) && !name.includes(".."),
 			};

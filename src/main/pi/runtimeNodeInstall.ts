@@ -10,8 +10,8 @@
  *   卸载 PiDeck（删 userData）即彻底清理。
  * - 哈希固化在 `shared/types/piRuntimeNode.ts`（取自官方 SHASUMS256.txt），
  *   不依赖网络拉索引——镜像文件被篡改时校验必然失败。
- * - 下载复用 DSH runtime 的 net 下载器（尊重应用代理、流式落盘、重定向跟随），
- *   解压复用 DSH 的系统 tar 两遍式（先列条目做 tar slip 安全校验，再解压）。
+ * - 下载走 Electron net（尊重应用代理、流式落盘、重定向跟随），
+ *   解压使用系统 tar 两遍式（先列条目做 tar slip 安全校验，再解压）。
  * - 安装完成后探测 `node -v` 确认可用；半截解压（下载中断/杀软拦截）文件会在
  *   但跑不起来，必须探测确认而不是 existsSync 就算装好。
  */
@@ -22,18 +22,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { DshRuntimeDownloader, DshRuntimeExtractor } from "../dsh/runtime/DshRuntimeManager";
-import { sha256OfFile } from "../dsh/runtime/DshRuntimeManager";
+import type { RuntimeDownloader, RuntimeExtractor } from "../runtime/archiveIo";
+import { sha256OfFile } from "../runtime/archiveIo";
 import { PI_RUNTIME_NODE_VERSION, PI_RUNTIME_NODE_SHA256, piRuntimeNodeArchiveName, piRuntimeNodeDownloadUrls, piRuntimeNodeInnerDir, toPiRuntimePlatform, toPiRuntimeArch, type PiRuntimeNodeInstallResult, type PiRuntimeNodeStatus } from "../../shared/types/piRuntimeNode";
 
 const execFileAsync = promisify(execFile);
 
 /** 安装器可替换的 IO 依赖（测试注入本地替身，不碰网络与磁盘归档）。 */
 export type RuntimeNodeInstallerDeps = {
-	/** 下载器：DSH runtime 同源的 net 流式下载（file:// 支持本地测试）。 */
-	download: DshRuntimeDownloader;
+	/** 下载器：Electron net 流式下载（file:// 支持本地测试）。 */
+	download: RuntimeDownloader;
 	/** 解压器：系统 tar 两遍式（安全校验）。 */
-	extract: DshRuntimeExtractor;
+	extract: RuntimeExtractor;
 };
 
 /** `<userData>/pi-runtime` 根目录。 */
@@ -156,17 +156,8 @@ export async function installPiRuntimeNode(
 }
 
 /** 校验通过的归档：解压到临时目录 → 平铺移动整个发行包到 userData → 探测版本。 */
-async function extractAndProbe(input: {
-	archivePath: string;
-	destDir: string;
-	innerDir: string;
-	exePath: string;
-	expectedMajor: string;
-	extract: DshRuntimeExtractor;
-	probeVersion: (nodePath: string) => Promise<string | undefined>;
-	log?: (message: string, detail?: unknown) => void;
-}): Promise<PiRuntimeNodeInstallResult> {
-	// 解压目标用全新空目录（DshRuntimeExtractor 契约要求 destDir 为空），
+async function extractAndProbe(input: { archivePath: string; destDir: string; innerDir: string; exePath: string; expectedMajor: string; extract: RuntimeExtractor; probeVersion: (nodePath: string) => Promise<string | undefined>; log?: (message: string, detail?: unknown) => void }): Promise<PiRuntimeNodeInstallResult> {
+	// 解压目标用全新空目录（RuntimeExtractor 契约要求 destDir 为空），
 	// 解压后内层目录平铺移动到 destDir。
 	const extractRoot = await mkdtemp(join(tmpdir(), "pideck-node-extract-"));
 	try {

@@ -180,8 +180,6 @@ export type SessionStatusDetail = {
 	detailRows: SessionDetailRow[];
 	/** 最近一条回复的性能指标（TTFT/总耗时/tps）：与上下文累计量分开展示，避免误读为整段会话均值 */
 	replyPerfRows: SessionDetailRow[];
-	/** DSH 会话统计（host sessionStats 投影：回合/步骤、墙钟、平均首字、生成速度） */
-	sessionStatRows: SessionDetailRow[];
 	hasDetail: boolean;
 };
 
@@ -190,14 +188,13 @@ export type SessionStatusDetail = {
  * 纯函数：label/value 已本地化，调用方只负责布局。
  */
 export function buildSessionStatusDetail(
-	state: Pick<AgentRuntimeState, "contextPercent" | "contextTokens" | "contextWindow" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "cacheTotal" | "cacheHitPercent" | "ttftMs" | "totalMs" | "tps" | "cost" | "dshSessionStats"> | undefined,
+	state: Pick<AgentRuntimeState, "contextPercent" | "contextTokens" | "contextWindow" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "cacheTotal" | "cacheHitPercent" | "ttftMs" | "totalMs" | "tps" | "cost"> | undefined,
 	averageCacheHit: number | undefined,
 	averageCacheHitSampleCount: number,
 ): SessionStatusDetail {
 	const detailRows: SessionDetailRow[] = [];
 	const replyPerfRows: SessionDetailRow[] = [];
-	const sessionStatRows: SessionDetailRow[] = [];
-	if (!state) return { detailRows, replyPerfRows, sessionStatRows, hasDetail: false };
+	if (!state) return { detailRows, replyPerfRows, hasDetail: false };
 	// 美元→人民币估算汇率（仅用于费用提示的便捷换算，非实时牌价；
 	// 如后续需要跟随实时汇率，可升级为设置项 usdToCnyRate）
 	const cnyAmount = state.cost != null ? `¥${(state.cost * USD_TO_CNY_RATE).toFixed(2)}` : undefined;
@@ -254,32 +251,10 @@ export function buildSessionStatusDetail(
 		detailRows.push({ label: t("ctx.detail.cost"), value: `$${state.cost.toFixed(3)}`, emphasis: true });
 		detailRows.push({ label: t("ctx.detail.costCny"), value: cnyAmount ?? "-", emphasis: true });
 	}
-	// DSH 会话统计（host sessionStats 投影，dsh-web StatsLine 同源）：整段日志的
-	// 回合/步骤计数与墙钟汇总。与 pi 的「上次回复」性能组语义不同，独立成组展示。
-	const sessionStats = state.dshSessionStats;
-	if (sessionStats) {
-		sessionStatRows.push({
-			label: t("ctx.detail.turnsSteps"),
-			value: `${sessionStats.turns} / ${sessionStats.steps}`,
-		});
-		if (sessionStats.llmMs > 0) {
-			sessionStatRows.push({ label: t("ctx.detail.llmDuration"), value: formatDuration(sessionStats.llmMs) });
-		}
-		if (sessionStats.toolMs > 0) {
-			sessionStatRows.push({ label: t("ctx.detail.toolDuration"), value: formatDuration(sessionStats.toolMs) });
-		}
-		if (sessionStats.ttftAvgMs != null) {
-			sessionStatRows.push({ label: t("ctx.detail.ttftAverage"), value: formatDuration(sessionStats.ttftAvgMs) });
-		}
-		if (sessionStats.tokensPerSecond != null) {
-			sessionStatRows.push({ label: t("ctx.detail.tps"), value: `${sessionStats.tokensPerSecond.toFixed(0)} tok/s` });
-		}
-	}
 	return {
 		detailRows,
 		replyPerfRows,
-		sessionStatRows,
-		hasDetail: detailRows.length > 0 || replyPerfRows.length > 0 || sessionStatRows.length > 0,
+		hasDetail: detailRows.length > 0 || replyPerfRows.length > 0,
 	};
 }
 
@@ -296,7 +271,7 @@ export function SessionStatus(props: {
 	const history = props.cacheHitHistory ?? [];
 	const averageCacheHit = state.cacheHitAveragePercent ?? (history.length > 0 ? history.reduce((sum, value) => sum + value, 0) / history.length : undefined);
 	const averageCacheHitSampleCount = state.cacheHitSampleCount ?? history.length;
-	const { detailRows, replyPerfRows, sessionStatRows, hasDetail } = buildSessionStatusDetail(state, averageCacheHit, averageCacheHitSampleCount);
+	const { detailRows, replyPerfRows, hasDetail } = buildSessionStatusDetail(state, averageCacheHit, averageCacheHitSampleCount);
 	// cost-chip 悬浮提示里的人民币估算（与明细行共用同一汇率常量）
 	const cnyAmount = state.cost != null ? `¥${(state.cost * USD_TO_CNY_RATE).toFixed(2)}` : undefined;
 
@@ -350,17 +325,6 @@ export function SessionStatus(props: {
 						<div className="mt-2.5 grid gap-1 border-t border-border/70 pt-2">
 							<div className="px-1 text-micro font-semibold uppercase tracking-wide text-muted-foreground">{t("ctx.detail.lastReply")}</div>
 							{replyPerfRows.map((row) => (
-								<div key={row.label} className="flex items-baseline justify-between gap-4 px-1 py-0.5 text-caption leading-5">
-									<span className="shrink-0 text-muted-foreground">{row.label}</span>
-									<span className="min-w-0 whitespace-nowrap text-right font-mono font-semibold tabular-nums text-popover-foreground">{row.value}</span>
-								</div>
-							))}
-						</div>
-					)}
-					{sessionStatRows.length > 0 && (
-						<div className="mt-2.5 grid gap-1 border-t border-border/70 pt-2">
-							<div className="px-1 text-micro font-semibold uppercase tracking-wide text-muted-foreground">{t("ctx.detail.sessionStats")}</div>
-							{sessionStatRows.map((row) => (
 								<div key={row.label} className="flex items-baseline justify-between gap-4 px-1 py-0.5 text-caption leading-5">
 									<span className="shrink-0 text-muted-foreground">{row.label}</span>
 									<span className="min-w-0 whitespace-nowrap text-right font-mono font-semibold tabular-nums text-popover-foreground">{row.value}</span>

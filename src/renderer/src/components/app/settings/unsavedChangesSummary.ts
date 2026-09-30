@@ -125,7 +125,6 @@ const FIELD_CATALOG: readonly FieldCatalogEntry[] = [
 	{ field: "wslDistro", tab: "dev", itemKey: "settings.wsl.distro" },
 	{ field: "wslUser", tab: "dev", itemKey: "settings.wsl.user" },
 	{ field: "customPiPath", tab: "dev", itemKey: "settings.customPiPath" },
-	{ field: "dshRunnerNodePath", tab: "dev", itemKey: "settings.dshRunnerNode" },
 	{ field: "autoDownloadUpdates", tab: "dev", itemKey: "settings.autoDownloadUpdates" },
 	{ field: "rpcTimeout", tab: "dev", itemKey: "settings.rpcTimeout" },
 	{ field: "maxEditorFileSizeMB", tab: "dev", itemKey: "settings.maxEditorFileSize" },

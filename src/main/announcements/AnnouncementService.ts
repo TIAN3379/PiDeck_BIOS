@@ -22,7 +22,21 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import { ANNOUNCEMENT_SOURCES, unwrapAtomgitContents } from "../../shared/announcementSources";
 import type { AnnouncementItem, AnnouncementLevel, AnnouncementSnapshot, AnnouncementState } from "../../shared/types/announcement";
-import { compareSemver } from "../../shared/types/dshRuntimeManifest";
+
+function compareSemver(a: string, b: string): number {
+	const parse = (value: string) =>
+		value
+			.replace(/^v/, "")
+			.split(/[.+-]/)
+			.slice(0, 3)
+			.map((part) => Number.parseInt(part, 10) || 0);
+	const left = parse(a);
+	const right = parse(b);
+	for (let index = 0; index < 3; index += 1) {
+		if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+	}
+	return 0;
+}
 
 /** 定时拉取间隔：2 小时（用户指定）。 */
 export const ANNOUNCEMENT_REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;

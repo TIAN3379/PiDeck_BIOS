@@ -1,7 +1,6 @@
 import { Activity, CircleStop, Info, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { AgentProcessMetric, ProcessMetricsSnapshot } from "../../../../../shared/types";
-import { DSH_HOST_MONITOR_ID } from "../../../../../shared/types/processMetrics";
 import { formatMb } from "../../../../../shared/formatBytes";
 import { t } from "../../../i18n";
 import { Button } from "../../ui-shadcn/button";
@@ -11,7 +10,7 @@ import { ConfirmDialog } from "../../ui-shadcn/ConfirmDialog";
 
 /**
  * 进程与内存监控面板（由 Pi 管理界面迁入设置，独立 tab）。
- * 监控 pi agent 子进程 + 共享的 DSH host。Electron 自身进程的内存不再展示
+ * 监控 pi agent 子进程。Electron 自身进程的内存不再展示
  * （用户自行在系统任务管理器/活动监视器中查看）。
  * 仅手动刷新：点击「刷新」时经 IPC 拉取一次快照，不做轮询，避免 tasklist/ps
  * 系统调用对性能敏感场景（大量 agent 并发）造成不必要的开销。
@@ -122,11 +121,11 @@ export function ProcessMetricsTab() {
 								</TableHeader>
 								<TableBody>
 									{agents.map((agent) => (
-										<TableRow key={`${agent.kind ?? "pi"}:${agent.pid}`}>
+										<TableRow key={`${agent.agentId}:${agent.pid}`}>
 											<TableCell className="max-w-56 truncate font-medium" title={monitorRowLabel(agent)}>
 												{monitorRowLabel(agent)}
 											</TableCell>
-											{/* 会话列：标题优先；DSH 共用一行时单元格用摘要，悬停给完整标题列表 */}
+											{/* 会话列优先展示标题。 */}
 											<TableCell className="max-w-56 truncate text-text-secondary" title={sessionColumnTooltip(agent)}>
 												{sessionColumnLabel(agent)}
 											</TableCell>
@@ -164,7 +163,7 @@ export function ProcessMetricsTab() {
 			{stoppingAgent ? (
 				<ConfirmDialog
 					title={t("config.process.stop")}
-					message={t(isDshHostRow(stoppingAgent) ? "config.process.stopHostConfirm" : "config.process.stopConfirm", { agent: monitorRowLabel(stoppingAgent) })}
+					message={t("config.process.stopConfirm", { agent: monitorRowLabel(stoppingAgent) })}
 					confirmLabel={t("config.process.stop")}
 					danger
 					onConfirm={() => {
@@ -179,35 +178,14 @@ export function ProcessMetricsTab() {
 	);
 }
 
-function isDshHostRow(agent: AgentProcessMetric): boolean {
-	return agent.kind === "dsh-host" || agent.agentId === DSH_HOST_MONITOR_ID;
-}
-
-/** 表内展示名：DSH host 用固定文案，避免把内部 id `dsh-host` 直接甩给用户。 */
 function monitorRowLabel(agent: AgentProcessMetric): string {
-	return isDshHostRow(agent) ? t("config.process.dshHost") : agent.agentId;
+	return agent.agentId;
 }
 
-function listedSessionTitles(agent: AgentProcessMetric): string[] {
-	if (agent.sessionTitles && agent.sessionTitles.length > 0) {
-		return agent.sessionTitles.filter((title) => title.trim().length > 0);
-	}
-	const single = agent.sessionTitle?.trim();
-	return single ? [single] : [];
-}
-
-/** 会话列正文：单会话用标题；DSH 多会话用「首个标题 + 共 N 个」，避免拼成长串被截断。 */
 function sessionColumnLabel(agent: AgentProcessMetric): string {
-	const titles = listedSessionTitles(agent);
-	if (titles.length > 1) {
-		return t("config.process.dshSessionSummary", { title: titles[0], count: String(titles.length) });
-	}
-	return titles[0] ?? agent.sessionId ?? "-";
+	return agent.sessionTitle?.trim() || agent.sessionId || "-";
 }
 
-/** 会话列悬停：完整标题列表，不再用内部 sessionId / dsh-host。 */
 function sessionColumnTooltip(agent: AgentProcessMetric): string | undefined {
-	const titles = listedSessionTitles(agent);
-	if (titles.length > 0) return titles.join("\n");
-	return agent.sessionId;
+	return agent.sessionTitle?.trim() || agent.sessionId;
 }

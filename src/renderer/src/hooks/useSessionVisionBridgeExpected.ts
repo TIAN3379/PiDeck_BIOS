@@ -20,7 +20,7 @@ export function useSessionVisionBridgeExpected(sessionId: string, hasUserImages:
 	const [fetched, setFetched] = useState<{ key: string; supports: boolean } | null>(null);
 
 	useEffect(() => {
-		if (!hasUserImages || backend === "dsh") return;
+		if (!hasUserImages) return;
 		let cancelled = false;
 		const listed = desktopApi.projects.listModels(session?.projectId).catch(() => []);
 		const localFile = desktopApi.config
@@ -39,6 +39,6 @@ export function useSessionVisionBridgeExpected(sessionId: string, hasUserImages:
 		};
 	}, [lookupKey, hasUserImages, backend, session?.projectId, provider, modelId]);
 
-	const modelSupportsImages = fetched?.key === lookupKey ? fetched.supports : hasUserImages && backend !== "dsh" ? null : false;
-	return resolveVisionBridgeExpected({ backend, modelSupportsImages });
+	const modelSupportsImages = fetched?.key === lookupKey ? fetched.supports : hasUserImages ? null : false;
+	return resolveVisionBridgeExpected({ modelSupportsImages });
 }

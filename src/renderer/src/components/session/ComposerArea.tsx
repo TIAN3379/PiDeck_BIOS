@@ -238,15 +238,15 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 										gitInfo={props.gitInfo}
 										onSwitchBranch={props.onSwitchBranch}
 										record={composer.record}
-										defaultModel={composer.dshDefaultModel ?? composer.bootstrapDefaultModel}
-										defaultThinkingLevel={composer.dshDefaultThinkingLevel ?? composer.bootstrapDefaultThinkingLevel}
+										defaultModel={composer.bootstrapDefaultModel}
+										defaultThinkingLevel={composer.bootstrapDefaultThinkingLevel}
 										modelThinkingLevels={composer.bootstrapModelThinkingLevels}
 										backend={composer.backend}
 										onChangeBackend={composer.changeBackend}
 										feishuIndicator={feishuIndicator}
 										securityControl={
-											/* C20：后端安全控制位统一入口（pi 安全等级 / DSH 权限预设） */
-											<SecurityControl sessionId={props.sessionId} backend={composer.backend} disabled={composer.isStarting} />
+											/* C20：后端安全控制位统一入口（pi 安全等级） */
+											<SecurityControl sessionId={props.sessionId} disabled={composer.isStarting} />
 										}
 										quickMessagesControl={
 											/* 快捷消息：点条目插入草稿，条目右侧按钮直发（正文不进草稿，见 useSessionSend 的 overrideText 契约）；
@@ -316,8 +316,8 @@ export const ComposerArea = forwardRef<HTMLElement, ComposerAreaProps>(function 
 						onInsertTemplateContent={composer.pickers.insertTemplateContent}
 						onInsertSkill={composer.pickers.insertSkillInvocation}
 						onInsertSkillContent={composer.pickers.insertSkillContent}
-						defaultModel={composer.dshDefaultModel ?? composer.bootstrapDefaultModel}
-						defaultThinkingLevel={composer.dshDefaultThinkingLevel ?? composer.bootstrapDefaultThinkingLevel}
+						defaultModel={composer.bootstrapDefaultModel}
+						defaultThinkingLevel={composer.bootstrapDefaultThinkingLevel}
 						modelThinkingLevels={composer.bootstrapModelThinkingLevels}
 					/>
 					{composer.previewImage ? <ImagePreviewModal image={composer.previewImage} onClose={composer.modals.closePreview} /> : null}

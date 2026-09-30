@@ -122,17 +122,14 @@ test("meter ring follows the dsh geometry: 14px viewBox, r=5.5, 2px stroke, top-
 	assert.match(source, /addEventListener\("keydown", onKeyDown\)/);
 });
 
-test("contextSegments prefers host breakdown and falls back to estimate split", () => {
+test("contextSegments splits conversation vs system+tools from the message estimate", () => {
 	const { contextSegments } = loadMeterHelpers();
 	const seg = (state) => {
 		const result = contextSegments(state);
 		if (result === null) return null;
-		return result.kind === "breakdown" ? `breakdown:${result.system}:${result.tools}:${result.conversation}` : `estimate:${result.conversation}:${result.systemTools}`;
+		return `estimate:${result.conversation}:${result.systemTools}`;
 	};
-	// host contextBreakdown 投影（dsh）：系统/工具/对话三段直接可用，0 也是有效值
-	assert.equal(seg({ contextSystemTokens: 2400, contextToolsTokens: 1800, contextMessageTokens: 57600 }), "breakdown:2400:1800:57600");
-	assert.equal(seg({ contextSystemTokens: 0, contextToolsTokens: 0, contextMessageTokens: 0 }), "breakdown:0:0:0");
-	// 无投影（pi）：对话 = 消息估算 token，系统+工具 = 反推余量
+	// 对话 = 消息估算 token，系统+工具 = 反推余量
 	assert.equal(seg({ contextTokens: 128000, contextMessageTokens: 57600 }), "estimate:57600:70400");
 	// 估算超过总量时对话封顶，系统+工具为 0（不出现负数）
 	assert.equal(seg({ contextTokens: 1000, contextMessageTokens: 5000 }), "estimate:1000:0");
@@ -158,28 +155,21 @@ test("meter panel shows the localized reading and ~used/window figures", () => {
 	assert.match(source, /data-testid="session-context-meter"/);
 });
 
-test("panel adds dsh-style segments legend when message estimate exists", () => {
+test("panel adds the two-segment legend when message estimate exists", () => {
 	const source = meterSource();
-	// 三段（host breakdown）与两段（估算）图例共用色：对话蓝、工具紫、系统蓝灰
+	// 两段图例色：对话蓝、系统+工具紫
 	assert.match(source, /COLOR_CONVERSATION = "var\(--color-context-conversation, #2563eb\)"/);
 	assert.match(source, /COLOR_SYSTEM_TOOLS = "var\(--color-context-system-tools, rgb\(167, 139, 250\)\)"/);
-	assert.match(source, /COLOR_TOOLS = "var\(--color-context-tools, rgb\(167, 139, 250\)\)"/);
-	assert.match(source, /COLOR_SYSTEM = "var\(--color-context-system, #94a3b8\)"/);
-	// host breakdown 三段条：宽度 = percent × 份额 / breakdownTotal（dsh-web 同宽算法）
-	assert.match(source, /breakdownSegments/);
-	assert.match(source, /percent \* part\.tokens\) \/ breakdownTotal/);
 	// 估算两段条：宽度按占 contextWindow 比例（与单段总占用条同一容器；
 	// context 可能为 null（占位环）时 ?? 1 兜底，避免除零）
 	assert.match(source, /segments\.conversation \/ \(context\?\.contextWindow \?\? 1\)/);
 	assert.match(source, /segments\.systemTools \/ \(context\?\.contextWindow \?\? 1\)/);
-	// 图例行：swatch + 文案 + 右侧 ~tokens（dsh rows 形态）
+	// 图例行：swatch + 文案 + 右侧 ~tokens
 	assert.match(source, /t\("sessionContext\.conversation"\)/);
 	assert.match(source, /t\("sessionContext\.systemTools"\)/);
-	assert.match(source, /t\("sessionContext\.system"\)/);
-	assert.match(source, /t\("sessionContext\.tools"\)/);
 	assert.match(source, /size-2 flex-none rounded-\[2px\]/);
 	assert.match(source, /~\{formatTokens\(segments\.conversation\)\}/);
-	assert.match(source, /~\{formatTokens\(segments\.system\)\}/);
+	assert.match(source, /~\{formatTokens\(segments\.systemTools\)\}/);
 });
 
 test("input/output token row drops arrows and keeps values on one line", () => {
@@ -206,9 +196,6 @@ test("panel reuses the SessionStatus detail builder and keeps compact action", (
 	assert.match(source, /row\.label !== t\("ctx\.detail\.tokens"\) && row\.label !== t\("ctx\.detail\.hitLatest"\)/);
 	assert.match(source, /detail\.replyPerfRows\.map\(/);
 	assert.match(source, /t\("ctx\.detail\.lastReply"\)/);
-	// DSH 会话统计组（host sessionStats 投影；回合/墙钟/平均首字/生成速度）
-	assert.match(source, /detail\.sessionStatRows\.map\(/);
-	assert.match(source, /t\("ctx\.detail\.sessionStats"\)/);
 	assert.match(source, /row\.emphasis \? " mt-1 border-t border-border\/70 pt-1\.5" : ""/);
 	// 旧的自实现三行（命中率/输入输出/费用）已删除，避免与 builder 重复
 	assert.doesNotMatch(source, /sessionContext\.cacheHit/);
@@ -249,9 +236,9 @@ test("bottom bar wires the meter next to send controls and merges model + thinki
 	const source = bottomBarSource();
 	// ContextMeter 挂在右侧组（git 分支之前、发送控件同组）
 	assert.match(source, /import \{ SessionContextMeter \} from "\.\/SessionContextMeter"/);
-	assert.match(source, /<SessionContextMeter\s*state=\{props\.state\}\s*onCompact=\{props\.onCompact\}[\s\S]{0,180}?backend=\{usageBackend\}/);
+	assert.match(source, /<SessionContextMeter\s*state=\{props\.state\}\s*onCompact=\{props\.onCompact\}[\s\S]{0,320}?fallbackProvider=\{modelProvider\}/);
 	assert.match(source, /composer-bottom-right ml-auto flex shrink-0 items-center gap-2/);
-	// 模型/思考合并 chip：模型名 · 思考档位 + chevron（dsh ModelSelect trigger 形态）
+	// 模型/思考合并 chip：模型名 · 思考档位 + chevron
 	assert.match(source, /composer-bar-btn model-thinking/);
 	// 分隔点 span 内的 · 被格式化到独立一行，断言只要求「模型值后紧跟该分隔点 span」。
 	assert.match(source, /\{modelValue\}<\/span>[\s\S]{0,80}?<span className="flex-none text-muted-foreground\/70" aria-hidden="true">[\s\S]{0,10}?·[\s\S]{0,10}?<\/span>/);
@@ -275,15 +262,6 @@ test("context meter copy is present in both locale dictionaries", () => {
 		assert.match(locale, /"sessionContext\.figures": "~\{used\} \/ \{window\}"/);
 		assert.match(locale, /"sessionContext\.conversation":/);
 		assert.match(locale, /"sessionContext\.systemTools":/);
-		// host breakdown 三段图例文案（系统/工具/对话）
-		assert.match(locale, /"sessionContext\.system":/);
-		assert.match(locale, /"sessionContext\.tools":/);
-		// 会话统计组文案（DSH sessionStats 投影）
-		assert.match(locale, /"ctx\.detail\.sessionStats":/);
-		assert.match(locale, /"ctx\.detail\.turnsSteps":/);
-		assert.match(locale, /"ctx\.detail\.llmDuration":/);
-		assert.match(locale, /"ctx\.detail\.toolDuration":/);
-		assert.match(locale, /"ctx\.detail\.ttftAverage":/);
 		// 命中/输入输出/费用行已并入共享明细构建器（ctx.detail.*），面板不再单独占用文案 key
 		assert.doesNotMatch(locale, /"sessionContext\.cacheHit":/);
 		assert.doesNotMatch(locale, /"sessionContext\.cacheHitAvg":/);
@@ -301,7 +279,7 @@ test("usage block is delegated to the shared ProviderUsageDetails with settings 
 	// 圆球面板用量区块 = 共享 ProviderUsageDetails（与模型选择器展开区同一份数据源与视觉，
 	// 本组件只决定「是否渲染」与「失败跳转」，不再自持 fetch/缓存/展示逻辑）
 	assert.match(source, /import \{ ProviderUsageDetails \} from "\.\.\/app\/ProviderUsageDetails"/);
-	assert.match(source, /<ProviderUsageDetails provider=\{provider\} backend=\{props\.backend\} onConfigureUsage=\{onConfigureUsage\} \/>/);
+	assert.match(source, /<ProviderUsageDetails provider=\{provider\} onConfigureUsage=\{onConfigureUsage\} \/>/);
 	// 失败态入口 = 跳「设置 → 配置管理 → 模型」并定位该供应商（openSettingsAtom 深链）
 	assert.match(source, /openSettingsAtom/);
 	assert.match(source, /configTab: "models", provider \}/);
@@ -314,8 +292,8 @@ test("usage block is delegated to the shared ProviderUsageDetails with settings 
 test("picker shows usage inline on the provider group row; provider config pages keep the header badge", () => {
 	const picker = bottomBarSource();
 	// 用量回到「模型提供商」标题行右侧（trailing inline 单值位）：无数据/未启用时不渲染，
-	// 所以标题行保持干净；backend 随会话后端透传（DSH 会话走 dsh 链路，不误查 pi 的 usage-probes.json）。
-	assert.match(picker, /trailing=\{<ProviderUsageInline provider=\{provider\} variant="row" backend=\{props\.backend\} \/>\}/);
+	// 所以标题行保持干净。
+	assert.match(picker, /trailing=\{<ProviderUsageInline provider=\{provider\} variant="row" \/>\}/);
 	assert.match(picker, /useProviderUsageBatchRefresh/);
 	// 展开区不再挂用量明细块（明细在圆球面板；标题行只放单值位）。
 	assert.doesNotMatch(picker, /ProviderUsageDetails/);
@@ -325,7 +303,7 @@ test("picker shows usage inline on the provider group row; provider config pages
 	assert.match(commandPicker, /trailing\?: ReactNode/);
 	// Pi 模型页：折叠卡片不再另开 h-9 底栏——模型数徽章 + 卡头用量徽标都收进标题行；
 	// 展开体里的「用量」明细块（ProviderUsageDetails）仍不挂（卡头徽标已覆盖展示）；
-	// 整行点击展开来自上游，卡头徽标常驻；模型/认证/DSH 三页统一。
+	// 整行点击展开来自上游，卡头徽标常驻；模型/认证页统一。
 	const modelsTab = readFileSync("src/renderer/src/config/ModelsTab.tsx", "utf8");
 	assert.match(modelsTab, /ProviderUsageInline\s+provider=\{name\}\s+variant="card"/);
 	assert.match(modelsTab, /UsageQueryEntryButton/);
@@ -352,14 +330,6 @@ test("picker shows usage inline on the provider group row; provider config pages
 	assert.doesNotMatch(authTab, /ProviderUsageDetails/);
 	assert.doesNotMatch(authTab, /ProviderUsageRow/);
 	assert.match(authTab, /UsageQueryEntryButton/);
-	const dshCards = readFileSync("src/renderer/src/config/DshProviderCards.tsx", "utf8");
-	// DSH 卡片徽章必须走 dsh 链路（配置/凭据都在 $DSH_HOME，不误读 pi 的 usage-probes.json）。
-	assert.match(dshCards, /<ProviderUsageInline provider=\{entry\.key\} variant="card" backend="dsh" \/>/);
-	assert.match(dshCards, /<ProviderUsageInline provider="deepseek" variant="card" backend="dsh" \/>/);
-	assert.doesNotMatch(dshCards, /ProviderUsageDetails/);
-	assert.match(dshCards, /config\.dsh\.modelsCount/);
-	assert.doesNotMatch(dshCards, /ProviderUsageRow/);
-	assert.match(dshCards, /UsageQueryEntryButton/);
 	// 旧胶囊徽标组件已删除（cc-switch 风格无胶囊）
 	assert.equal(existsSync("src/renderer/src/components/app/ProviderUsageBadge.tsx"), false);
 });

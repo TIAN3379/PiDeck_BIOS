@@ -1,12 +1,6 @@
-/**
- * DSH runtime 的 IO 适配层（下载与解压的真实实现）。
- *
- * 与 DshRuntimeManager 分离：管理器只管编排与校验规则，IO 是可替换的实现细节
- * （测试注入替身，不碰网络与 tar）。两处都遵守 PiDeck 既有约定：
- * - 下载走 Electron `net`（尊重应用代理设置，与 app update 同源），不走 node fetch；
- * - 解压优先走系统自带 tar（Windows/macOS/Linux 均有，原生实现快约 5 倍），
- *   npm `tar`（纯 JS、无原生模块）作为兜底，保证安全语义一致（见方案文档 §5）。
- */
+/** Shared archive download and extraction helpers used by the pi runtime installer. */
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -15,9 +9,21 @@ import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { net } from "electron";
 import * as tar from "tar";
-import type { DshRuntimeReleaseIndex } from "../../../shared/types/dshRuntimeManifest";
-import type { DshRunnerNodeReleaseIndex } from "../../../shared/types/dshRunnerNodeRelease";
-import { isSafeArchiveEntry, type DshRuntimeDownloader, type DshRuntimeExtractor } from "./DshRuntimeManager";
+
+export type RuntimeDownloader = (url: string, destPath: string, onProgress?: (received: number, total?: number) => void, signal?: AbortSignal, options?: { resumeFromBytes?: number }) => Promise<void>;
+export type RuntimeExtractor = (archivePath: string, destDir: string) => Promise<void>;
+
+export function isSafeArchiveEntry(_destDir: string, entry: string): boolean {
+	const normalized = entry.replace(/\\\\/g, "/");
+	return !normalized.startsWith("/") && !/^[a-zA-Z]:\//.test(normalized) && !normalized.split("/").includes("..");
+}
+
+export async function sha256OfFile(filePath: string): Promise<string> {
+	const hash = createHash("sha256");
+	const stream = createReadStream(filePath);
+	for await (const chunk of stream) hash.update(chunk as Buffer);
+	return hash.digest("hex");
+}
 
 /** 重定向跟随上限：GitHub Release 资产会 302 到对象存储，正常 1~2 跳。 */
 const MAX_REDIRECTS = 5;
@@ -51,7 +57,7 @@ const execFileAsync = promisify(execFile);
  * 任一条目越界就整体回退 npm tar 逐条过滤，保持与旧实现相同的安全语义），系统 tar
  * 不可用或执行失败也回退 npm tar。
  */
-export function createTarExtractor(log?: (scope: string, message: string, detail?: unknown) => void, reject?: (path: string) => boolean): DshRuntimeExtractor {
+export function createTarExtractor(log?: (scope: string, message: string, detail?: unknown) => void, reject?: (path: string) => boolean): RuntimeExtractor {
 	return async (archivePath, destDir) => {
 		mkdirSync(destDir, { recursive: true });
 		const systemTar = resolveSystemTar();
@@ -61,7 +67,7 @@ export function createTarExtractor(log?: (scope: string, message: string, detail
 				return;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				log?.("dsh-runtime", "system tar extraction failed, falling back to npm tar", {
+				log?.("runtime", "system tar extraction failed, falling back to npm tar", {
 					tar: systemTar,
 					error: message,
 				});
@@ -73,7 +79,7 @@ export function createTarExtractor(log?: (scope: string, message: string, detail
 			filter: (path: string) => {
 				if (reject?.(path)) return false;
 				if (!isSafeArchiveEntry(destDir, path)) {
-					log?.("dsh-runtime", "rejected unsafe archive entry", { path });
+					log?.("runtime", "rejected unsafe archive entry", { path });
 					return false;
 				}
 				return true;
@@ -94,7 +100,7 @@ async function extractWithSystemTar(tarBin: string, archivePath: string, destDir
 	for (const entry of stdout.split(/\r?\n/)) {
 		if (!entry) continue;
 		if (reject?.(entry) || !isSafeArchiveEntry(destDir, entry)) {
-			log?.("dsh-runtime", "rejected unsafe archive entry", { path: entry });
+			log?.("runtime", "rejected unsafe archive entry", { path: entry });
 			throw new Error(`unsafe archive entry: ${entry}`);
 		}
 	}
@@ -112,7 +118,7 @@ async function extractWithSystemTar(tarBin: string, archivePath: string, destDir
  * 调用方把已落盘的字节数传进来，这里带 `Range` 请求剩余部分并追加写；
  * 服务端不理 Range（回 200 全量）时按全量重写，语义仍然正确——最终校验由调用方负责。
  */
-export function createNetDownloader(log?: (scope: string, message: string, detail?: unknown) => void): DshRuntimeDownloader {
+export function createNetDownloader(log?: (scope: string, message: string, detail?: unknown) => void): RuntimeDownloader {
 	return async (url, destPath, onProgress, signal, options) => {
 		// file:// / 本地路径：直接复制，不走 net（Electron net 不发 file 请求）。
 		const localPath = localPathFromUrl(url);
@@ -219,14 +225,6 @@ function fetchJsonIndex<T>(url: string, scope: string, validate: (parsed: T) => 
 	});
 }
 
-export function fetchDshRuntimeIndex(url: string, log?: (scope: string, message: string, detail?: unknown) => void): Promise<DshRuntimeReleaseIndex | null> {
-	return fetchJsonIndex<DshRuntimeReleaseIndex>(url, "dsh-runtime", (parsed) => Array.isArray(parsed?.releases), log);
-}
-
-export function fetchDshRunnerNodeIndex(url: string, log?: (scope: string, message: string, detail?: unknown) => void): Promise<DshRunnerNodeReleaseIndex | null> {
-	return fetchJsonIndex<DshRunnerNodeReleaseIndex>(url, "dsh-runner-node", (parsed) => Array.isArray(parsed?.releases), log);
-}
-
 type RequestOutcome = { kind: "done" } | { kind: "redirect"; location: string } | { kind: "restart" };
 
 /**
@@ -266,7 +264,7 @@ function requestOnce(url: string, destPath: string, onProgress: ((received: numb
 			// 416：请求起点超出远端资源长度。手里的半截文件不可信，交回外层从 0 重来。
 			if (status === 416) {
 				discardResponse(response);
-				log?.("dsh-runtime", "range not satisfiable, restarting from zero", { url, resumeFrom });
+				log?.("runtime", "range not satisfiable, restarting from zero", { url, resumeFrom });
 				settle({ kind: "restart" });
 				return;
 			}

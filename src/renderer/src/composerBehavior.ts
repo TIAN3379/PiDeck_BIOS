@@ -45,16 +45,9 @@ export function appendSlashCommandToDraft(draft: string, command: string): strin
 	return draft.trimEnd() ? `${draft.trimEnd()} ${token}` : token;
 }
 
-/**
- * 技能调用的斜杠 token（纯函数，供技能选择器与 controller 共用，单一来源）。
- * pi 的技能是内建 `/skill:名称` 命令（pi settings 的 enableSkillCommands 开关）：
- * 裸写 `/名称` pi 会当未知命令拒绝——这正是「斜线命令把技能过滤掉」的根因；
- * DSH 宿主由 dsh-tool-skill 把裸 `/名称` 注册成技能命令，保持原样即可。
- * 返回不含斜杠的命令名，由 appendSlashCommandToDraft 统一拼 `/<token> `。
- */
-export function toSkillInvocationToken(backend: AgentBackend, name: string): string {
-	// imagegen 无 LLM 不发技能，这里仅兜底按 pi 形态（不会实际被调用）；仅 dsh 用裸名
-	return backend === "dsh" ? name : `skill:${name}`;
+/** 技能调用的斜杠 token；返回不含斜杠的命令名。 */
+export function toSkillInvocationToken(name: string): string {
+	return `skill:${name}`;
 }
 
 /**
@@ -236,42 +229,14 @@ export function expandPromptTemplates(message: string, templates: PromptTemplate
 	};
 }
 
-/** DSH 当前目标投影（只取派生模式/首轮 /goal 需要的字段）。 */
-export type DshGoalModeSnapshot = {
-	phase?: "active" | "paused" | "blocked" | "complete";
-};
-
-/**
- * 桌面端派生 composer 模式。DSH：plan 由 host 持有；goal 由本地选择或进行中/阻塞的目标驱动。
- * 切回普通会把本地 mode 写成 normal，因此 paused 目标不会把选择器锁在目标模式。
- */
-export function deriveComposerAgentMode(input: { backend?: AgentBackend; localMode?: ComposerAgentMode; planModeActive?: boolean; goalPhase?: DshGoalModeSnapshot["phase"] }): ComposerAgentMode {
+/** 派生当前 composer 模式。 */
+export function deriveComposerAgentMode(input: { backend?: AgentBackend; localMode?: ComposerAgentMode }): ComposerAgentMode {
 	const localMode = input.localMode;
 	// imagegen 是独立后端：会话为生图后端时恒为生图模式（无 LLM mode 概念）
 	if (input.backend === "imagegen") return "imagegen";
 	// 遗留兼容：legacy 生图消息在 pi 会话上，localMode 仍可能是 imagegen，保留
 	if (localMode === "imagegen") return "imagegen";
-	if (input.backend !== "dsh") return localMode ?? "normal";
-	if (input.planModeActive) return "plan";
-	// 用户刚切回普通时 localMode 为 "normal"：即使 pause IPC 尚未落地，也不要把选择器弹回目标。
-	if (localMode === "normal") return "normal";
-	if (localMode === "goal") return "goal";
-	// 刷新后 atom 为空：进行中/阻塞的目标把选择器恢复为 goal。
-	if (input.goalPhase === "active" || input.goalPhase === "blocked") return "goal";
-	return "normal";
-}
-
-/**
- * DSH 没有 pi 的隐藏 agentMessage。首次进入目标且还没有 goal 时，把用户原文改写成 host `/goal`。
- * 已有未完成目标时保持原文，由 resume IPC + 普通 prompt 推进。
- */
-export function applyDshGoalSendTransform(input: { message: string; mode: ComposerAgentMode; goal?: DshGoalModeSnapshot }): string {
-	if (input.mode !== "goal") return input.message;
-	const trimmed = input.message.trim();
-	if (!trimmed || trimmed.startsWith("/")) return input.message;
-	const phase = input.goal?.phase;
-	if (phase && phase !== "complete") return input.message;
-	return `/goal ${trimmed}`;
+	return localMode ?? "normal";
 }
 
 /** 解析 pi-deck-goal-mode widget 行：`phase · rounds/max` + 目标 + 可选阻塞原因。 */

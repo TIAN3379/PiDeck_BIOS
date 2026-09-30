@@ -8,7 +8,6 @@ import { requireSessionCommand, sessionCommandFailureToast } from "../utils/sess
 import { setSessionQuotesAtom } from "../atoms/composer-atoms";
 import { extractQuoteTokens, pruneUnreferencedQuotes, rehydrateDraftFromMessage } from "../components/session/composer/quoteChip";
 import { resolveHistoryMutationPath } from "../utils/sessionHistoryMutationPolicy";
-import { sessionHistoryUnavailableState } from "../utils/sessionHistoryAvailability";
 import { messageEntryId } from "../utils/sessionCommands";
 
 type ConfirmConfig = {
@@ -91,13 +90,6 @@ export function useSessionHistoryMutations(deps: SessionHistoryMutationsDeps) {
 			showOverlay(sessionId, "reloading");
 			setLoadState({ sessionId, state: { status: "loading" } });
 			const page = await api.sessions.readRecordMessagePage(sessionId, undefined, 100);
-			// 与 App 的重载同源：DSH host 被手动停止时读到的是「暂时读不了」的空页，
-			// force 写进去会把刚改过的会话显示成空白（编辑/删除/重发后立刻触发，最迷惑）。
-			const unavailable = sessionHistoryUnavailableState(page);
-			if (unavailable) {
-				setLoadState({ sessionId, state: unavailable });
-				return;
-			}
 			cacheMessages({
 				sessionId,
 				messages: page.messages,
@@ -332,9 +324,6 @@ export function useSessionHistoryMutations(deps: SessionHistoryMutationsDeps) {
 				return fromId;
 			}
 		}
-		// DSH：直接按消息 id 解析 seq 锚点（乐观上屏的 randomUUID id 不命中，走下方文本回退）。
-		const dshMatch = /^dsh:(\d+)$/.exec(message.id);
-		if (dshMatch) return `seq:${dshMatch[1]}`;
 		if (!target) return undefined;
 		try {
 			const wrapped = requireSessionCommand(await api.sessions.getRuntimeForkMessages(target));

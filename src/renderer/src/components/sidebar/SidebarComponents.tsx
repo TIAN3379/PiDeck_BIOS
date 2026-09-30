@@ -47,15 +47,17 @@ import { cn } from "../../lib/utils";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui-shadcn/dropdown-menu";
 import { Button } from "../ui-shadcn/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui-shadcn/table";
-import type { SessionSummary, Project, AgentTab, ArchivedDshSession, ArchivedPiSession } from "../../../../shared/types";
+import type { SessionSummary, Project, AgentTab, ArchivedPiSession } from "../../../../shared/types";
 import { worktreeSlugify } from "../../../../shared/worktreeSlug";
-import { SessionSourceBadge, SessionBackendMark, DshSourceBadge, ImageGenSourceBadge } from "../session/SessionSourceBadge";
+import { SessionSourceBadge, SessionBackendMark, ImageGenSourceBadge } from "../session/SessionSourceBadge";
 import { Checkbox } from "../ui-shadcn/checkbox";
 import { Input } from "../ui-shadcn/input";
 import { Label } from "../../components/ui-shadcn/label";
 import { BridgeGuiSlot, useBridgeSessionId } from "../bridge/BridgeSlot";
 import { SESSION_FILTER_PILLS, filterSessionsByPills, pillsPresentIn, type SessionFilterPill } from "../../sessionFilterPills";
-import { archivedDshWorkspaceLabel, archivedPiWorkspaceLabel, filterArchivedDshByFamily, filterArchivedPiByFamily, managerArchivedDshLabel, managerArchivedRowKey, mergeManagerArchived, sessionManagerRowKey, sessionWorkspaceLabel, worktreeFamilyProjects, type ManagerArchivedRow } from "../../sessionManagerModel";
+import { archivedPiWorkspaceLabel, filterArchivedPiByFamily, managerArchivedRowKey, sessionManagerRowKey, sessionWorkspaceLabel, worktreeFamilyProjects } from "../../sessionManagerModel";
+
+type PiArchivedRow = { kind: "pi"; item: ArchivedPiSession };
 
 /**
  * 工作区标签（会话管理弹窗内复用）：worktree 家族聚合后，非主工作区会话
@@ -88,30 +90,23 @@ export function SessionManagerModal(props: {
 	listArchived: () => Promise<ArchivedPiSession[]>;
 	/** 永久删除已归档会话（pi 文件归档：移入回收站并移出索引） */
 	deleteArchived: (archivedPath: string) => Promise<void>;
-	/** 列出 DSH 归档会话（归档视图用；host 目录已移入 .pideck-archive，含标题） */
-	listArchivedDsh: () => Promise<ArchivedDshSession[]>;
-	/** 恢复 DSH 归档会话（主进程移回 sessions 树并重建 catalog 记录） */
-	onUnarchiveDsh: (dshSessionId: string) => Promise<void>;
-	/** 永久删除已归档 DSH 会话（host 目录移入回收站） */
-	deleteArchivedDsh: (dshSessionId: string) => Promise<void>;
 }) {
 	// 弹窗项目上下文 = 整个 worktree 家族（根 + 全部子工作区），与侧栏工作区树语义一致。
 	const family = useMemo(() => worktreeFamilyProjects(props.projects, props.projectId), [props.projects, props.projectId]);
-	// 过滤 pill 集合：来源（pi/codex/claude/opencode）+ DSH 后端。
-	// DSH 会话 source 恒为 "pi"，归属判定必须按 backend 优先（见 sessionFilterPills）。
+	// 过滤 pill 集合：会话来源与生图后端。
 	const [activePills, setActivePills] = useState<Set<SessionFilterPill>>(new Set(SESSION_FILTER_PILLS));
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [selectAll, setSelectAll] = useState(false);
 	// 已归档视图：true 时展示归档会话并提供恢复；数据打开弹窗时按需拉取。
 	const [showArchived, setShowArchived] = useState(false);
-	const [archivedRows, setArchivedRows] = useState<ManagerArchivedRow[] | null>(null);
+	const [archivedRows, setArchivedRows] = useState<PiArchivedRow[] | null>(null);
 	// 已归档视图选中集合（行身份 = managerArchivedRowKey，与主列表 selected 独立）。
 	const [archivedSelected, setArchivedSelected] = useState<Set<string>>(new Set());
 	const [archivedSelectAll, setArchivedSelectAll] = useState(false);
 	// 已归档行待删除确认：单行/批量均收敛到这里（数组）；确认后调主进程删除并刷新归档列表。
-	const [pendingDeleteArchived, setPendingDeleteArchived] = useState<ManagerArchivedRow[] | null>(null);
+	const [pendingDeleteArchived, setPendingDeleteArchived] = useState<PiArchivedRow[] | null>(null);
 
-	// 按 pill 过滤（一个会话只归属一个 pill，DSH 不与 Pi 重复计数）
+	// 按 pill 过滤（一个会话只归属一个 pill）
 	const filteredSessions = useMemo(() => filterSessionsByPills(props.sessions, activePills), [props.sessions, activePills]);
 
 	const togglePill = (pill: SessionFilterPill) => {
@@ -128,7 +123,7 @@ export function SessionManagerModal(props: {
 		setSelectAll(false);
 	};
 
-	// 全选/取消全选（只在当前过滤后的范围内；行身份用稳定记录 id，DSH 无 filePath 不冲突）
+	// 全选/取消全选（只在当前过滤后的范围内；行身份用稳定记录 id）
 	const handleToggleAll = () => {
 		if (selectAll) {
 			setSelected(new Set());
@@ -157,12 +152,13 @@ export function SessionManagerModal(props: {
 		props.onDelete(toDelete);
 	};
 
-	// 归档视图数据：pi（文件归档）+ DSH（host 目录归档）按家族归属过滤后合并，恢复后重新拉取。
+	// 归档视图数据按家族归属过滤，恢复后重新拉取。
 	// 弹窗按项目上下文（整个 worktree 家族）展示归档，不再全量跨项目。
 	const loadArchivedRows = () => {
-		void Promise.all([props.listArchived(), props.listArchivedDsh()])
-			.then(([piSessions, dshItems]) => {
-				setArchivedRows(mergeManagerArchived(filterArchivedPiByFamily(piSessions, family), filterArchivedDshByFamily(dshItems, family)));
+		void props
+			.listArchived()
+			.then((piSessions) => {
+				setArchivedRows(filterArchivedPiByFamily(piSessions, family).map((item) => ({ kind: "pi" as const, item })));
 				// 数据刷新后清空选中，避免删除/恢复后残留全选或计数。
 				setArchivedSelected(new Set());
 				setArchivedSelectAll(false);
@@ -232,7 +228,7 @@ export function SessionManagerModal(props: {
 												className={`h-auto rounded-full border border-border-subtle bg-transparent px-3 py-1 text-caption font-medium text-text-tertiary transition-all duration-150 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]${activePills.has(pill) ? " border-[var(--color-accent)] bg-bg-active font-semibold text-[var(--color-accent)]" : ""}`}
 												onClick={() => togglePill(pill)}
 											>
-												{t(pill === "dsh" ? "sessionBackend.dsh" : pill === "imagegen" ? "sessionBackend.imagegen" : `sessionSource.${pill}`)}
+												{t(pill === "imagegen" ? "sessionBackend.imagegen" : `sessionSource.${pill}`)}
 											</Button>
 										))}
 									</div>
@@ -329,7 +325,7 @@ export function SessionManagerModal(props: {
 									) : (
 										archivedRows.map((row) => {
 											// 归档行工作区标签：worktree 子项目会话打「目录名」标（与主列表同策略），主工作区不打。
-											const workspaceLabel = row.kind === "pi" ? archivedPiWorkspaceLabel(row.item, family) : archivedDshWorkspaceLabel(row.item, family);
+											const workspaceLabel = archivedPiWorkspaceLabel(row.item, family);
 											const rowKey = managerArchivedRowKey(row);
 											const isChecked = archivedSelected.has(rowKey);
 											return (
@@ -340,23 +336,11 @@ export function SessionManagerModal(props: {
 														</Label>
 													</TableCell>
 													<TableCell className="w-full max-w-0">
-														{row.kind === "pi" ? (
-															<div className="flex min-w-0 items-center gap-2">
-																<span className="truncate text-control text-text-primary">{row.item.summary.name || row.item.summary.preview?.slice(0, 60) || t("common.untitled")}</span>
-																{workspaceLabel && <WorkspaceTag label={workspaceLabel} />}
-																{row.item.summary.source && row.item.summary.source !== "pi" && <SessionSourceBadge source={row.item.summary.source} />}
-															</div>
-														) : (
-															// DSH 归档行：manifest/日志折叠标题 > cwd 末段 > host id（managerArchivedDshLabel 纯策略）。
-															// 不展示 cwd 路径（同家族下路径信息无益；cwd 末段兜底已含区分能力）。
-															<div className="flex min-w-0 items-center gap-2">
-																<span className="truncate text-control text-text-primary">
-																	<span className="font-medium">{managerArchivedDshLabel(row)}</span>
-																</span>
-																{workspaceLabel && <WorkspaceTag label={workspaceLabel} />}
-																<SessionBackendMark backend="dsh" />
-															</div>
-														)}
+														<div className="flex min-w-0 items-center gap-2">
+															<span className="truncate text-control text-text-primary">{row.item.summary.name || row.item.summary.preview?.slice(0, 60) || t("common.untitled")}</span>
+															{workspaceLabel && <WorkspaceTag label={workspaceLabel} />}
+															{row.item.summary.source && row.item.summary.source !== "pi" && <SessionSourceBadge source={row.item.summary.source} />}
+														</div>
 													</TableCell>
 													<TableCell className="w-40 text-right">
 														<div className="flex items-center justify-end gap-0.5">
@@ -366,7 +350,7 @@ export function SessionManagerModal(props: {
 																className="h-auto gap-[3px] rounded-[4px] px-2 text-caption text-text-tertiary transition-all duration-150 hover:bg-bg-hover hover:text-[var(--color-accent)]"
 																onClick={() => {
 																	// 恢复后重新拉取归档列表（主列表由 catalog refresh 自动更新）
-																	const restored = row.kind === "pi" ? props.onUnarchive(row.item.summary) : props.onUnarchiveDsh(row.item.dshSessionId);
+																	const restored = props.onUnarchive(row.item.summary);
 																	void restored.then(loadArchivedRows);
 																}}
 																title={t("sessionManager.restore")}
@@ -409,7 +393,7 @@ export function SessionManagerModal(props: {
 														<span className="truncate text-control text-text-primary">{session.name || session.preview?.slice(0, 60) || t("common.untitled")}</span>
 														{/* worktree 家族聚合：非主工作区会话打目录名标签，让用户一眼区分会话属于哪个工作区 */}
 														{sessionWorkspaceLabel(session.projectId, family) && <WorkspaceTag label={sessionWorkspaceLabel(session.projectId, family)!} />}
-														{session.backend === "dsh" || session.backend === "imagegen" ? (
+														{session.backend === "imagegen" ? (
 															// DSH/生图会话无来源徽标（source 恒为 pi），用后端徽标区分（与侧栏树一致）
 															<SessionBackendMark backend={session.backend} />
 														) : (
@@ -458,12 +442,7 @@ export function SessionManagerModal(props: {
 							{pendingDeleteArchived !== null && pendingDeleteArchived.length > 1
 								? t("sessionManager.deleteArchivedBodyMany", { count: pendingDeleteArchived.length })
 								: t("sessionManager.deleteArchivedBody", {
-										name:
-											pendingDeleteArchived === null || pendingDeleteArchived.length === 0
-												? ""
-												: pendingDeleteArchived[0].kind === "pi"
-													? pendingDeleteArchived[0].item.summary.name || pendingDeleteArchived[0].item.summary.preview?.slice(0, 60) || t("common.untitled")
-													: managerArchivedDshLabel(pendingDeleteArchived[0]),
+										name: pendingDeleteArchived === null || pendingDeleteArchived.length === 0 ? "" : pendingDeleteArchived[0].item.summary.name || pendingDeleteArchived[0].item.summary.preview?.slice(0, 60) || t("common.untitled"),
 									})}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
@@ -475,7 +454,7 @@ export function SessionManagerModal(props: {
 								const pending = pendingDeleteArchived;
 								setPendingDeleteArchived(null);
 								if (!pending || pending.length === 0) return;
-								const deleting = Promise.all(pending.map((row) => (row.kind === "pi" ? props.deleteArchived(row.item.summary.filePath) : props.deleteArchivedDsh(row.item.dshSessionId))));
+								const deleting = Promise.all(pending.map((row) => props.deleteArchived(row.item.summary.filePath)));
 								void deleting.then(loadArchivedRows).catch(() => loadArchivedRows());
 							}}
 						>
@@ -533,7 +512,6 @@ export function SessionSourceFilterMenu(props: { menu: { projectId: string; x: n
 		zcode: t("sessionSource.zcode"),
 		workbuddy: t("sessionSource.workbuddy"),
 		cursor: t("sessionSource.cursor"),
-		dsh: t("sessionBackend.dsh"),
 		imagegen: t("sessionBackend.imagegen"),
 	};
 	// 过滤菜单需要连续勾选，onSelect preventDefault 保持菜单打开
@@ -552,7 +530,7 @@ export function SessionSourceFilterMenu(props: { menu: { projectId: string; x: n
 			<DropdownMenuSeparator />
 			{sources.map((pill) => (
 				<DropdownMenuCheckboxItem key={pill} checked={props.filter !== null && props.filter.has(pill)} onSelect={(event) => event.preventDefault()} onCheckedChange={() => props.onToggleSource(pill)}>
-					{pill === "dsh" ? <DshSourceBadge /> : pill === "imagegen" ? <ImageGenSourceBadge /> : <SessionSourceBadge source={pill} />}
+					{pill === "imagegen" ? <ImageGenSourceBadge /> : <SessionSourceBadge source={pill} />}
 					<span className="text-body">{pillLabels[pill]}</span>
 				</DropdownMenuCheckboxItem>
 			))}
@@ -828,33 +806,26 @@ export function AgentContextMenu(props: {
 					{t(props.isPinned ? "menu.unpinSession" : "menu.pinSession")}
 				</DropdownMenuItem>
 			)}
-			{/* DSH 运行中会话的复制走 clone 分流（fork 无锚点完整副本），保留入口；
-			    导出 HTML 无 DSH 实现（G10 待决策），对 dsh agent 隐藏 */}
 			<DropdownMenuItem disabled={busy} onSelect={props.onCopySession}>
 				{props.actionLoading === "copy" && <span className="mini-loader animate-pideck-spin" />}
 				<Copy className="size-3.5" aria-hidden="true" />
 				{props.actionLoading === "copy" ? t("menu.copying") : t("menu.copySession")}
 			</DropdownMenuItem>
-			{props.menu.agent.backend !== "dsh" && (
-				<DropdownMenuItem disabled={busy} onSelect={props.onExport}>
-					{props.actionLoading === "export" && <span className="mini-loader animate-pideck-spin" />}
-					<FileDown className="size-3.5" aria-hidden="true" />
-					{props.actionLoading === "export" ? t("menu.exporting") : t("menu.exportHtml")}
-				</DropdownMenuItem>
-			)}
+			<DropdownMenuItem disabled={busy} onSelect={props.onExport}>
+				{props.actionLoading === "export" && <span className="mini-loader animate-pideck-spin" />}
+				<FileDown className="size-3.5" aria-hidden="true" />
+				{props.actionLoading === "export" ? t("menu.exporting") : t("menu.exportHtml")}
+			</DropdownMenuItem>
 			{props.menu.agent.sessionPath && (
 				<>
 					<DropdownMenuItem disabled={busy} onSelect={props.onCopySessionFilePath}>
 						<Link2 className="size-3.5" aria-hidden="true" />
 						{t("menu.copySessionFilePath")}
 					</DropdownMenuItem>
-					{/* DSH 会话文件是 zstd 压缩的持久化日志，系统默认程序打开无意义：只留复制 */}
-					{props.menu.agent.backend !== "dsh" && (
-						<DropdownMenuItem disabled={busy} onSelect={props.onOpenSessionFile}>
-							<FileText className="size-3.5" aria-hidden="true" />
-							{t("menu.openAgentSessionFile")}
-						</DropdownMenuItem>
-					)}
+					<DropdownMenuItem disabled={busy} onSelect={props.onOpenSessionFile}>
+						<FileText className="size-3.5" aria-hidden="true" />
+						{t("menu.openAgentSessionFile")}
+					</DropdownMenuItem>
 				</>
 			)}
 			{/* 会话运行控制：全状态可用（启动/停止/重载三项按策略置灰） */}
@@ -966,25 +937,20 @@ export function SessionContextMenu(props: {
 			)}
 			{/* 运行控制：全状态可用（历史会话未启动时主控项即「启动 Agent」） */}
 			{props.runControl && <SidebarRunControlItems runControl={props.runControl} />}
-			{/* DSH 历史会话无宿主文件可复制/导出（主进程显式拒绝，A8/A9）：隐藏入口 */}
 			<DropdownMenuItem disabled={busy} onSelect={props.onOpenProxySetting}>
 				<Settings2 className="size-3.5" aria-hidden="true" />
 				{t("menu.sessionProxy")}
 			</DropdownMenuItem>
-			{props.menu.session.backend !== "dsh" && (
-				<DropdownMenuItem disabled={busy} onSelect={props.onCopySession}>
-					{props.actionLoading === "copy" && <span className="mini-loader animate-pideck-spin" />}
-					<Copy className="size-3.5" aria-hidden="true" />
-					{props.actionLoading === "copy" ? t("menu.copying") : t("menu.copySession")}
-				</DropdownMenuItem>
-			)}
-			{props.menu.session.backend !== "dsh" && (
-				<DropdownMenuItem disabled={busy} onSelect={props.onExport}>
-					{props.actionLoading === "export" && <span className="mini-loader animate-pideck-spin" />}
-					<FileDown className="size-3.5" aria-hidden="true" />
-					{props.actionLoading === "export" ? t("menu.exporting") : t("menu.exportHtml")}
-				</DropdownMenuItem>
-			)}
+			<DropdownMenuItem disabled={busy} onSelect={props.onCopySession}>
+				{props.actionLoading === "copy" && <span className="mini-loader animate-pideck-spin" />}
+				<Copy className="size-3.5" aria-hidden="true" />
+				{props.actionLoading === "copy" ? t("menu.copying") : t("menu.copySession")}
+			</DropdownMenuItem>
+			<DropdownMenuItem disabled={busy} onSelect={props.onExport}>
+				{props.actionLoading === "export" && <span className="mini-loader animate-pideck-spin" />}
+				<FileDown className="size-3.5" aria-hidden="true" />
+				{props.actionLoading === "export" ? t("menu.exporting") : t("menu.exportHtml")}
+			</DropdownMenuItem>
 			{props.hasFilePath !== false && (
 				<>
 					<DropdownMenuSeparator />
@@ -992,13 +958,10 @@ export function SessionContextMenu(props: {
 						<Link2 className="size-3.5" aria-hidden="true" />
 						{t("menu.copySessionFilePath")}
 					</DropdownMenuItem>
-					{/* DSH 会话文件是 zstd 压缩的持久化日志，系统默认程序打开无意义：只留复制 */}
-					{props.menu.session.backend !== "dsh" && (
-						<DropdownMenuItem disabled={busy} onSelect={props.onOpenSessionFile}>
-							<FileText className="size-3.5" aria-hidden="true" />
-							{t("menu.openSessionFile")}
-						</DropdownMenuItem>
-					)}
+					<DropdownMenuItem disabled={busy} onSelect={props.onOpenSessionFile}>
+						<FileText className="size-3.5" aria-hidden="true" />
+						{t("menu.openSessionFile")}
+					</DropdownMenuItem>
 				</>
 			)}
 			{showRpcGroup && (

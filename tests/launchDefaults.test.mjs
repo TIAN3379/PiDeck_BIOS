@@ -161,19 +161,6 @@ test("welcome 偏好非法形状被忽略，返回空", () => {
 	}
 });
 
-test("dsh 后端忽略模型来源（模型归属 host settings），思考档位仍填充", () => {
-	const result = resolve({
-		backend: "dsh",
-		settings: { defaultThinkingLevel: "high" },
-		models: OPENAI,
-		lastUsedModel: { provider: "openai", modelId: "gpt-5.2" },
-		welcomeModel: { provider: "openai", modelId: "gpt-5.2" },
-	});
-	assert.equal(result.model, undefined);
-	assert.equal(result.defaultModelConfigured, undefined);
-	assert.equal(result.thinkingLevel, "high");
-});
-
 test("无每模型默认时思考档位取 settings.defaultThinkingLevel（偏好/模型来源不影响）", () => {
 	const result = resolve({
 		settings: { defaultThinkingLevel: "max", defaultProvider: "openai", defaultModel: "gpt-5.2" },
@@ -242,19 +229,6 @@ test("映射表整表回传给引导页（键值裁剪空白，脏项剔除）",
 		models: MANY,
 	});
 	assert.deepEqual(fullPlain(result.modelThinkingLevels), { "openai/gpt-5.2": "high", "anthropic/claude-opus-4-6": "max" });
-});
-
-test("dsh 后端不参与每模型默认（模型与档位都归 host settings）", () => {
-	const result = resolve({
-		backend: "dsh",
-		settings: { defaultThinkingLevel: "low", modelThinkingLevels: { "openai/gpt-5.2": "xhigh" } },
-		models: OPENAI,
-		lastUsedModel: { provider: "openai", modelId: "gpt-5.2" },
-	});
-	assert.equal(result.model, undefined);
-	assert.equal(result.thinkingLevel, "low");
-	// DSH 的默认档位由 host 目录提供，映射表不应泄漏到渲染层。
-	assert.equal(result.modelThinkingLevels, undefined);
 });
 
 test("half-configured settings（只有 defaultProvider）不进回退歧义", () => {

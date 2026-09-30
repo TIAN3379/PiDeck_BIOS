@@ -1,4 +1,4 @@
-import type { ArchivedDshSession, ArchivedPiSession, Project, SessionSummary } from "../../shared/types";
+import type { ArchivedPiSession, Project, SessionSummary } from "../../shared/types";
 
 /**
  * 会话管理弹窗（SessionManagerModal）的纯策略层：收录条件、行身份、
@@ -11,18 +11,14 @@ import type { ArchivedDshSession, ArchivedPiSession, Project, SessionSummary } f
 
 /**
  * 会话管理弹窗收录条件：
- * - pi/导入会话：有会话文件（filePath）才进（草稿无文件，侧栏单独展示，不进弹窗）；
- * - DSH 会话：没有 pi 会话文件，按 host 会话 id（dshSessionId）判定；
- *   DSH 草稿（未发送、无 host id）同样不进弹窗，与 pi 草稿语义一致。
+ * 有会话文件（filePath）才进入；草稿无文件，侧栏单独展示。
  */
 export function isManagerSessionSummary(summary: SessionSummary): boolean {
-	if (summary.backend === "dsh") return Boolean(summary.dshSessionId);
 	return Boolean(summary.filePath);
 }
 
 /**
- * 行身份：SessionRecord.id 跨重启稳定，pi/DSH 均唯一。
- * 不能沿用 filePath：DSH 会话无文件路径（空串会让多行 key 冲突、选中集合错乱）。
+ * 行身份使用跨重启稳定的 SessionRecord.id。
  */
 export function sessionManagerRowKey(summary: SessionSummary): string {
 	return summary.id;
@@ -112,20 +108,6 @@ export function filterArchivedPiByFamily(items: readonly ArchivedPiSession[], fa
 	});
 }
 
-/**
- * DSH 归档按家族过滤：manifest cwd 精确匹配家族成员路径
- * （DSH 会话 cwd 恒等于创建/归属时刻的某项目 path，含 worktree 目录）。
- */
-export function filterArchivedDshByFamily(items: readonly ArchivedDshSession[], family: readonly Project[]): ArchivedDshSession[] {
-	const nativeMembers = familyPathSet(family, false);
-	const wslMembers = familyPathSet(family, true);
-	return items.filter((item) => {
-		const wsl = isWslLikePath(item.cwd);
-		const members = wsl ? wslMembers : nativeMembers;
-		return members.has(canonicalWorkspacePath(item.cwd, wsl));
-	});
-}
-
 /** canonical 路径归属到的家族非根成员（最长成员路径优先：worktree 目录可能嵌套在主项目下）。 */
 function workspaceMemberForPath(canonical: string, wsl: boolean, family: readonly Project[]): Project | undefined {
 	const root = familyRootProject(family);
@@ -151,44 +133,12 @@ export function archivedPiWorkspaceLabel(item: ArchivedPiSession, family: readon
 	return workspaceMemberForPath(canonicalWorkspacePath(projectPath, wsl), wsl, family)?.name;
 }
 
-/** DSH 归档行工作区标签：cwd 归属 worktree 子项目时返回目录名；主工作区返回 undefined。 */
-export function archivedDshWorkspaceLabel(item: ArchivedDshSession, family: readonly Project[]): string | undefined {
-	const wsl = isWslLikePath(item.cwd);
-	return workspaceMemberForPath(canonicalWorkspacePath(item.cwd, wsl), wsl, family)?.name;
-}
+/** 归档视图中的 Pi 会话行。 */
+export type ManagerArchivedRow = { kind: "pi"; item: ArchivedPiSession };
 
 /**
- * DSH 归档行标签（纯策略）：manifest/日志折叠标题 > cwd 末段 > 裸 host id。
- * 标题仍缺省（极老归档、日志无折叠结果）时也要比裸 id 可读。
- */
-export function managerArchivedDshLabel(row: Extract<ManagerArchivedRow, { kind: "dsh" }>): string {
-	const title = row.item.title?.trim();
-	if (title) return title;
-	const cwd = row.item.cwd.replace(/[\\/]+$/, "").trim();
-	if (cwd) {
-		const last = cwd.split(/[\\/]/).pop()?.trim();
-		if (last) return last;
-	}
-	return row.item.dshSessionId;
-}
-
-/** 归档视图合并行：pi 会话按文件恢复；DSH 会话按 host id 恢复。 */
-export type ManagerArchivedRow = { kind: "pi"; item: ArchivedPiSession } | { kind: "dsh"; item: ArchivedDshSession };
-
-/**
- * 归档行身份（弹窗选中集合用）：pi 行用会话记录 id，DSH 行用 host 会话 id。
- * 与主列表 sessionManagerRowKey 同语义，两类 id 命名空间不冲突。
+ * 归档行身份（弹窗选中集合用）使用会话记录 id。
  */
 export function managerArchivedRowKey(row: ManagerArchivedRow): string {
-	return row.kind === "pi" ? sessionManagerRowKey(row.item.summary) : row.item.dshSessionId;
-}
-
-/** 归档行时间戳（排序用）：pi 用 updatedAt，DSH 用 archivedAt。 */
-function managerArchivedTimestamp(row: ManagerArchivedRow): number {
-	return row.kind === "pi" ? row.item.summary.updatedAt : row.item.archivedAt;
-}
-
-/** 合并 pi / DSH 归档清单为一个视图，按时间倒序（调用方应先按家族过滤）。 */
-export function mergeManagerArchived(piSessions: readonly ArchivedPiSession[], dshItems: readonly ArchivedDshSession[]): ManagerArchivedRow[] {
-	return [...piSessions.map((item) => ({ kind: "pi" as const, item })), ...dshItems.map((item) => ({ kind: "dsh" as const, item }))].sort((a, b) => managerArchivedTimestamp(b) - managerArchivedTimestamp(a));
+	return sessionManagerRowKey(row.item.summary);
 }

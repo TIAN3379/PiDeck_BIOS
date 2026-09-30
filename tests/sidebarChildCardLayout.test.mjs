@@ -12,7 +12,6 @@ const styles = readRendererStyles();
 const titleScrollText = readFileSync("src/renderer/src/components/sidebar/TitleScrollText.tsx", "utf8");
 const sessionTree = readFileSync("src/renderer/src/components/sidebar/SessionTree.tsx", "utf8");
 const activeSessionsTree = readFileSync("src/renderer/src/components/sidebar/ActiveSessionsTree.tsx", "utf8");
-const dshSearchResults = readFileSync("src/renderer/src/components/sidebar/DshSearchResults.tsx", "utf8");
 const projectTree = readFileSync("src/renderer/src/components/sidebar/ProjectTree.tsx", "utf8");
 const agentListDisplay = readFileSync("src/renderer/src/agentListDisplay.ts", "utf8");
 const tabBar = readFileSync("src/renderer/src/components/session/SessionTabsBar.tsx", "utf8");
@@ -53,8 +52,6 @@ test("sidebar child titles use the shared width clamp and hover-scroll component
 	assert.match(sessionTree, /标题被截断时 hover 滚动展示全文/);
 	assert.match(activeSessionsTree, /import \{ TitleScrollText \} from "\.\/TitleScrollText"/);
 	assert.match(activeSessionsTree, /<TitleScrollText text=\{displayTitle\} className="font-medium" \/>/);
-	assert.match(dshSearchResults, /import \{ TitleScrollText \} from "\.\/TitleScrollText"/);
-	assert.match(dshSearchResults, /text=\{record\.title\}/);
 	assert.doesNotMatch(titleScrollText, /title=\{overflowing \? text : undefined\}/);
 	assert.match(titleScrollText, /titleScrollDurationMs\(overflow\)/);
 	assert.match(titleScrollText, /titleScrollTiming/);
@@ -64,7 +61,7 @@ test("sidebar child titles use the shared width clamp and hover-scroll component
 
 test("all sidebar session rows allow hover scrolling while tab strategy stays scoped", () => {
 	// 选中背景仍由行 class 保留；TitleScrollText 不应因聚焦/选中而禁用，便于查看完整标题。
-	for (const source of [sessionTree, activeSessionsTree, dshSearchResults]) {
+	for (const source of [sessionTree, activeSessionsTree]) {
 		assert.doesNotMatch(source, /<TitleScrollText\b[^>]*\bdisabled\b/);
 	}
 	// 顶部 Tab 保留独立的激活态禁用和 500ms 防抖策略。
@@ -140,9 +137,9 @@ test("sidebar omits the redundant projects heading and tabs shrink to their titl
 });
 
 test("text backend badge keeps its width instead of covering tab actions", () => {
-	// DSH 标记是文字徽标，不能继续复用图标徽标的固定正方形宽度；否则文本会溢出并覆盖右侧操作按钮。
+	// 生图标记是文字徽标，不能继续复用图标徽标的固定正方形宽度；否则文本会溢出并覆盖右侧操作按钮。
 	assert.doesNotMatch(tabBar, /SessionBackendBadge className=\"size-4 shrink-0\"/);
-	assert.match(sourceBadge, /h-4 rounded px-1/);
+	assert.match(sourceBadge, /h-4 rounded[^"]*px-1/);
 });
 
 test("session tabs stay outside SessionView; header is standalone in pane", () => {

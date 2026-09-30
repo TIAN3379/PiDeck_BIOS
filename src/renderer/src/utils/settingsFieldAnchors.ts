@@ -58,12 +58,6 @@ export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
 	},
 	{
 		tab: "dev",
-		slug: "dsh-runner-node",
-		labelKey: "settings.dshRunnerNode",
-		keywords: ["dsh", "runner node", "node 路径", "沙箱 node", "本机 node"],
-	},
-	{
-		tab: "dev",
 		slug: "dev-auto-download-updates",
 		labelKey: "settings.autoDownloadUpdates",
 		keywords: ["自动下载", "更新", "auto download", "升级", "新版本"],
@@ -162,12 +156,6 @@ export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
 	},
 	{
 		tab: "common",
-		slug: "common-default-agent-backend",
-		labelKey: "settings.defaultAgentBackend",
-		keywords: ["默认后端", "pi", "dsh", "backend", "默认 agent"],
-	},
-	{
-		tab: "common",
 		slug: "common-expand-interim-during-stream",
 		labelKey: "settings.expandInterimDuringStream",
 		keywords: ["流式展开", "中间步骤", "interim", "展开思考"],
@@ -250,7 +238,7 @@ export const SETTINGS_FIELD_ANCHORS: readonly SettingsFieldAnchor[] = [
 		tab: "appearance",
 		slug: "appearance-modules",
 		labelKey: "settings.modules.title",
-		keywords: ["隐藏模块", "功能模块", "隐藏", "显示模块", "hide", "modules", "收起", "dsh", "飞书", "桌宠", "生图"],
+		keywords: ["隐藏模块", "功能模块", "隐藏", "显示模块", "hide", "modules", "收起", "飞书", "桌宠", "生图"],
 	},
 
 	// ── Git ──────────────────────────────────────────────────────────

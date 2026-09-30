@@ -51,7 +51,7 @@ export interface SessionCatalogGateway {
 			updatedAt?: number;
 		},
 	): Promise<SessionCatalogEntry>;
-	attachRuntime(input: { sessionId: string; filePath?: string; piSessionId?: string; dshSessionId?: string; promoteToActive?: boolean }): Promise<unknown>;
+	attachRuntime(input: { sessionId: string; filePath?: string; piSessionId?: string; promoteToActive?: boolean }): Promise<unknown>;
 }
 
 export interface SessionAgentGateway {
@@ -1339,10 +1339,9 @@ export class SessionRuntimeCoordinator {
 				environment: entry.environment,
 				source: entry.source,
 				backend: entry.backend,
-				dshSessionId: entry.backend === "dsh" ? entry.dshSessionId : undefined,
 				// DSH agent 预设（会话「模式」）：草稿期预选，新建 host 会话时随 sessions.create
 				// 应用；attach 已有会话时由 DshAgentManager 从 host list 行读回（本字段被忽略）。
-				agentPreset: entry.backend === "dsh" ? entry.agentPreset : undefined,
+				agentPreset: entry.agentPreset,
 				wslDistro: entry.wslDistro,
 				wslUser: entry.wslUser,
 				importedSourceId: entry.importedSourceId,
@@ -1363,9 +1362,6 @@ export class SessionRuntimeCoordinator {
 			if (created) {
 				// 激活失败兜底：DSH 的 host 会话已在 $DSH_HOME 创建，先落 dshSessionId
 				// 再停运行时，避免每次重试新建孤儿。保持 draft——还没开聊，不能抬成 active。
-				if (tab.backend === "dsh" && tab.sessionId) {
-					await this.catalog.attachRuntime({ sessionId, dshSessionId: tab.sessionId }).catch(() => undefined);
-				}
 				await this.agents.stop(tab.id).catch(() => undefined);
 			}
 			throw new Error(`Failed to apply session preferences: ${errorMessage(error)}`);
@@ -1386,29 +1382,11 @@ export class SessionRuntimeCoordinator {
 	}
 
 	/**
-	 * 会话运行时身份 → catalog attach patch（C9）：收拢 backend 特判——
-	 * - DSH：只回写 dshSessionId，**绝不写 filePath/piSessionId**（2026-08 兼容期教训：
-	 *   dsh 的 tab.sessionPath 是 host 的 zstd 会话文件，曾随文件分支落盘导致 pi 侧把
-	 *   zstd 文件当 pi 会话文件启动（pi exited code=1））；
-	 * - 通用/pi：sessionPath + piSessionId 落「文件配对」分支。
+	 * 会话运行时身份 → catalog attach patch（C9）：
+	 * sessionPath + piSessionId 落「文件配对」分支（只有 pi JSONL 走文件配对）。
 	 * 返回 null 表示无需回写（匿名会话等）。
 	 */
-	private buildAttachPatch(
-		sessionId: string,
-		tab: Pick<AgentTab, "sessionPath" | "sessionId" | "backend" | "agentPreset">,
-		entry: Pick<SessionCatalogEntry, "noSession" | "backend">,
-	): { sessionId: string; filePath?: string; piSessionId?: string; dshSessionId?: string; agentPreset?: string; promoteToActive?: boolean } | null {
-		if (entry.backend === "dsh") {
-			return tab.sessionId && !entry.noSession
-				? {
-						sessionId,
-						dshSessionId: tab.sessionId,
-						// DSH 会话的 preset 只在 host 会话 header 里（草稿预选可能被 host 修正），
-						// attach/新建后把实际值回写 catalog，头部胶囊展示真实模式。
-						...(tab.agentPreset ? { agentPreset: tab.agentPreset } : {}),
-					}
-				: null;
-		}
+	private buildAttachPatch(sessionId: string, tab: Pick<AgentTab, "sessionPath" | "sessionId" | "backend">, entry: Pick<SessionCatalogEntry, "noSession" | "backend">): { sessionId: string; filePath?: string; piSessionId?: string; promoteToActive?: boolean } | null {
 		if (tab.sessionPath && !entry.noSession) {
 			return {
 				sessionId,
@@ -1468,7 +1446,6 @@ export class SessionRuntimeCoordinator {
 		// 创建时不知道后端，或用户切了默认后端）；host 目录没有该 provider/模型时
 		// selectModel 会拒绝。降级为「应用宿主默认模型」并告警，不让整个激活失败
 		// （否则每次重试都新建一个 host 会话 = 孤儿堆积）。pi 保持严格（模型应在 models.json）。
-		const isDsh = entry.backend === "dsh";
 		if (entry.model) {
 			try {
 				await this.agents.setModel(agentId, entry.model.provider, entry.model.modelId);
@@ -1481,9 +1458,9 @@ export class SessionRuntimeCoordinator {
 				// 无法再发送，报 Model not found: nacho/gpt-5.6-sol）。
 				// 带 needsRestart 的失败（模型存在但运行中 Agent 快照过期）不降级——
 				// 渲染层会引导用户重启 Agent 加载新配置。
-				const modelGoneOnPi = !isDsh && this.isModelGoneError(error);
-				if (!isDsh && !modelGoneOnPi) throw error;
-				void this.logger?.warn("session-runtime", modelGoneOnPi ? "pi model preference ignored: model no longer exists" : "DSH model preference ignored", {
+				const modelGoneOnPi = this.isModelGoneError(error);
+				if (!modelGoneOnPi) throw error;
+				void this.logger?.warn("session-runtime", "pi model preference ignored: model no longer exists", {
 					sessionId: entry.id,
 					provider: entry.model.provider,
 					modelId: entry.model.modelId,
@@ -1493,7 +1470,7 @@ export class SessionRuntimeCoordinator {
 				// DSH 不提示的话，引导页点选（已作为显式 model 带入，issue #253）会在 host
 				// 拒绝时静默失效——底栏显示用户选的模型，实际跑的是部署默认。pi 侧本来就有
 				// 会话内系统消息；DSH 的 gateway 实现走 agentsNotice toast。
-				if (modelGoneOnPi || isDsh) {
+				if (modelGoneOnPi) {
 					this.agents.notifyModelPreferenceIgnored?.(agentId, entry.model.provider, entry.model.modelId);
 				}
 			}
@@ -1502,16 +1479,7 @@ export class SessionRuntimeCoordinator {
 			try {
 				await this.agents.setThinking(agentId, entry.thinkingLevel);
 			} catch (error) {
-				if (!isDsh) throw error;
-				const message = errorMessage(error);
-				void this.logger?.warn("session-runtime", "DSH thinking preference ignored", {
-					sessionId: entry.id,
-					thinkingLevel: entry.thinkingLevel,
-					error: message,
-				});
-				// 后端是档位能力的最终裁决者。即使本次 host 拒绝，也保留用户偏好：
-				// 目录配置、provider 或模型在之后变化时仍可重新应用，不能由 PiDeck
-				// 根据一条当前错误擅自清空用户选择。
+				throw error;
 			}
 		}
 		// DSH 权限预设（草稿期预选 / 会话内切换回写）：激活时经 /permission 命令应用
@@ -1850,7 +1818,7 @@ export class SessionRuntimeCoordinator {
 			if (!entry) {
 				throw new SessionRuntimeCommandError("SESSION_NOT_FOUND", `Session not found: ${sessionId}`);
 			}
-			if (entry.backend === "dsh" || entry.backend === "imagegen") {
+			if (entry.backend === "imagegen") {
 				throw new SessionRuntimeCommandError("SESSION_COMMAND_FAILED", `backend "${entry.backend}" does not support persisted session message mutation`);
 			}
 			if (!entry.filePath) {

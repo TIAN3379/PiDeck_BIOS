@@ -442,7 +442,7 @@ function normalizeTaskInput(input: CreateAutomationTaskInput | Record<string, un
 	const projectId = requireTrimmedString(input.projectId, "Project", 200);
 	const prompt = requireTrimmedString(input.prompt, "Prompt", 100_000);
 	const schedule = normalizeSchedule(input.schedule);
-	const backend = input.backend === "dsh" ? ("dsh" as const) : input.backend === "pi" ? ("pi" as const) : undefined;
+	const backend = input.backend === "pi" ? ("pi" as const) : undefined;
 	const model = normalizeModel(input.model);
 	const thinkingLevel = optionalTrimmedString(input.thinkingLevel, 100);
 	const permissionPreset = optionalTrimmedString(input.permissionPreset, 100);

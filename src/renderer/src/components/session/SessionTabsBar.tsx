@@ -908,7 +908,7 @@ function SessionTab(props: {
 	// 两处 gap-1.5 12），104px 下标题只剩约 50px ≈ 4-5 个汉字，已在可读性下限附近：
 	// 若还嫌宽，应先改「状态点/关闭按钮只在激活或 hover 时占位」的取舍，而不是继续压宽度。
 	// 截断细节由 hover 富提示（标题 + 工作区）与 TitleScrollText 滚动兜底。
-	const hasLeadingBadges = Boolean(record?.backend === "dsh" || record?.backend === "imagegen" || runtime?.state?.planModeActive || (runtime?.state?.goal && runtime.state.goal.phase !== "complete"));
+	const hasLeadingBadges = Boolean(record?.backend === "imagegen");
 	// Tab 级操作（固定/关闭等）改为右键菜单（ContextMenu，光标处弹出）；Tab 本体点击仍是切换，
 	// 拖拽排序与中键关闭与菜单互不干扰（drag/auxclick 不触发 click）。
 	// 运行控制（停止/重启/重新加载）只作用于当前会话，已上收右上角 ⋯ 更多操作菜单。
@@ -926,9 +926,7 @@ function SessionTab(props: {
 						<SessionActivityIndicator status={status} sessionId={sessionId} busy={props.isRestarting || props.isStopping || props.isReloading} />
 						{pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
 						<TitleScrollText text={title} disabled className="truncate font-bold" />
-						{(record?.backend === "dsh" || record?.backend === "imagegen") && <SessionBackendBadge backend={record.backend} className="h-4 shrink-0" />}
-						{runtime?.state?.planModeActive && <span className="shrink-0 text-xs text-muted-foreground">{t("app.composerModePlan")}</span>}
-						{runtime?.state?.goal && runtime.state.goal.phase !== "complete" && <span className="shrink-0 text-xs text-muted-foreground">{t("app.composerModeGoal")}</span>}
+						{record?.backend === "imagegen" && <SessionBackendBadge backend={record.backend} className="h-4 shrink-0" />}
 					</div>
 				</TooltipTrigger>
 				<TooltipContent side="bottom" align="start" className="max-w-80">
@@ -995,25 +993,8 @@ function SessionTab(props: {
 									<AnimatedBadge status={badge.status} size="sm" bare pulse={false} className={cn("[&_svg]:h-2.5 [&_svg]:w-2.5", badge.colorClass)} aria-hidden="true" />
 								)}
 								{pinned && <Pin className="size-3 shrink-0 text-muted-foreground/70" aria-hidden="true" />}
-								{/* DSH/生图是文字标记，保留自然宽度；固定 size-4 会让文字溢出到右侧操作按钮区域。 */}
-								{(record?.backend === "dsh" || record?.backend === "imagegen") && <SessionBackendBadge backend={record?.backend} className="h-4 shrink-0" />}
-								{/* G12：DSH plan 模式 / danger 权限预设全局可见（数据来自 runtime state，tab 级常显） */}
-								{runtime?.state?.planModeActive && (
-									<span className="shrink-0 rounded bg-primary/15 px-1 text-[10px] font-medium leading-4 text-primary" title={t("app.composerModePlan")}>
-										{t("app.composerModePlan")}
-									</span>
-								)}
-								{runtime?.state?.goal && runtime.state.goal.phase !== "complete" && (
-									<span
-										// 底色与 plan chip 同用 bg-primary/15：不能用 bg-accent/15——激活 tab 的
-										// 滑动背景就是实底 bg-accent，accent/15 叠上去完全不可见，chip 会退化成裸文字
-										//（浅色主题下尤其明显）。淡蓝底在明暗主题的激活/非激活 tab 上均可读。
-										className="shrink-0 rounded bg-primary/15 px-1 text-[10px] font-medium leading-4 text-primary"
-										title={t("app.composerModeGoal")}
-									>
-										{t("app.composerModeGoal")}
-									</span>
-								)}
+								{/* 生图是文字标记，保留自然宽度；固定 size-4 会让文字溢出到右侧操作按钮区域。 */}
+								{record?.backend === "imagegen" && <SessionBackendBadge backend={record.backend} className="h-4 shrink-0" />}
 								{/* 标题复用侧栏 TitleScrollText：溢出时 hover 滚动到尾、离开回开头（与左侧会话列表一致）。
             strong 是块级元素（flex-1 占满剩余空间），需显式覆盖字重：非激活 400、激活 500，
             否则 strong 的 UA 默认 bold(700) 会让所有 tab 标题变粗。truncate 补省略号

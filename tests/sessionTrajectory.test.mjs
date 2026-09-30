@@ -15,9 +15,8 @@ function loadModule() {
 	return sandbox.exports;
 }
 
-/** buildTrajectory 依赖的 dsh 工具视图助手（独立纯模块，vm 内编译加载）。 */
 function loadTrajectoryDep(specifier) {
-	const file = specifier === "./dshToolView" ? "src/renderer/src/components/session/trajectory/dshToolView.ts" : specifier === "./trajectoryOrder" ? "src/renderer/src/components/session/trajectory/trajectoryOrder.ts" : undefined;
+	const file = specifier === "./trajectoryOrder" ? "src/renderer/src/components/session/trajectory/trajectoryOrder.ts" : undefined;
 	if (!file) throw new Error(`unexpected require: ${specifier}`);
 	const source = readFileSync(file, "utf8");
 	const { outputText } = ts.transpileModule(source, {
@@ -175,12 +174,7 @@ test("trajectory source concatenates runtime history prefix with the live window
 	assert.match(source, /prependSessionHistoryPageAtom/);
 	assert.match(source, /readProcessEvents/);
 	assert.match(source, /pi-system/);
-	// dsh 会话：系统提示由 harness 在请求时组装，从 host request/header 事件读取
-	// （readDshSystemPrompt），不加载 pi 的 pi-system 模板——否则 dsh 轨迹错误显示
-	// pi 的系统提示（2026-08 用户反馈）
-	assert.match(source, /record\?\.backend === "dsh"/);
-	assert.match(source, /isDshSession/);
-	assert.match(source, /readDshSystemPrompt/);
+	assert.doesNotMatch(source, /dsh/i);
 	assert.match(panel, /currentSessionIdAtom/);
 	assert.match(panel, /processEvents/);
 });
@@ -203,7 +197,7 @@ test("first user message is the initial prompt; process events join the ledger",
 	assert.equal(model.records.find((r) => r.processKind === "session")?.durationMs, undefined);
 });
 
-test("assistant message usage lands on the trajectory record (DSH adapter report)", () => {
+test("assistant message usage lands on the trajectory record", () => {
 	const { buildTrajectory } = loadModule();
 	const model = buildTrajectory([
 		msg({ id: "u1", role: "user", text: "go", timestamp: 1000 }),
@@ -231,16 +225,16 @@ test("assistant message without usage leaves record.usage undefined (pi path)", 
 	assert.equal(model.records.find((r) => r.kind === "assistant")?.usage, undefined);
 });
 
-test("ledger orders by seq, not array order (dsh-web layoutEntryOrder)", () => {
+test("ledger orders by seq, not array order", () => {
 	const { buildTrajectory } = loadModule();
-	const model = buildTrajectory([msg({ id: "dsh:30", role: "assistant", text: "later", timestamp: 3000, stopReason: "stop" }), msg({ id: "dsh:10", role: "user", text: "first", timestamp: 1000 }), msg({ id: "dsh:20", role: "tool", text: "read", timestamp: 2000, meta: { toolName: "read", status: "done" } })]);
+	const model = buildTrajectory([msg({ id: "msg:30", role: "assistant", text: "later", timestamp: 3000, stopReason: "stop" }), msg({ id: "msg:10", role: "user", text: "first", timestamp: 1000 }), msg({ id: "msg:20", role: "tool", text: "read", timestamp: 2000, meta: { toolName: "read", status: "done" } })]);
 	assert.equal(model.records.map((r) => r.kind).join(","), "user,tool,assistant");
 	assert.equal(model.records.map((r) => r.seq).join(","), "10,20,30");
 });
 
 test("retry process event stays after the user that opened the turn", () => {
 	const { buildTrajectory } = loadModule();
-	const model = buildTrajectory([msg({ id: "dsh:10", role: "user", text: "go", timestamp: 2000 }), msg({ id: "dsh:40", role: "assistant", text: "ok", timestamp: 4000, stopReason: "stop" })], 5000, {
+	const model = buildTrajectory([msg({ id: "msg:10", role: "user", text: "go", timestamp: 2000 }), msg({ id: "msg:40", role: "assistant", text: "ok", timestamp: 4000, stopReason: "stop" })], 5000, {
 		processEvents: [
 			{
 				id: "retry-1",
@@ -276,12 +270,13 @@ test("tool records split inputDetail and outputDetail for the inspector copy blo
 				startedAt: 1600,
 				durationMs: 200,
 				status: "done",
-				view: { for: "call", view: { card: "terminal", title: "ls", cwd: "/repo" } },
-				resultView: { for: "result", view: { card: "terminal", output: "a.txt", exitCode: 0 } },
+				args: 'bash -lc "$ ls" cwd: /repo',
+				detailText: "a.txt\nexit 0",
 			},
 		}),
 	]);
 	const tool = model.records.find((r) => r.kind === "tool");
+	// 检查器复制块：入参取 meta.args、出参取 meta.detailText（pi 会话文件写回的形状）。
 	assert.match(tool?.inputDetail ?? "", /\$ ls/);
 	assert.match(tool?.inputDetail ?? "", /cwd: \/repo/);
 	assert.match(tool?.outputDetail ?? "", /a\.txt/);
@@ -297,11 +292,9 @@ test("inspector copy control is wired on the trajectory detail panel", () => {
 });
 
 test("trajectory header turn count follows the unified round contract", () => {
-	// 对外「N 轮」：DSH 会话用 host sessionStats（官方，与 dsh-web 一致）；pi 会话用
-	// countUserTurns（发言权周期，与分页/缓存协议同口径）。账本分组仍按 user 开轮。
 	const view = readFileSync("src/renderer/src/components/session/trajectory/SessionTrajectoryView.tsx", "utf8");
 	assert.match(view, /countUserTurns/);
-	assert.match(view, /dshSessionStats\.turns/);
+	assert.doesNotMatch(view, /dsh/i);
 	assert.doesNotMatch(view, /count: model\.turns\.length/);
 	assert.doesNotMatch(view, /countDialogueTurns/);
 });

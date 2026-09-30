@@ -33,24 +33,11 @@ export type ChatMessage = {
 	stopReason?: string;
 };
 
-/**
- * 历史暂时不可读的结构化原因（渲染层据此出专态 UI，而不是让 IPC 抛裸错误）。
- * 目前只有一种：DSH host 被用户手动停止——此时 host 不会自动拉起，历史读取
- * 必然失败且不会自愈，「启动 host」是唯一恢复路径。
- */
-export type SessionHistoryUnavailableReason = "dsh-host-stopped";
-
 /** A bounded historical timeline slice. `nextBefore` is the exclusive index for an older page. */
 export type SessionMessagePage = {
 	messages: ChatMessage[];
 	total: number;
 	nextBefore: number | null;
-	/**
-	 * 本页不是「读到了空历史」而是「历史暂时读不了」：messages 为空且原因为 unavailable。
-	 * 渲染层必须据此进错误专态，不能按空会话渲染起始页——DSH 会话没有 pi 会话文件，
-	 * 把 host 未运行显示成「文件已删除/路径失效」会把用户引向错误方向。
-	 */
-	unavailable?: SessionHistoryUnavailableReason;
 	/** 当前活动分支最后使用的模型；由历史索引读取时顺手提取。 */
 	model?: { provider: string; modelId: string };
 	/** 当前活动分支最后记录的思考档位；无显式记录但有模型时回退为 off。 */
@@ -148,7 +135,7 @@ export type SessionSummary = {
 	messageCount: number;
 	/** 会话来源：pi 原生、Codex 导入、Claude 导入、OpenCode 导入 */
 	source?: SessionSource;
-	/** 运行时后端；缺省 "pi"。草稿/历史行用来区分 DSH 会话。 */
+	/** 运行时后端；缺省 "pi"。草稿/历史行用来区分生图会话。 */
 	backend?: import("./agent").AgentBackend;
 	/** 标记此会话文件来自 WSL，rename/delete/copy 等操作需走 wsl.exe */
 	wsl?: boolean;
@@ -157,25 +144,14 @@ export type SessionSummary = {
 	thinkingLevel?: string;
 	/** 会话里存在生图消息（openai-images / imageGen 标记）；侧栏显示图片角标便于查找 */
 	hasImageGen?: boolean;
-	/** DSH 会话身份（DSH host 的 sessionId）；backend=dsh 的会话用来重启后 attach 旧会话。 */
+	/** legacy compatibility：DSH 会话身份字段。仅用于继续读取旧 catalog 数据并原样回写，
+	 *  当前没有任何 DSH 运行时会消费它。 */
 	dshSessionId?: string;
 	codexSessionId?: string;
 	codexThreadSource?: "user" | "subagent";
 	codexParentThreadId?: string;
 	codexAgentRole?: string;
 	codexAgentNickname?: string;
-};
-
-/**
- * DSH 归档区会话清单行（G14）：host 目录已移入 .pideck-archive 的会话。
- * title 可选：归档 manifest 自 G14+ 起携带，旧归档缺省时由主进程
- * 从归档目录的会话日志前缀只读折叠补全；仍缺省则 UI 回退 cwd 末段/id。
- */
-export type ArchivedDshSession = {
-	dshSessionId: string;
-	cwd: string;
-	archivedAt: number;
-	title?: string;
 };
 
 /**
@@ -199,7 +175,7 @@ export type SessionRecord = {
 	noSession?: boolean;
 	source: SessionSource;
 	environment: SessionEnvironment;
-	/** 运行时后端（pi/dsh）；缺省 "pi"，旧 catalog 数据无需迁移。 */
+	/** 运行时后端（pi / imagegen）；缺省 "pi"，旧 catalog 数据无需迁移。 */
 	backend?: import("./agent").AgentBackend;
 	filePath?: string;
 	wslDistro?: string;
@@ -219,16 +195,16 @@ export type SessionRecord = {
 	status: "draft" | "active";
 	model?: SessionModelPreference;
 	thinkingLevel?: string;
-	/** DSH 权限预设（read-only / workspace-write / danger-full-access）；
-	 *  草稿期预选，激活时经 /permission 命令应用到 host 会话。 */
+	/** legacy compatibility：DSH 权限预设（read-only / workspace-write / danger-full-access）。
+	 *  当前没有运行时会消费它，仅随旧数据原样透传，避免改动旧 catalog 结构。 */
 	permissionPreset?: string;
 	/**
-	 * DSH agent 预设（会话「模式」：standard/code/minimal/cordis 或用户预设）。
-	 * 草稿期预选，激活新建 host 会话时随 sessions.create 应用（host 持久化到会话 header）；
-	 * attach 已存在会话时从 host 读回实际值回写。会话创建后固定，不可运行时切换。
+	 * legacy compatibility：DSH agent 预设（会话「模式」）。
+	 * 同 permissionPreset，仅保留字段以免丢弃旧数据。
 	 */
 	agentPreset?: string;
-	/** DSH 会话身份（DSH host 的 sessionId）；backend=dsh 的会话用来重启后 attach 旧会话。 */
+	/** legacy compatibility：DSH 会话身份（DSH host 的 sessionId）。
+	 *  仅用于继续读取旧 catalog 数据并原样回写，当前没有任何 DSH 运行时会消费它。 */
 	dshSessionId?: string;
 	/** 会话级代理覆盖（缺省 = 跟随全局）；沿用全局代理 URL，仅生效于下次 spawn。 */
 	proxy?: SessionProxyOverride;
@@ -278,12 +254,12 @@ export type ResolvedLaunchDefaults = {
 	 * shared/modelThinkingLevels.ts）。thinkingLevel 只按解析出的模型算一份，而引导页
 	 * 用户可以改选模型——渲染层拿这张表按**当前展示的模型**反查，才能让底栏显示与
 	 * 创建时实际套用（createDraft 同样按最终模型查表）保持一致。
-	 * 非 DSH 后端且表非空时才返回。
+	 * 表非空时才返回。
 	 */
 	modelThinkingLevels?: Record<string, string>;
 };
 
-/** sessions.resolve-launch-defaults 入参：只需声明后端；缺省按非 DSH 解析。 */
+/** sessions.resolve-launch-defaults 入参：只需声明后端；缺省按 pi 解析。 */
 export type ResolveLaunchDefaultsInput = {
 	backend?: import("./agent").AgentBackend;
 };
@@ -307,12 +283,12 @@ export type UpdateSessionRecordInput = {
 	/** null = 清空（切后端时丢掉另一套目录里的模型）。 */
 	model?: SessionModelPreference | null;
 	thinkingLevel?: string | null;
-	/** DSH 会话权限预设（草稿期预选；激活会话经 /permission 命令应用后回写同步）。 */
+	/** legacy compatibility：DSH 权限预设（旧数据原样保留，无运行时会消费）。 */
 	permissionPreset?: string | null;
-	/** DSH agent 预设（会话「模式」）：仅草稿期可改；激活后由 host 会话 header 回写为准。 */
+	/** legacy compatibility：DSH agent 预设（旧数据原样保留，无运行时会消费）。 */
 	agentPreset?: string | null;
-	/** 后端（pi/dsh）：仅草稿期可变更；会话激活（active/有 runtime）后锁定——pi 会话文件
-	 *  与 DSH session log 格式不同，中途切换会导致消息同步渲染不可靠。 */
+	/** 后端（pi/生图）：仅草稿期可变更；会话激活（active/有 runtime）后锁定——两种后端
+	 *  的历史存储格式不同，中途切换会导致消息同步渲染不可靠。 */
 	backend?: import("./agent").AgentBackend;
 	/** 会话级代理覆盖；null = 恢复跟随全局（清除已保存覆盖）。 */
 	proxy?: SessionProxyOverride | null;

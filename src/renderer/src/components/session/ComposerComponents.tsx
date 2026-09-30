@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import { useAtomValue } from "jotai";
-import { dshModuleHiddenAtom, imageGenModuleHiddenAtom } from "../../atoms";
+import { imageGenModuleHiddenAtom } from "../../atoms";
 import { AlertCircle, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownLeft, Eye, EyeOff, FileText, GitBranch, ImageIcon, ListChecks, Loader2, Paperclip, Plus, RefreshCw, Sparkles, Star, Target, Wrench, X } from "lucide-react";
 import { t, type TranslationKey } from "../../i18n";
 import { Button } from "../ui-shadcn/button";
@@ -17,16 +17,16 @@ import type { ImageGenConfigFile } from "../../../../shared/imageGenConfig";
 import { SessionContextMeter } from "./SessionContextMeter";
 import { ProviderUsageInline } from "../app/ProviderUsageInline";
 import { useProviderUsageBatchRefresh } from "../../hooks/useProviderUsage";
-import { DshLogo, PiLogo } from "./SessionSourceBadge";
+import { PiLogo } from "./SessionSourceBadge";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "../ui-shadcn/select";
 import { computeModelDisplay, formatModelRef, resolveComposerLiveModel, resolveGuideDisplayModel, type ModelPending } from "../../utils/modelPendingDisplay";
 import { resolveComposerThinkingLevel } from "../../utils/thinkingDisplay";
 import { modelThinkingLevelOfMap } from "../../../../shared/modelThinkingLevels";
-import { WELCOME_DSH_MODEL_KEY, WELCOME_MODEL_KEY, isWelcomeModelLost, readWelcomeDshModelPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, shouldClearWelcomePreference } from "../../utils/chatSessionBootstrap";
+import { WELCOME_MODEL_KEY, isWelcomeModelLost, readWelcomeModelPreference, readWelcomeThinkingPreference, shouldClearWelcomePreference } from "../../utils/chatSessionBootstrap";
 import { useBackendModelCatalog } from "../../hooks/useBackendModelCatalog";
 import { CommandPickerGroup, CommandPickerPanel, type CommandPickerFilter } from "../ui-shadcn/command-picker";
 import { THINKING_LEVELS, computeModelPickerDefaultExpanded, groupModelsByProvider, modelPickerSearchFilter, modelRowLabel, modelRowName, orderProviderGroups, resolveModelPickerBody } from "./sessionPickerOptions";
-import type { AgentBackend, AgentRuntimeState, AvailableModel, ComposerAgentMode, GitBranchInfo, ModelListFailReason, ModelListReport, SessionRecord, SessionRuntimeTarget, UsageProbeBackend } from "../../../../shared/types";
+import type { AgentBackend, AgentRuntimeState, AvailableModel, ComposerAgentMode, GitBranchInfo, ModelListFailReason, ModelListReport, SessionRecord, SessionRuntimeTarget } from "../../../../shared/types";
 
 /** 单个 extension widget 卡片：可折叠标题栏 + 内容行，支持手动关闭 */
 // widgetKey 由扩展定义且跨重启稳定,可按 widgetKey 持久化折叠状态。
@@ -133,14 +133,12 @@ export function ExtensionWidgetCard(props: {
 	);
 }
 
-/** 输入框底栏的后端选择下拉（pi / dsh / 生图）：跟随会话后端（新建会话默认 pi，由设置项 defaultAgentBackend 决定）。
+/** 输入框底栏的后端选择下拉（pi / 生图）：跟随会话后端（新建会话默认 pi，由设置项 defaultAgentBackend 决定）。
  * 触发区只显示当前后端 logo（不再带文字）；下拉选项保留文字便于选择时区分。
- * 用户在设置里隐藏了 DSH / 生图模块时不列对应选项；但当前草稿已选中该后端时仍保留，
+ * 用户在设置里隐藏了生图模块时不列对应选项；但当前草稿已选中该后端时仍保留，
  * 否则 Select 的当前值在列表里没有对应项，用户也无法看清自己选了什么。 */
 export function ComposerBackendPicker(props: { backend: AgentBackend; disabled?: boolean; onChangeBackend: (backend: AgentBackend) => void }) {
-	const dshHidden = useAtomValue(dshModuleHiddenAtom);
 	const imageGenHidden = useAtomValue(imageGenModuleHiddenAtom);
-	const showDsh = !dshHidden || props.backend === "dsh";
 	const showImageGen = !imageGenHidden || props.backend === "imagegen";
 	return (
 		<Select value={props.backend} disabled={props.disabled} onValueChange={(value) => props.onChangeBackend(value as AgentBackend)}>
@@ -149,19 +147,13 @@ export function ComposerBackendPicker(props: { backend: AgentBackend; disabled?:
 				    隐藏 shadcn SelectTrigger 自带的 chevron（[data-slot='select-icon']），
 				    否则 logo 与 chevron 并排（justify-between）→ 图标偏左不居中、
 				    16px chevron 与 14px logo 混排导致上下不齐。 */}
-				{props.backend === "dsh" ? <DshLogo className="size-[15px] shrink-0" /> : props.backend === "imagegen" ? <ImageIcon className="size-[15px] shrink-0 text-muted-foreground" /> : <PiLogo className="size-[15px] shrink-0" />}
+				{props.backend === "imagegen" ? <ImageIcon className="size-[15px] shrink-0 text-muted-foreground" /> : <PiLogo className="size-[15px] shrink-0" />}
 			</SelectTrigger>
 			<SelectContent align="start">
 				<SelectItem value="pi">
 					<PiLogo className="size-3.5 shrink-0" />
 					{t("sessionSource.pi")}
 				</SelectItem>
-				{showDsh ? (
-					<SelectItem value="dsh">
-						<DshLogo className="size-3.5 shrink-0" />
-						{t("sessionBackend.dsh")}
-					</SelectItem>
-				) : null}
 				{showImageGen ? (
 					<SelectItem value="imagegen">
 						<ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -260,7 +252,7 @@ export function ComposerBottomBar(props: {
 	record?: Pick<SessionRecord, "model" | "thinkingLevel">;
 	/**
 	 * 引导页模型与思考档位默认值；会话创建前作为唯一展示偏好。
-	 * DSH 部署默认模型/思考档位（settings.yaml agent-default-model）也仅在记录缺失时
+	 * 配置默认模型/思考档位也仅在记录缺失时
 	 * 用作草稿展示，运行态不会覆盖用户已保存的选择。
 	 */
 	defaultModel?: { provider?: string; modelId?: string; modelName?: string };
@@ -310,19 +302,14 @@ export function ComposerBottomBar(props: {
 	// 才读取 welcome localStorage。这样用户点选模型/思考档位后能立即看到结果，
 	// 首次发送再由 App.ensureSessionForSend 把同一显式选择带入真实会话。
 	// 该偏好可能指向已删除的模型（localStorage 残留，用户删除模型后底栏仍显示旧默认）：
-	// 引导页（无 record）模型目录：后端各自的目录都要加载，才能对各自的点选做存在性
-	// 校验（pi 读 models.json 列表，DSH 读 host catalog）。目录命中主进程全局缓存
+	// 引导页（无 record）加载 Pi 模型目录，对保存的点选做存在性校验。目录命中主进程全局缓存
 	//（模型选择器同源），通常不会额外 fork pi。
-	const isDsh = props.backend === "dsh";
 	const needsWelcomeCatalog = !props.record;
 	const { models: welcomeCatalogModels, report: welcomeCatalogReport } = useBackendModelCatalog({
 		sessionId: props.sessionId,
-		backend: isDsh ? "dsh" : "pi",
 		enabled: needsWelcomeCatalog,
 	});
-	// 引导页点选按后端读各自的存储（issue #253）：DSH 的模型是 host route 名，
-	// 存在 WELCOME_DSH_MODEL_KEY；读错会拿到 pi 的 model 去校验 DSH 目录（必然「失效」）。
-	const welcomeModel = needsWelcomeCatalog ? (isDsh ? readWelcomeDshModelPreference()?.model : readWelcomeModelPreference()?.model) : undefined;
+	const welcomeModel = needsWelcomeCatalog ? readWelcomeModelPreference()?.model : undefined;
 	// 思考档位不依赖模型目录；无 record 时直接读取 picker 写入的显式选择。
 	const welcomeThinking = !props.record ? readWelcomeThinkingPreference()?.thinkingLevel : undefined;
 	const welcomeModelLost = isWelcomeModelLost(welcomeModel, welcomeCatalogModels);
@@ -338,17 +325,16 @@ export function ComposerBottomBar(props: {
 		// 失效偏好只清一次：下次引导页不再默认已删除的模型（创建时主进程也会兜底丢弃）。
 		if (clearWelcomePreference) {
 			try {
-				localStorage.removeItem(isDsh ? WELCOME_DSH_MODEL_KEY : WELCOME_MODEL_KEY);
+				localStorage.removeItem(WELCOME_MODEL_KEY);
 			} catch {
 				// localStorage 不可用时静默；展示层已忽略该偏好。
 			}
 		}
-	}, [clearWelcomePreference, isDsh]);
+	}, [clearWelcomePreference]);
 	const effectiveWelcomeModel = welcomeModelLost ? undefined : welcomeModel;
 	// 引导页（无 record）默认模型展示：与各后端创建时的真实套用同序（点选 > 默认）。
 	// 规则收拢到 resolveGuideDisplayModel，与 ComposerPickerHost 共用一份，避免两侧各自演化。
 	const guideDefaultModel = resolveGuideDisplayModel({
-		isDsh,
 		welcomeModel: effectiveWelcomeModel,
 		defaultModel: props.defaultModel,
 	});
@@ -358,10 +344,6 @@ export function ComposerBottomBar(props: {
 		record: props.record?.model,
 		fallback: guideDefaultModel,
 	});
-	// 用量查询链路随会话后端：DSH 会话走 dsh（$DSH_HOME 配置 + 凭据库），其余走 pi。
-	// 圆球面板必须与 DSH 卡片/选择器同一 backend，否则查的是另一条 usage-probes.json。
-	const usageBackend: UsageProbeBackend = isDsh ? "dsh" : "pi";
-	// DSH 草稿：记录未填默认时用部署默认（settings.yaml agent-default-model）兜底展示。
 	// Composer 的选择文字只取记录或引导页偏好，不能由 runtime state 改写。
 	const currentThinkingLevel = resolveComposerThinkingLevel({
 		record: props.record?.thinkingLevel,
@@ -409,7 +391,7 @@ export function ComposerBottomBar(props: {
 					{props.onChangeBackend ? (
 						<ComposerBackendPicker backend={props.backend ?? "pi"} disabled={props.disabled} onChangeBackend={props.onChangeBackend} />
 					) : props.backend ? (
-						/* 后端已锁定（会话激活后不可切换：pi 文件与 DSH session log 格式不同，
+						/* 后端已锁定（会话激活后不可切换：两种后端的历史存储格式不同，
 						   中途切换会导致消息同步渲染不可靠）：只读标识，只显示官方 logo 不重复文字。
 						   inline-flex 居中：span 默认 inline，svg 按 baseline 排会偏上，
 						   与底栏其它按钮（flex 居中 15px 图标）水平不平齐。
@@ -422,7 +404,7 @@ export function ComposerBottomBar(props: {
 							aria-label={t("session.backendLockedHint")}
 							onClick={() => showNotice(t("session.backendLockedNotice"), 5000)}
 						>
-							{props.backend === "dsh" ? <DshLogo className="size-[15px] shrink-0" /> : props.backend === "imagegen" ? <ImageIcon className="size-[15px] shrink-0 text-muted-foreground" /> : <PiLogo className="size-[15px] shrink-0" />}
+							{props.backend === "imagegen" ? <ImageIcon className="size-[15px] shrink-0 text-muted-foreground" /> : <PiLogo className="size-[15px] shrink-0" />}
 						</button>
 					) : null}
 					{/* 特殊模式退出×：模式选择已收进「+」菜单，底栏只保留进行中模式的退出入口
@@ -482,7 +464,7 @@ export function ComposerBottomBar(props: {
 						</DropdownMenuContent>
 					</DropdownMenu>
 					{props.feishuIndicator}
-					{/* 生图模式无 pi/DSH runtime：安全等级（pi 安全门）与 DSH 权限预设都对图片生成无意义，
+					{/* 生图模式无 pi runtime：安全等级（pi 安全门）对图片生成无意义，
 					   且 SecurityControl 按 backend 分发时没有 imagegen 分支会误显示成 pi 安全等级菜单；
 					   快捷消息同理（正文是给对话模型的指令），两个控制位一起屏蔽。 */}
 					{isImageGenMode ? null : (
@@ -521,16 +503,16 @@ export function ComposerBottomBar(props: {
 							onPickThinking={props.onPickThinking}
 						/>
 					)}
-					{/* DSH 压缩入口与 pi 统一：上下文圆环（右侧）常驻并带压缩按钮。
-					    2026-12 兼容期：dsh runtime state 已由主进程提供 contextPercent 兜底
+					{/* 压缩入口：上下文圆环（右侧）常驻并带压缩按钮。
+					    runtime state 已由主进程提供 contextPercent 兜底
 					    （request/context 的 contextWindow + 消息估算），圆环不再因缺数据隐藏，
 					    原独立 compact 按钮移除，避免双入口。 */}
 				</div>
 				<div className="composer-bottom-right ml-auto flex shrink-0 items-center gap-2">
-					{/* 上下文占用圆环（dsh ContextMeter 移植）：发送按钮旁常驻指示,
+					{/* 上下文占用圆环：发送按钮旁常驻指示,
 					    点击展开占用面板（两段占比/缓存命中/输入输出/压缩入口）；
 					    压缩动作从右上角紧凑徽章迁入面板；无 capacity 数据时自身不渲染。
-					    生图模式没有 LLM 上下文（消息不进 pi/DSH 会话，历史独立存 ImageSessionStore），
+					    生图模式没有 LLM 上下文（消息不进 pi 会话，历史独立存 ImageSessionStore），
 					    圆环与压缩入口一并屏蔽。 */}
 					{isImageGenMode ? null : (
 						<SessionContextMeter
@@ -538,7 +520,6 @@ export function ComposerBottomBar(props: {
 							onCompact={props.onCompact}
 							overflowRecoveryTarget={props.overflowRecoveryTarget}
 							onOverflowRecovery={props.onOverflowRecovery}
-							backend={usageBackend}
 							// 未激活会话用会话记录/默认 model 推导的 provider 查用量（用量不依赖 agent 运行）
 							fallbackProvider={modelProvider}
 						/>
@@ -696,7 +677,6 @@ const MODEL_LIST_FAILURE_REASON_TEXT: Record<ModelListFailReason, TranslationKey
 	"config-invalid": "app.modelListFailConfigInvalid",
 	"cli-failed": "app.modelListFailCliFailed",
 	"waf-blocked": "app.modelListFailWafBlocked",
-	"dsh-host-stopped": "app.modelListFailDshStopped",
 	empty: "app.modelListFailEmpty",
 };
 
@@ -762,13 +742,11 @@ export function ModelPicker(props: {
 	refreshing?: boolean;
 	/** 手动刷新：绕过缓存重新拉取模型列表 */
 	onRefresh?: () => void;
-	/** 用量查询链路：DSH 会话（目录 provider 是 DSH route 名）传 "dsh"，缺省 pi。 */
-	backend?: UsageProbeBackend;
 	/** 最近使用的供应商 ID 列表（最新在前）：已用过的分组排最前，未用过的按内置置顶+字母序。 */
 	recentProviders?: string[];
 	/** 供应商自定义顺序（模型页排序结果，后端对应数组由宿主选择）：列出的严格按此展示且不再被最近使用覆盖。 */
 	providerOrder?: string[];
-	/** 用户隐藏的供应商 key 列表（Pi 模型页眼睛开关）；Pi 后端按 provider 过滤，DSH 不生效。 */
+	/** 用户隐藏的供应商 key 列表（模型页眼睛开关）；按 provider 过滤。 */
 	hiddenProviders?: string[];
 	/** 用户隐藏的模型列表（格式："provider/modelId"）；Pi 后端过滤单个模型。 */
 	hiddenModels?: string[];
@@ -777,10 +755,10 @@ export function ModelPicker(props: {
 }) {
 	const currentModelKey = props.current?.provider && props.current?.modelId ? `${props.current.provider}/${props.current.modelId}` : undefined;
 	const favoritesSet = new Set(props.favoriteModels ?? []);
-	// 隐藏开关：Pi 后端按 provider 与 model 过滤（DSH 的 route 名不参与隐藏列表）；
+	// 隐藏开关：按 provider 与 model 过滤；
 	// 过滤后收藏/分组/搜索都基于可见模型，隐藏供应商与隐藏模型不出现在主选择区。
-	const hiddenProviderSet = new Set(props.backend === "dsh" ? [] : (props.hiddenProviders ?? []));
-	const hiddenModelSet = new Set(props.backend === "dsh" ? [] : (props.hiddenModels ?? []));
+	const hiddenProviderSet = new Set(props.hiddenProviders ?? []);
+	const hiddenModelSet = new Set(props.hiddenModels ?? []);
 	const visibleModels: AvailableModel[] = [];
 	const hiddenModelList: AvailableModel[] = [];
 	for (const model of props.models) {
@@ -828,12 +806,12 @@ export function ModelPicker(props: {
 
 	// 供应商用量行（cc-switch inline）：打开选择器时批量 TTL 去重查询，供应商标题行右侧
 	// 显示彩色剩余/百分比；查不到（未启用/不支持/失败/查询中）的分组保持干净不渲染。
-	// backend 按会话后端透传（DSH 目录的 provider 是 route 名，配置/凭据在 dsh 链路）。
+	// backend 按会话后端透传（生图会话的 provider 与配置/凭据链路不同）。
 	const batchRefreshUsage = useProviderUsageBatchRefresh();
 	const providerKey = sortedProviders.join("\n");
 	useEffect(() => {
-		if (providerKey) batchRefreshUsage(providerKey.split("\n"), props.backend);
-	}, [providerKey, batchRefreshUsage, props.backend]);
+		if (providerKey) batchRefreshUsage(providerKey.split("\n"));
+	}, [providerKey, batchRefreshUsage]);
 
 	const renderModelRow = (model: AvailableModel, valueOverride?: string) => {
 		const modelKey = `${model.provider}/${model.id}`;
@@ -926,7 +904,7 @@ export function ModelPicker(props: {
 						</CommandPickerGroup>
 					)}
 					{sortedProviders.map((provider) => (
-						<CommandPickerGroup id={`provider:${provider}`} key={provider} label={provider} count={groupedModels[provider].length} countText={t("config.count.models", { count: groupedModels[provider].length })} trailing={<ProviderUsageInline provider={provider} variant="row" backend={props.backend} />}>
+						<CommandPickerGroup id={`provider:${provider}`} key={provider} label={provider} count={groupedModels[provider].length} countText={t("config.count.models", { count: groupedModels[provider].length })} trailing={<ProviderUsageInline provider={provider} variant="row" />}>
 							{groupedModels[provider].map((model) => renderModelRow(model))}
 						</CommandPickerGroup>
 					))}
@@ -968,7 +946,7 @@ export function ThinkingPicker(props: {
 	current?: string;
 	onClose: () => void;
 	onPick: (level: string) => void;
-	/** 受支持的档位列表（DSH 按当前模型 reasoningEfforts 过滤）；缺省用全部档位。 */
+	/** 受支持的档位列表（按当前模型 thinkingLevels 过滤）；缺省用全部档位。 */
 	levels?: Array<{
 		value: string;
 		labelKey?: TranslationKey;

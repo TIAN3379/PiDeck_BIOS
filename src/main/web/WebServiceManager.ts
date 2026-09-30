@@ -129,33 +129,6 @@ type WebServiceDependencies = {
 	>;
 	listPendingUiRequests: () => PendingUiRequestSnapshot[];
 	respondToUi: (input: SessionUiResponseInput) => Promise<void>;
-	/** DSH 子代理列表（S6.3：web 端工具面板；未装配 DSH 时缺省）。 */
-	listDshSubagents?: (agentId: string) => Promise<
-		Array<{
-			id: string;
-			label?: string;
-			activity: "running" | "inactive";
-			hasChildren: boolean;
-			mode: "one-shot" | "continuable";
-			kind: "child" | "diagnostic";
-		}>
-	>;
-	/** DSH 子代理历史（S6.3：只读 transcript）。 */
-	readDshSubagentHistory?: (agentId: string, childSessionId: string, beforeSeq?: number, maxMessages?: number) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>;
-	/** DSH 技能目录（S6.3：skill.list 只读）。 */
-	listDshSkills?: (agentId: string) => Promise<import("../../shared/types").DshSkillView[]>;
-	/** DSH 动态插件清单（S6.5：进程内临时扩展；未装配 DSH 时缺省）。 */
-	listDshDynamicPlugins?: () => Promise<import("../../shared/types").DshPluginView[]>;
-	/** DSH 静态 Loader 条目清单（S6.5：origin 标注 user/builtin 来源）。 */
-	listDshStaticPlugins?: () => Promise<import("../../shared/types").DshStaticPluginView[]>;
-	/** DSH 用户自装静态插件卸载（移除用户补丁层行 + 可选回收插件目录）。 */
-	uninstallDshUserPlugin?: (input: import("../../shared/types").DshUserPluginUninstallInput) => Promise<import("../../shared/types").DshUserPluginUninstallResult>;
-	/** DSH 动态插件安装（define：定义源码包，不运行；按会话归属）。 */
-	installDshPlugin?: (input: import("../../shared/types").DshPluginInstallInput) => Promise<unknown>;
-	/** DSH 动态插件生命周期（run/stop/uninstall；面板手势无需审批）。 */
-	runDshPlugin?: (input: import("../../shared/types").DshPluginLifecycleInput) => Promise<unknown>;
-	stopDshPlugin?: (input: import("../../shared/types").DshPluginLifecycleInput) => Promise<unknown>;
-	uninstallDshPlugin?: (input: import("../../shared/types").DshPluginLifecycleInput) => Promise<unknown>;
 };
 
 function serializePublicWebPayload(body: unknown): string {
@@ -385,101 +358,6 @@ export class WebServiceManager {
 		if (catalogSessionsMatch && request.method === "GET") {
 			const sessions = await this.deps.listCatalogSessions(decodeURIComponent(catalogSessionsMatch[1]));
 			this.sendJson(response, { sessions });
-			return;
-		}
-		// ── DSH 工具面板路由（S6.3：goals/subagents/skills；无活跃 runtime 返回空）──
-		const dshSubagentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/dsh\/subagents$/);
-		if (dshSubagentsMatch && request.method === "GET") {
-			const agentId = this.runtimeAgentIdForSession(decodeURIComponent(dshSubagentsMatch[1]));
-			if (!agentId || !this.deps.listDshSubagents) {
-				this.sendJson(response, { subagents: [] });
-				return;
-			}
-			this.sendJson(response, { subagents: await this.deps.listDshSubagents(agentId) });
-			return;
-		}
-		const dshSubagentHistoryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/dsh\/subagents\/([^/]+)\/history$/);
-		if (dshSubagentHistoryMatch && request.method === "GET") {
-			const agentId = this.runtimeAgentIdForSession(decodeURIComponent(dshSubagentHistoryMatch[1]));
-			const childSessionId = decodeURIComponent(dshSubagentHistoryMatch[2]);
-			if (!agentId || !this.deps.readDshSubagentHistory) {
-				this.sendJson(response, { messages: [], hasMore: false });
-				return;
-			}
-			const beforeSeq = this.queryNumber(url, "beforeSeq");
-			const maxMessages = this.queryNumber(url, "maxMessages");
-			this.sendJson(response, await this.deps.readDshSubagentHistory(agentId, childSessionId, beforeSeq, maxMessages));
-			return;
-		}
-		const dshSkillsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/dsh\/skills$/);
-		if (dshSkillsMatch && request.method === "GET") {
-			const agentId = this.runtimeAgentIdForSession(decodeURIComponent(dshSkillsMatch[1]));
-			if (!agentId || !this.deps.listDshSkills) {
-				this.sendJson(response, { skills: [] });
-				return;
-			}
-			this.sendJson(response, { skills: await this.deps.listDshSkills(agentId) });
-			return;
-		}
-		const dshGoalMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/dsh\/goal$/);
-		if (dshGoalMatch && request.method === "GET") {
-			const target = this.runtimeTargetForSession(decodeURIComponent(dshGoalMatch[1]));
-			if (!target) {
-				this.sendJson(response, { goal: null });
-				return;
-			}
-			const result = await this.deps.getSessionRuntimeState(target);
-			const state = result.ok && result.value && "value" in result.value ? (result.value as { value?: AgentRuntimeState }).value : undefined;
-			this.sendJson(response, { goal: state?.goal ?? null });
-			return;
-		}
-		// ── DSH 插件路由（S6.5：动态插件清单/安装/启停/卸载，与桌面配置页同源）──
-		if (url.pathname === "/api/dsh/plugins" && request.method === "GET") {
-			this.sendJson(response, {
-				dynamic: this.deps.listDshDynamicPlugins ? await this.deps.listDshDynamicPlugins() : [],
-				static: this.deps.listDshStaticPlugins ? await this.deps.listDshStaticPlugins() : [],
-			});
-			return;
-		}
-		if (url.pathname === "/api/dsh/plugins/install" && request.method === "POST") {
-			const body = await this.readJson<import("../../shared/types").DshPluginInstallInput>(request);
-			if (!body.sessionId?.trim() || !this.deps.installDshPlugin) {
-				this.sendError(response, 400, "webError.pluginInstallRequired", "plugin install requires sessionId");
-				return;
-			}
-			try {
-				this.sendJson(response, { receipt: await this.deps.installDshPlugin(body) });
-			} catch (error) {
-				this.sendError(response, 400, "webError.pluginInstallFailed", error instanceof Error ? error.message : "plugin install failed");
-			}
-			return;
-		}
-		const dshPluginActionMatch = url.pathname.match(/^\/api\/dsh\/plugins\/([^/]+)\/(run|stop|uninstall)$/);
-		if (dshPluginActionMatch && request.method === "POST") {
-			const pluginId = decodeURIComponent(dshPluginActionMatch[1]);
-			const action = dshPluginActionMatch[2];
-			const body = await this.readJson<{ sessionId?: string; packageId?: string }>(request);
-			if (!body.sessionId?.trim()) {
-				this.sendError(response, 400, "webError.pluginActionRequired", "plugin action requires sessionId");
-				return;
-			}
-			const fn = action === "run" ? this.deps.runDshPlugin : action === "stop" ? this.deps.stopDshPlugin : this.deps.uninstallDshPlugin;
-			if (!fn) {
-				this.sendError(response, 400, "webError.pluginUnavailable", "DSH plugins are not available");
-				return;
-			}
-			try {
-				this.sendJson(response, {
-					ok: true,
-					value: await fn({
-						sessionId: body.sessionId,
-						pluginId,
-						...(typeof body.packageId === "string" ? { packageId: body.packageId } : {}),
-					}),
-				});
-			} catch (error) {
-				this.sendError(response, 400, "webError.pluginActionFailed", error instanceof Error ? error.message : `plugin ${action} failed`);
-			}
 			return;
 		}
 		if (url.pathname === "/api/sessions/runtimes" && request.method === "GET") {
@@ -739,30 +617,6 @@ export class WebServiceManager {
 		}
 
 		await this.serveRenderer(url, response);
-	}
-
-	/** 按 sessionId 找活跃 runtime 的 agentId（DSH 工具面板路由；无 runtime 返回 undefined）。 */
-	private runtimeAgentIdForSession(sessionId: string): string | undefined {
-		return this.deps.listSessionRuntimes().find((runtime) => runtime.sessionId === sessionId)?.agentId;
-	}
-
-	/** 按 sessionId 构造 runtime target（DSH goal 路由用；无 runtime 返回 undefined）。 */
-	private runtimeTargetForSession(sessionId: string): SessionRuntimeTarget | undefined {
-		const runtime = this.deps.listSessionRuntimes().find((item) => item.sessionId === sessionId);
-		if (!runtime) return undefined;
-		return {
-			sessionId: runtime.sessionId,
-			agentId: runtime.agentId,
-			runtimeGeneration: runtime.runtimeGeneration ?? 0,
-		};
-	}
-
-	/** 查询参数转 number（缺失/非法返回 undefined）。 */
-	private queryNumber(url: URL, key: string): number | undefined {
-		const raw = url.searchParams.get(key);
-		if (raw === null || raw === "") return undefined;
-		const value = Number(raw);
-		return Number.isFinite(value) ? value : undefined;
 	}
 
 	private async getState() {

@@ -171,27 +171,15 @@ test("canRunSessionAction maps start and restart onto the same capability", () =
 // ── 会话代理设置的生效方式（一步开代理）──
 //
 // 用户痛点：改了代理设置后要自己「停止 → 启动」两步才能生效。
-// 规则：代理注入在 spawn env 上，能重启就自动重启（一步生效）；
-// DSH 共享 host 永远不按会话重启（会波及所有 DSH 会话）。
+// 规则：代理注入在 spawn env 上，能重启就自动重启（一步生效）。
 
 test("proxy apply strategy restarts a live pi session so the change takes effect at once", () => {
-	assert.equal(resolveProxyApplyStrategy({ backend: "pi", hasBinding: true, isLive: true }), "restart-now");
-	// 后端缺省视为 pi（旧数据兼容），同样享受自动重启。
-	assert.equal(resolveProxyApplyStrategy({ backend: undefined, hasBinding: true, isLive: true }), "restart-now");
+	assert.equal(resolveProxyApplyStrategy({ hasBinding: true, isLive: true }), "restart-now");
 });
 
 test("proxy apply strategy waits for next start when there is no live process", () => {
 	// 未启动/已解绑：下次启动进程时自然读到新配置，不需要额外动作。
-	assert.equal(resolveProxyApplyStrategy({ backend: "pi", hasBinding: false, isLive: false }), "next-start");
+	assert.equal(resolveProxyApplyStrategy({ hasBinding: false, isLive: false }), "next-start");
 	// 终态（error/closed）持有绑定但进程已死：重启没有意义，等下次启动。
-	assert.equal(resolveProxyApplyStrategy({ backend: "pi", hasBinding: true, isLive: false }), "next-start");
-});
-
-test("proxy apply strategy never auto-restarts the shared DSH host", () => {
-	// DSH 是单一共享 host：按会话重启会杀掉所有 DSH 会话，必须只提示不重启。
-	for (const isLive of [true, false]) {
-		for (const hasBinding of [true, false]) {
-			assert.equal(resolveProxyApplyStrategy({ backend: "dsh", hasBinding, isLive }), "dsh-host-restart", `dsh live=${isLive} binding=${hasBinding} must not auto-restart`);
-		}
-	}
+	assert.equal(resolveProxyApplyStrategy({ hasBinding: true, isLive: false }), "next-start");
 });

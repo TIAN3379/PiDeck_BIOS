@@ -33,9 +33,9 @@ const SETTINGS_DIR = "src/renderer/src/components/app/settings";
 
 /**
  * 设置页全部源码。
- * 不按 tab 精确映射文件：锚点可能落在 tab 主文件、也可能落在被它引用的子组件
- * （如 dev tab 的 dsh-runner-node 在 DshRunnerNodeRow.tsx），逐个维护映射只会引入
- * 与代码结构无关的脆弱耦合。这里只确认「锚点确实写在了设置页的某个文件里」。
+ * 不按 tab 精确映射文件：锚点可能落在 tab 主文件、也可能落在被它引用的子组件，
+ * 逐个维护映射只会引入与代码结构无关的脆弱耦合。
+ * 这里只确认「锚点确实写在了设置页的某个文件里」。
  */
 function settingsSources() {
 	const files = readdirSync(SETTINGS_DIR)

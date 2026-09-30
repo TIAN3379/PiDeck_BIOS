@@ -12,5 +12,5 @@ import type { SessionRecord } from "../../../shared/types";
  * ——过滤通过但渲染返回 null 会留下一行空标题。
  */
 export function isDisplayableSessionRecord(session: Pick<SessionRecord, "filePath" | "backend">): boolean {
-	return Boolean(session.filePath) || session.backend === "dsh" || session.backend === "imagegen";
+	return Boolean(session.filePath) || session.backend === "imagegen";
 }

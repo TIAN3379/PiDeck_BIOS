@@ -1,7 +1,7 @@
 /**
  * 「隐藏功能模块」（设置 → 外观 → 功能模块）：用户按需收起不用的模块 UI 入口。
  *
- * 只隐藏入口，不清配置、不停后台功能：飞书 Bridge 已连接就继续跑，DSH 会话照常运行；
+ * 只隐藏入口，不清配置、不停后台功能：飞书 Bridge 已连接就继续跑；
  * 用户要停用应先去对应页面关掉再隐藏。默认 `[]` = 全部显示，旧 settings.json 缺字段零迁移。
  *
  * 为什么存 id 数组而不是 N 个布尔：模块清单会随功能增减，数组只需在
@@ -17,11 +17,8 @@
  */
 export const HIDEABLE_SETTINGS_TAB_IDS = ["im", "pet", "vision", "imagegen", "web", "git", "usage", "process"] as const;
 
-/**
- * 全部可隐藏模块：设置 tab + `dsh`（DSH 后端不是设置 tab，它对应配置管理的 DSH 分页
- * 与新建会话的 DSH 后端选项）。
- */
-export const HIDEABLE_MODULE_IDS = [...HIDEABLE_SETTINGS_TAB_IDS, "dsh"] as const;
+/** 全部可隐藏模块与可隐藏设置页保持一致。 */
+export const HIDEABLE_MODULE_IDS = [...HIDEABLE_SETTINGS_TAB_IDS] as const;
 
 export type HideableSettingsTabId = (typeof HIDEABLE_SETTINGS_TAB_IDS)[number];
 export type HideableModuleId = (typeof HIDEABLE_MODULE_IDS)[number];

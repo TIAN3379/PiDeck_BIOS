@@ -204,57 +204,11 @@ test("goal and plan modes leave slash commands unmarked", () => {
 	assert.equal(buildComposerPromptSubmission("/plan off", "plan").agentMessage, undefined);
 });
 
-test("deriveComposerAgentMode keeps explicit normal over a still-active DSH goal", () => {
+test("deriveComposerAgentMode preserves explicit Pi and image modes", () => {
 	const { deriveComposerAgentMode } = loadComposerBehaviorModule();
-	assert.equal(
-		deriveComposerAgentMode({
-			backend: "dsh",
-			localMode: "normal",
-			goalPhase: "active",
-		}),
-		"normal",
-	);
-	assert.equal(
-		deriveComposerAgentMode({
-			backend: "dsh",
-			goalPhase: "active",
-		}),
-		"goal",
-	);
-	assert.equal(
-		deriveComposerAgentMode({
-			backend: "dsh",
-			localMode: "goal",
-			planModeActive: true,
-		}),
-		"plan",
-	);
-});
-
-test("applyDshGoalSendTransform prefixes /goal only when creating a new objective", () => {
-	const { applyDshGoalSendTransform } = loadComposerBehaviorModule();
-	assert.equal(
-		applyDshGoalSendTransform({
-			message: "Fix the build",
-			mode: "goal",
-		}),
-		"/goal Fix the build",
-	);
-	assert.equal(
-		applyDshGoalSendTransform({
-			message: "keep going",
-			mode: "goal",
-			goal: { phase: "active" },
-		}),
-		"keep going",
-	);
-	assert.equal(
-		applyDshGoalSendTransform({
-			message: "/goal pause",
-			mode: "goal",
-		}),
-		"/goal pause",
-	);
+	assert.equal(deriveComposerAgentMode({ backend: "pi", localMode: "normal" }), "normal");
+	assert.equal(deriveComposerAgentMode({ backend: "pi", localMode: "goal" }), "goal");
+	assert.equal(deriveComposerAgentMode({ backend: "imagegen" }), "imagegen");
 });
 
 test("parsePiGoalWidget reads phase, rounds, and objective", () => {

@@ -42,12 +42,11 @@ export function modelSupportsNativeImages(models: ListedModel[], current: { prov
 
 /**
  * 用户气泡要不要走视觉桥轮询/「转换中」动画。
- * - false：不会调用视觉桥（DSH 不跑 pi 扩展，或当前模型已勾选图片能力）
+ * - false：不会调用视觉桥（当前模型已勾选原生图片能力）
  * - true：视觉桥可能接管，允许按开关轮询
- * - null：pi 模型目录还没解析完，不能先乐观显示转换中
+ * - null：模型目录还没解析完，不能先乐观显示转换中
  */
-export function resolveVisionBridgeExpected(input: { backend?: string; modelSupportsImages: boolean | null }): boolean | null {
-	if (input.backend === "dsh") return false;
+export function resolveVisionBridgeExpected(input: { modelSupportsImages: boolean | null }): boolean | null {
 	if (input.modelSupportsImages === true) return false;
 	if (input.modelSupportsImages === null) return null;
 	return true;

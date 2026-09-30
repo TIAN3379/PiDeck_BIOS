@@ -2,7 +2,7 @@
  * 进程内存监控：生成 pi agent 子进程的内存快照。
  *
  * 数据源说明：
- * - 监控 pi agent 子进程 + 共享的 DSH host utilityProcess（按 pid 采样，不区分来源）；
+ * - 监控 pi agent 子进程；
  *   Electron 自身进程的内存不再采集，用户自行在系统任务管理器/活动监视器中查看。
  * - agent 子进程内存按 pid 调系统命令采样：Windows 用 PowerShell
  *   PrivateMemorySize64（tasklist 的 Mem Usage 是工作集，含共享页，多进程合计会重复计数），
@@ -74,10 +74,8 @@ export async function getProcessSnapshot(
 	agents: Array<{
 		agentId: string;
 		pid: number;
-		kind?: AgentProcessMetric["kind"];
 		sessionId?: string;
 		sessionTitle?: string;
-		sessionTitles?: string[];
 	}>,
 ): Promise<ProcessMetricsSnapshot> {
 	const sampled = await Promise.all(

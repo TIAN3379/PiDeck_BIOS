@@ -13,14 +13,12 @@ import { t } from "../i18n";
 import { SessionCommandFailure, requireSessionCommand, sessionCommandFailureToast, toSessionRuntimeTarget } from "../utils/sessionCommands";
 import { resolveComposerLiveModel } from "../utils/modelPendingDisplay";
 import { modelKey, pickCycleModel, pickCycleThinkingLevel, resolveFavoriteCycleCandidates, type CycleDirection } from "../utils/preferenceCycle";
-import { WELCOME_DSH_MODEL_KEY, WELCOME_MODEL_KEY, WELCOME_THINKING_KEY } from "../utils/chatSessionBootstrap";
+import { WELCOME_MODEL_KEY, WELCOME_THINKING_KEY } from "../utils/chatSessionBootstrap";
 
 /** 快捷键触发的循环目标（模型 / 思考档位）。 */
 type PendingCycle = "model" | "thinking";
 
 export type SessionPreferenceController = {
-	/** 会话后端（DSH 的目录/档位来自 host catalog）：选择器与循环共用 */
-	isDshSession: boolean;
 	/** 模型目录（capability cache 数据源） */
 	models: AvailableModel[];
 	report: ModelListReport | null;
@@ -36,9 +34,8 @@ export type SessionPreferenceController = {
 	/** 收藏 / 最近 / 隐藏供应商 / 隐藏模型：选择器展示 + 循环候选 */
 	favoriteModels: string[];
 	recentProviders: string[];
-	/** 供应商自定义顺序（模型页排序结果）：选择器严格按此展示分组，DSH 与 Pi 分开。 */
+	/** 供应商自定义顺序（模型页排序结果）：选择器严格按此展示分组。 */
 	providerOrder: string[];
-	dshProviderOrder: string[];
 	hiddenProviders: string[];
 	hiddenModels: string[];
 	/** 技能选择器需要的会话身份（避免组件再订一次 record/runtime 原子） */
@@ -81,7 +78,7 @@ export function useSessionPreferenceController(options: {
 	pickerOpen: boolean;
 	/** 思考选择器是否打开（决定要不要向运行中 Agent 校验精确档位） */
 	thinkingPickerOpen: boolean;
-	/** DSH 部署默认模型（草稿期高亮） */
+	/** 引导页预选默认模型（草稿期高亮，来自主进程 launchDefaults） */
 	defaultModel?: { provider?: string; modelId?: string; modelName?: string };
 	defaultThinkingLevel?: string;
 	/** pi settings.modelThinkingLevels 快照：引导页按当前模型反查每模型默认档位用。 */
@@ -107,7 +104,7 @@ export function useSessionPreferenceController(options: {
 		defaultThinkingLevel: options.defaultThinkingLevel,
 		modelThinkingLevels: options.modelThinkingLevels,
 	});
-	const { record, runtime, isDshSession, models, favoriteModels, favoritesLoaded, hiddenProviders, hiddenModels, modelPending, currentModel: resolvedLiveModel, thinkingLevels, currentThinkingLevel } = state;
+	const { record, runtime, models, favoriteModels, favoritesLoaded, hiddenProviders, hiddenModels, modelPending, currentModel: resolvedLiveModel, thinkingLevels, currentThinkingLevel } = state;
 	// 与 Tab 栏「重启」共用 App.restartActiveAgent：置 restartingAgentId，
 	// SessionView overlay（loader + 文案）才会亮。这里自己调 restartRuntime
 	// 能换进程，但不会驱动那套 UI 状态。
@@ -233,7 +230,7 @@ export function useSessionPreferenceController(options: {
 		// 直接 return（不写任何存储），点选因此完全丢失——用户表现为「切到 DSH 后模型换不了」。
 		if (!record) {
 			try {
-				localStorage.setItem(isDshSession ? WELCOME_DSH_MODEL_KEY : WELCOME_MODEL_KEY, JSON.stringify(selectedModelPreference(model)));
+				localStorage.setItem(WELCOME_MODEL_KEY, JSON.stringify(selectedModelPreference(model)));
 			} catch {
 				// localStorage 不可用时静默；创建会话回退到各后端自己的默认模型
 			}
@@ -286,7 +283,7 @@ export function useSessionPreferenceController(options: {
 				const updated = await desktopApi.sessions.updateRecord(sessionId, { model: null });
 				state.upsertSession(updated);
 			} else {
-				localStorage.removeItem(isDshSession ? WELCOME_DSH_MODEL_KEY : WELCOME_MODEL_KEY);
+				localStorage.removeItem(WELCOME_MODEL_KEY);
 			}
 			state.setModelPending(undefined);
 			onApplied();
@@ -357,7 +354,6 @@ export function useSessionPreferenceController(options: {
 				models,
 				hiddenProviders,
 				hiddenModels,
-				backend: isDshSession ? "dsh" : "pi",
 			});
 			if (candidates.length === 0) {
 				showNotice(t("app.cycleModelEmpty"), 2500, "info", undefined, undefined, "preference-cycle");
@@ -374,7 +370,7 @@ export function useSessionPreferenceController(options: {
 			const target = pickCycleModel({ candidates, currentKey, direction });
 			if (target) await applyModelRef.current(target);
 		},
-		[resolvedLiveModel.provider, resolvedLiveModel.modelId, favoriteModels, models, hiddenProviders, hiddenModels, isDshSession],
+		[resolvedLiveModel.provider, resolvedLiveModel.modelId, favoriteModels, models, hiddenProviders, hiddenModels],
 	);
 
 	/**
@@ -472,7 +468,6 @@ export function useSessionPreferenceController(options: {
 	// 不做 memo：本 controller 只服务一个选择器宿主组件，缓存对象反而要靠 ref 兜住
 	// 大量回调的最新闭包；直接返回当次渲染的引用更不容易出「点了没反应」的陈旧闭包。
 	return {
-		isDshSession,
 		models,
 		report: state.report,
 		catalogLoading: state.catalogLoading,
@@ -484,7 +479,6 @@ export function useSessionPreferenceController(options: {
 		favoriteModels,
 		recentProviders: state.recentProviders,
 		providerOrder: state.providerOrder,
-		dshProviderOrder: state.dshProviderOrder,
 		hiddenProviders,
 		hiddenModels,
 		projectId: state.projectId,

@@ -29,12 +29,11 @@ import {
 } from "lucide-react";
 import { configureNoticeDefaults, showNotice, type NoticeKind } from "./utils/notice";
 import { copyTextWithCopiedNotice } from "./utils/clipboardNotice";
-import { sessionHistoryUnavailableState } from "./utils/sessionHistoryAvailability";
 import { buildSettingsCommands, type PaletteCommand } from "./utils/commandPaletteCommands";
 import { CommandPalette } from "./components/overlays/CommandPalette";
 import { CommandPaletteOnboarding, markCommandPaletteOnboardingSeen } from "./components/overlays/CommandPaletteOnboarding";
 import { desktopApi as api, isLanWeb, missingElectronPreload } from "./desktopApi";
-import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, hiddenModulesAtom, imageGenConfigAtom, dshRuntimeStatusAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom } from "./atoms";
+import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, hiddenModulesAtom, imageGenConfigAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom } from "./atoms";
 import { resolveBusySendDelivery } from "../../shared/busySendDelivery";
 import { SESSION_TAB_MAX_WIDTH_DEFAULT } from "../../shared/sessionTabWidth";
 import { FILE_TREE_ABSOLUTE_MAX_DEPTH } from "../../shared/fileTree";
@@ -70,7 +69,7 @@ import { useSessionHistoryMutations } from "./hooks/useSessionHistoryMutations";
 import { useUserMessageEditReplay } from "./hooks/useUserMessageEditReplay";
 import { PromptDeliveryUnknownError } from "./utils/promptErrors";
 import { isLiveRuntimeStatus, requireSessionCommand, resolveSessionRunState, sessionRunCapabilities, SessionCommandFailure, sessionCommandFailureToast, toSessionRuntimeTarget, type SessionRunCapabilities, type SessionRunAction } from "./utils/sessionCommands";
-import { GUIDE_BOOTSTRAP_SESSION_ID, readWelcomeBackendPreference, readWelcomeDshModelPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, resolveChatSessionBootstrap, resolveGuidePageBackend } from "./utils/chatSessionBootstrap";
+import { GUIDE_BOOTSTRAP_SESSION_ID, readWelcomeBackendPreference, readWelcomeModelPreference, readWelcomeThinkingPreference, resolveChatSessionBootstrap, resolveGuidePageBackend } from "./utils/chatSessionBootstrap";
 import { detectRendererPlatform } from "./lib/detectRendererPlatform";
 import { msUntilNextThemeBoundary } from "../../shared/themeSchedule";
 
@@ -115,7 +114,7 @@ import {
 	cacheSessionMessagesAtom,
 	upsertSessionAtom,
 } from "./atoms";
-import { applyDshGoalSendTransform, buildComposerPromptSubmission } from "./composerBehavior";
+import { buildComposerPromptSubmission } from "./composerBehavior";
 import { isSameSessionPath } from "./agentListDisplay";
 import { resolveLocale, setI18nLocale, t, translateI18nDescriptor } from "./i18n";
 import { isChatProject, loadSessionSourceFilter, saveSessionSourceFilter, isReplacementForPendingAgent, isPendingAgentId, migrateAgentRecord, stampIdleSessionDuration, type PendingAgentTab } from "./rendererUtils";
@@ -123,11 +122,6 @@ import type { SessionFilterPill } from "./sessionFilterPills";
 import { useResize } from "./hooks/useResize";
 import { ARCHIVED_SESSION_TOAST_MS, archivedSessionToastMessage, useSessionActions } from "./hooks/useSessionActions";
 import { useScratchPad } from "./hooks/useScratchPad";
-import { useDshRuntimeStatusSync } from "./hooks/useDshRuntimeStatusSync";
-import { useDshRuntimeMigrationNotice } from "./hooks/useDshRuntimeMigrationNotice";
-import { useDshRuntimeInstallProgressSync } from "./hooks/useDshRuntimeInstallProgressSync";
-import { DSH_INSTALL_SETTINGS_TARGET, maybeHintMissingDshRunnerNode, showDshRuntimeBlockHint } from "./utils/dshRuntimeHint";
-import { dshSendBlockReason } from "../../shared/types/dshRuntime";
 import { useWorktreeActions } from "./hooks/useWorktreeActions";
 import { ChatSessionPane } from "./components/session/ChatSessionPane";
 import { SessionSplitStage } from "./components/session/SessionSplitStage";
@@ -445,7 +439,6 @@ export function App() {
 		refreshProjectSessions,
 		refreshFiles,
 		refreshProjectTree,
-		syncDshForeignSessionsIfEnabled,
 		beginFileTreeRequest,
 		isFileTreeRequestCurrent,
 	} = useProjectSync({
@@ -456,12 +449,10 @@ export function App() {
 		replaceProjectSessions,
 		api: {
 			projects: { list: api.projects.list },
-			settings: { get: api.settings.get },
 			git: { worktreeList: api.git.worktreeList, branches: api.git.branches },
 			sessions: {
 				listCatalog: api.sessions.listCatalog,
 				onCatalogRefreshed: api.sessions.onCatalogRefreshed,
-				syncDshForeignSessions: api.sessions.syncDshForeignSessions,
 			},
 			files: {
 				list: (projectId: string, options?: { maxDepth?: number; directory?: string }) => api.files.list(projectId, options),
@@ -681,7 +672,6 @@ export function App() {
 		gitCommitMessageProvider: "",
 		gitCommitMessageModel: "",
 		gitExecutablePath: "",
-		dshRunnerNodePath: "",
 		closeToTray: true,
 		singleInstance: true,
 		enableNotifications: true,
@@ -919,14 +909,6 @@ export function App() {
 	const pendingAgentsRef = useRef<PendingAgentTab[]>([]);
 
 	const scratchPad = useScratchPad();
-	// DSH runtime 安装态同步：全进程只挂这一份（IPC 拉取 + 变更订阅 → dshRuntimeStatusAtom）。
-	// 必须早于任何按安装态门控的 UI 计算，否则首帧会用 checking 初值渲染。
-	useDshRuntimeStatusSync();
-	// DSH runtime 安装进度同步：App 级订阅（常驻，不随 DshRuntimeSection 卸载），
-	// 保证切配置分页/关弹窗后进度仍保留；完成/失败时弹全局 toast。
-	useDshRuntimeInstallProgressSync();
-	// 存量 dsh 用户升级后 runtime 不在时给一次直达提示（有 dsh 会话才提示，只提示一次）。
-	useDshRuntimeMigrationNotice();
 
 	// Drawer loading handled by useWorkspacePanels; only expandedDirs logic remains.
 	useEffect(() => {
@@ -1588,7 +1570,7 @@ export function App() {
 				// 模型偏好按后端分开取（issue #253）：DSH 的模型是 host route 名，不在 models.json，
 				// 必须作为显式 model 直接带给 host；pi 的偏好走 welcomeModel（launchDefaults 会按
 				// models.json 校验存在性）。历史上 DSH 侧不读偏好，点选因此永远不生效。
-				const welcomeModel = draftBackend === "dsh" ? readWelcomeDshModelPreference()?.model : readWelcomeModelPreference()?.model;
+				const welcomeModel = readWelcomeModelPreference()?.model;
 				const welcomeThinking = readWelcomeThinkingPreference()?.thinkingLevel;
 				// 统一创建 draft 会话（Chat 项目也走普通会话、可保存）：创建不拉 pi，
 				// selectSessionCommand 同步切页、立即进入会话页；匿名会话仅保留给侧栏
@@ -1599,9 +1581,9 @@ export function App() {
 				// 会把这条显式 model 落到 host（host 拒绝时降级并告警，不让创建失败）。
 				const session = await api.sessions.createDraft({
 					projectId: project.id,
-					title: draftBackend === "dsh" ? `${project.name} DSH` : `${project.name} agent`,
-					backend: draftBackend,
-					...(welcomeModel ? (draftBackend === "dsh" ? { model: welcomeModel } : { welcomeModel }) : {}),
+					title: `${project.name} agent`,
+					backend: draftBackend === "imagegen" ? "imagegen" : "pi",
+					...(welcomeModel ? { welcomeModel } : {}),
 					...(welcomeThinking ? { thinkingLevel: welcomeThinking } : {}),
 				});
 				upsertSession(session);
@@ -2094,7 +2076,6 @@ export function App() {
 		const project = await api.projects.add();
 		if (!project) return;
 		// 先同步 DSH：新目录注册后，原先按 cwd 找不到项目的外部会话才能挂进来。
-		await syncDshForeignSessionsIfEnabled();
 		await refreshProjects();
 		setActiveProjectId(project.id);
 		await refreshProjectSessions(project.id);
@@ -2152,13 +2133,6 @@ export function App() {
 		setSessionMessageLoadState({ sessionId, state: { status: "loading" } });
 		try {
 			const page = await api.sessions.readRecordMessagePage(sessionId, undefined, 100);
-			// DSH host 被手动停止：读盘返回带原因的空页，不是「空会话」。
-			// 必须早退，否则 force 写空缓存会把这个会话洗成空白（看着像数据丢了）。
-			const unavailable = sessionHistoryUnavailableState(page);
-			if (unavailable) {
-				setSessionMessageLoadState({ sessionId, state: unavailable });
-				return;
-			}
 			setCacheMessages({
 				sessionId,
 				messages: page.messages,
@@ -2363,20 +2337,6 @@ export function App() {
 			}
 		}
 		// 未启动/已解绑：激活会话（ensureRuntime 对无绑定会话 create 新 Agent，幂等去重防重复点击）。
-		// DSH 会话 runtime 不可用（未安装/损坏）时 host 无法 fork，activateRuntime 只会抛
-		// 模块解析裸报错——给「去安装」提示（含直达入口）而不是把底层错误甩给用户。
-		const restartRecord = store.get(sessionRecordsAtom)[sessionId];
-		if (restartRecord?.backend === "dsh") {
-			const dshStatus = store.get(dshRuntimeStatusAtom);
-			if (dshSendBlockReason(dshStatus.state)) {
-				showDshRuntimeBlockHint(() => store.set(openSettingsAtom, DSH_INSTALL_SETTINGS_TARGET), dshStatus.state, dshStatus.reason, {
-					installed: dshStatus.runtimeVersion,
-					declared: dshStatus.declaredRuntimeVersion,
-				});
-				return;
-			}
-			maybeHintMissingDshRunnerNode(() => store.set(openSettingsAtom, { tab: "dev", section: "dsh-runner-node" }));
-		}
 		// 重启活会话走 restartRuntimeTarget→restartingAgentId→SessionSurfaceStage 的 isRestarting 遮罩；
 		// 这里（无绑定）没有 restartingAgentId，需显式设置 activating 遮罩，让会话消息区域也有加载动画。
 		setActivatingSessionId(sessionId);
@@ -2494,17 +2454,7 @@ export function App() {
 	// Session prompt submission is owned by useSessionComposerController.
 
 	async function dispatchPromptSnapshot(sessionId: string, message: string, images?: ImageContent[], streamingBehavior?: "steer" | "followUp", agentMode: ComposerAgentMode = "normal", templateDescription?: string) {
-		// 排队投递与输入框同一套规则：DSH 拒绝 agentMessage，首次目标改写成 /goal。
-		const record = store.get(sessionRecordByIdAtomFamily(sessionId));
-		const isDsh = record?.backend === "dsh";
-		const visibleMessage = isDsh
-			? applyDshGoalSendTransform({
-					message,
-					mode: agentMode,
-					goal: store.get(sessionRuntimeBySessionIdAtomFamily(sessionId))?.state?.goal,
-				})
-			: message;
-		const submission = buildComposerPromptSubmission(visibleMessage, isDsh ? "normal" : agentMode);
+		const submission = buildComposerPromptSubmission(message, agentMode);
 		let result: Awaited<ReturnType<typeof api.sessions.sendPrompt>>;
 		try {
 			result = await api.sessions.sendPrompt({
@@ -2861,7 +2811,7 @@ export function App() {
 		await refreshProjectSessions(projectId, true);
 	}
 
-	/** 归档会话：从列表移除但不销毁文件；toast 按后端告知恢复入口（pi 走会话管理，DSH 走配置页归档区） */
+	/** 归档会话：从列表移除但不销毁文件。 */
 	async function archiveSidebarSession(projectId: string, session: SessionSummary) {
 		await api.sessions.archiveRecord(session.id);
 		dismissSessionTree(session, projectId);
@@ -2877,14 +2827,6 @@ export function App() {
 		if (projectId) await refreshProjectSessions(projectId);
 	}
 
-	/** 恢复 DSH 归档会话：host 目录移回 sessions 树并由主进程重建 catalog 记录 */
-	async function unarchiveDshSidebarSession(dshSessionId: string, projectId = activeProjectId) {
-		await api.sessions.unarchiveDshSession(dshSessionId);
-		showToast(t("app.sessionRestored"), 2200);
-		// 恢复目标项目由主进程按 manifest 的 cwd 决定；刷新当前弹窗项目即可让 catalog 快照更新。
-		if (projectId) await refreshProjectSessions(projectId);
-	}
-
 	/** 列出已归档会话（会话管理弹窗恢复视图用） */
 	function listArchivedSidebarSessions() {
 		return api.sessions.listArchived();
@@ -2895,19 +2837,6 @@ export function App() {
 		await api.sessions.deleteArchivedRecord(archivedPath);
 		showToast(t("app.sessionDeletedFromArchive"), 2200);
 		// 归档删除不影响常规目录；刷新当前项目只是让 catalog 快照与磁盘一致。
-		const projectId = activeProjectId;
-		if (projectId) await refreshProjectSessions(projectId);
-	}
-
-	/** 列出 DSH 归档会话（会话管理弹窗归档视图用；与 pi 归档合并展示） */
-	function listArchivedDshSidebarSessions() {
-		return api.sessions.listArchivedDshSessions();
-	}
-
-	/** 永久删除已归档 DSH 会话（host 目录移入回收站） */
-	async function deleteArchivedDshSidebarSession(dshSessionId: string) {
-		await api.sessions.deleteArchivedDshSession(dshSessionId);
-		showToast(t("app.sessionDeletedFromArchive"), 2200);
 		const projectId = activeProjectId;
 		if (projectId) await refreshProjectSessions(projectId);
 	}
@@ -3054,9 +2983,7 @@ export function App() {
 			export: runExportSidebarSession,
 			copy: runCopySidebarSession,
 			copyPath: async (session) => {
-				// DSH 会话没有 pi 会话文件：走主进程按 dshSessionId + cwd 推导 host 持久化路径（F5）。
-				// 失败/不可推导时提示而不是把空值写进剪贴板（原实现会把 undefined 写成 "undefined" 字符串）。
-				const path = session.backend === "dsh" ? await api.sessions.getDshSessionPath(session.id) : session.filePath;
+				const path = session.filePath;
 				if (!path) {
 					showToast(t("menu.copySessionFilePathUnavailable"), 3000);
 					return;
@@ -3086,13 +3013,6 @@ export function App() {
 			listArchived: () => listArchivedSidebarSessions(),
 			deleteArchived: async (archivedPath) => {
 				await deleteArchivedSidebarSession(archivedPath);
-			},
-			unarchiveDsh: async (dshSessionId, projectId) => {
-				await unarchiveDshSidebarSession(dshSessionId, projectId);
-			},
-			listArchivedDsh: () => listArchivedDshSidebarSessions(),
-			deleteArchivedDsh: async (dshSessionId) => {
-				await deleteArchivedDshSidebarSession(dshSessionId);
 			},
 		},
 		agents: {
@@ -3245,8 +3165,7 @@ export function App() {
 
 	// —— Tab 栏 ⋯ 菜单「当前会话操作」：重命名 / 复制会话 / 导出 HTML / 复制路径 / 打开文件 ——
 	// 与侧栏会话右键菜单同源同语义：搜索定位的会话可能不在侧栏可见（侧栏只渲染部分行），
-	// ⋯ 菜单是唯一稳定入口。live 会话复制走 clone 分流（Agent 换绑新会话，DSH 亦可），
-	// 历史/未启动会话走 copyRecord；DSH 历史会话无宿主文件，隐藏复制/导出组（与侧栏一致）。
+	// ⋯ 菜单是唯一稳定入口。live 会话复制走 clone 分流，历史/未启动会话走 copyRecord。
 	async function copyCurrentSessionFromTabs() {
 		if (!currentSessionId) return;
 		if (currentSessionIsLive && activeAgentId) {
@@ -3258,9 +3177,7 @@ export function App() {
 
 	async function copyCurrentSessionPathFromTabs() {
 		if (!currentSessionId) return;
-		// DSH 会话文件路径按 dshSessionId + cwd 推导（与侧栏 copyPath 同源）；
-		// 失败/不可推导时提示而不是把空值写进剪贴板。
-		const path = currentSessionRecord?.backend === "dsh" ? await api.sessions.getDshSessionPath(currentSessionId) : currentSessionRecord?.filePath;
+		const path = currentSessionRecord?.filePath;
 		if (!path) {
 			showToast(t("menu.copySessionFilePathUnavailable"), 3000);
 			return;
@@ -3272,8 +3189,8 @@ export function App() {
 	const tabsSessionActions: SessionTabsBarProps["sessionActions"] =
 		currentSessionId && currentSessionRecord
 			? {
-					canCopySession: currentSessionRecord.status !== "draft" && (currentSessionIsLive || currentSessionRecord.backend !== "dsh"),
-					canExportHtml: currentSessionRecord.status !== "draft" && currentSessionRecord.backend !== "dsh",
+					canCopySession: currentSessionRecord.status !== "draft",
+					canExportHtml: currentSessionRecord.status !== "draft",
 					hasFilePath: Boolean(currentSessionRecord.filePath),
 					onCopySession: () => {
 						void copyCurrentSessionFromTabs();

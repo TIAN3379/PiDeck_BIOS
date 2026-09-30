@@ -61,9 +61,7 @@ test("Web wiring is Session-first and exposes no Agent compatibility creation", 
 
 test("catalog deletion unbinds first then stops the agent in the background", () => {
 	assert.match(sessionIpc, /sessionsCatalogDelete[\s\S]*releaseRuntimeForDelete\(sessionId\)/);
-	assert.match(sessionIpc, /sessionsCatalogDelete[\s\S]*rememberDismissedDshSession\(/);
 	assert.match(main, /deleteSessionRecord: async \(sessionId\)[\s\S]*releaseRuntimeForDelete\(sessionId\)/);
-	assert.match(main, /deleteSessionRecord: async \(sessionId\)[\s\S]*rememberDismissedDshSession\(/);
 	assert.match(coordinator, /async releaseRuntimeForDelete\(sessionId: string\)/);
 	assert.match(coordinator, /void this\.agents\s*\.?\s*stop\(target\.agentId\)/);
 	assert.match(coordinator, /isActivating\(sessionId: string\): boolean/);

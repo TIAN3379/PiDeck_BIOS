@@ -120,8 +120,8 @@ export type AppSettings = {
 	/**
 	 * Agent 忙碌时发送消息的默认投递行为。
 	 * "steer"=插入当前回合（模型在本次回合内尽快看到）；"followUp"=排队，当前回合结束后自动发送。
-	 * 仅决定渲染层入队后的默认投递语义；pi/dsh 主进程各自映射到 wire 协议
-	 * （pi streamingBehavior / DSH sessions.prompt mode）。缺省 "steer"，解析见 shared/busySendDelivery.ts。
+	 * 仅决定渲染层入队后的默认投递语义；pi 主进程映射到 wire 协议
+	 * （streamingBehavior）。缺省 "steer"，解析见 shared/busySendDelivery.ts。
 	 */
 	busySendDelivery: BusySendDelivery;
 	/**
@@ -146,12 +146,6 @@ export type AppSettings = {
 	 * 用户显式配置后，所有 git 子进程（含 worktree）都使用该路径。
 	 */
 	gitExecutablePath: string;
-	/**
-	 * DSH 沙箱 runner 用的本机 Node 绝对路径（Windows 必须是 CUI node.exe）。
-	 * 空串 = 自动探测 PATH / 版本管理器 / 应用数据目录里的专用副本。
-	 * 不随包分发，避免安装包再涨 ~86MB；可在开发设置里一键下载到 userData。
-	 */
-	dshRunnerNodePath: string;
 	/** 关闭窗口时隐藏到系统托盘而不是退出 */
 	closeToTray: boolean;
 	/**
@@ -349,8 +343,8 @@ export type AppSettings = {
 	// ── 功能模块显示开关：外观设置里按需收起不用的模块 UI 入口 ──
 	/**
 	 * 用户主动隐藏的功能模块 id 列表（清单与语义见 shared/hiddenModules.ts）。
-	 * 隐藏后：对应设置 tab 从侧栏消失；`dsh` 还会收起配置管理的 DSH 分页与新建会话的 DSH 选项，
-	 * `imagegen` 还会收起输入框的生图入口。只隐藏入口，不清配置、不停已启用的后台功能；
+	 * 隐藏后：对应设置 tab 从侧栏消失；`imagegen` 还会收起输入框的生图入口。
+	 * 只隐藏入口，不清配置、不停已启用的后台功能；
 	 * 命令面板仍可搜到并一键恢复显示。默认 `[]` 全部显示；可选以兼容旧 settings.json。
 	 */
 	hiddenModules?: string[];
@@ -362,11 +356,6 @@ export type AppSettings = {
 	 * （新增/改名的 provider 因此不会被顶到最前）。可选以兼容旧 settings.json。
 	 */
 	providerOrder?: string[];
-	/**
-	 * DSH 模型页供应商卡片的用户自定义顺序（llm-pi-ai providers 的 provider 名数组）。
-	 * 语义同 providerOrder；与 Pi 侧分开存放，避免两套配置互相污染顺序。
-	 */
-	dshProviderOrder?: string[];
 
 	// ── 模型选择器分组排序：记录最近使用的供应商 ──
 	/**
@@ -445,8 +434,7 @@ export type AppSettings = {
 	// ── Agent 后端 ──
 	/**
 	 * 新建会话的默认后端（侧栏「+」/ 引导页 / 并行问询共用）。
-	 * "pi" = 经典 pi CLI 后端；"dsh" = DeepSeek Harness 内嵌后端。
-	 * 缺省 "pi"（2026-12 兼容期调整：默认回归 pi，用户可在设置中切换为 dsh）。
+	 * "pi" = pi CLI 后端；"imagegen" = 生图后端。缺省 "pi"。
 	 */
 	defaultAgentBackend: AgentBackend;
 
@@ -550,61 +538,6 @@ export type AppSettings = {
 	 * 变更后主进程会把策略快照写入 userData/security-policy.json 供 pi-deck-security-gate 扩展消费。
 	 */
 	securityConfig?: SecurityConfig;
-
-	// ── DSH 后端 ──
-	/**
-	 * DSH_HOME 覆盖目录：用户自己的 DSH 配置目录（如 ~/.dsh）。
-	 * 缺省 undefined/空串：自动使用用户真实 ~/.dsh（与 dsh CLI 行为一致，
-	 * 配置/凭证/会话全在同一处，不复制）；目录不存在时启动时自动创建。
-	 * 注意：DSH 官方约束「同一 DSH_HOME 只允许一个 host」，与 dsh CLI 共用默认目录
-	 * 时两实例会互相覆盖状态；配置页概览据此给出 DSH_HOME 隔离提示（#189，判定见
-	 * `src/main/dsh/dshHomeSharing.ts`）。
-	 * 实现见 DshHost.resolveDshHomeDir。启动预热前变更会被新 host 读取；
-	 * 已运行时切换需重启 host。
-	 */
-	dshHomeDir?: string;
-
-	/**
-	 * DSH runtime 下载源索引地址（覆盖默认 AtomGit/GitHub latest 应用 Release）。
-	 * 用于镜像/内网分发：索引是分平台 `dsh-runtime-<platform>-<arch>-releases.json`，
-	 * 条目里给出 tarball 直链与 sha256。缺省/空串 = 跟随 settings.updateSource。
-	 * sha256 校验始终生效，镜像也不能绕过。禁止指向独立 `dsh-runtime` tag。
-	 */
-	dshRuntimeIndexUrl?: string;
-
-	/**
-	 * DSH 沙箱 Node 24 下载源索引（覆盖默认 AtomGit/GitHub latest 应用 Release）。
-	 * 缺省/空串 = 跟随 settings.updateSource。sha256 始终校验。
-	 */
-	dshRunnerNodeIndexUrl?: string;
-
-	/**
-	 * DSH 审批自动放行：开启后 DSH 会话的工具/命令审批（approval/requested）
-	 * 自动应答 allowed-once，不再弹出确认。
-	 * 缺省 undefined/false：保持人工审批（会话内 Ask 弹窗）。
-	 * 运行时读取（每次审批即时生效），无需重启 DSH host。
-	 */
-	dshApprovalAutoAllow?: boolean;
-
-	/**
-	 * DSH 外部会话自动导入：应用启动后只读扫描 DSH_HOME/sessions，把其他工具
-	 * （dsh-web 等）创建的、catalog 尚未映射的根会话写入侧栏（按会话自己的 cwd
-	 * 匹配或注册项目；没有 cwd 的才进入「外部会话」兑底项目）。缺省 true。
-	 * 不启动 host、不 attach，避免与 dsh-web 抢同一份 DSH_HOME。
-	 * 关闭后不再把外部会话写入侧栏（无手动导入入口）。
-	 */
-	dshAutoImportSessions?: boolean;
-
-	/**
-	 * DSH host 是否被用户手动停止（不想让它运行）。
-	 *
-	 * 持久化跨应用重启：标记为真后，预热（startDshHostInBackground）、按需兜底
-	 * （ensureStarted）、崩溃自动重启（DshHostProcess.restartAfterCrash）、runtime
-	 * 磁盘操作后的 host 恢复等所有非用户显式发起的路径都不再 fork host。
-	 * 只有用户在 DSH 配置页点「启动」才清除标记并重新 boot。
-	 * 缺省 undefined/false：保持按需自动启动的历史语义。
-	 */
-	dshManualStopped?: boolean;
 };
 
 /**

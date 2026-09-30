@@ -148,19 +148,18 @@ describe("collectRecentActivityRows（最近会话收集）", () => {
 		assert.equal(collectRecentActivityRows({ catalog, activity, activeRows: [], visibleCount: 10 }).rows[0]?.session.id, "running");
 	});
 
-	test("排除匿名会话与无文件且未绑定 runtime 的记录，保留 dsh / 生图 / 已绑定 runtime 的会话", () => {
+	test("排除匿名会话与无文件且未绑定 runtime 的记录，保留生图 / 已绑定 runtime 的会话", () => {
 		const sessions = [
 			makeSession({ id: "no-session", noSession: true }),
-			// 没有会话文件又不是 dsh/生图，且未绑定 runtime：sessionRecordToSummary 返回 undefined，渲染是空标题行
+			// 没有会话文件又不是生图，且未绑定 runtime：sessionRecordToSummary 返回 undefined，渲染是空标题行
 			makeSession({ id: "orphan", filePath: undefined, backend: "pi" }),
 			makeSession({ id: "runtime-only", filePath: undefined, backend: "pi" }),
-			makeSession({ id: "dsh", backend: "dsh", filePath: undefined }),
 			makeSession({ id: "imagegen", backend: "imagegen", filePath: undefined }),
 		];
 		const activity = sessions.map((session, index) => ({ sessionId: session.id, at: 100 - index }));
 		const { rows, totalCount } = collectRecentActivityRows({ catalog: makeCatalog({ sessionsByProject: { p1: sessions }, runtimeBySessionId: { "runtime-only": { agentId: "a1" } } }), activity, activeRows: [], visibleCount: 10 });
-		assert.equal(rows.map((row) => row.session.id).join(","), "runtime-only,dsh,imagegen");
-		assert.equal(totalCount, 3);
+		assert.equal(rows.map((row) => row.session.id).join(","), "runtime-only,imagegen");
+		assert.equal(totalCount, 2);
 	});
 
 	test("访问记录指向已删除 / 尚未扫到 catalog 的会话时跳过（不渲染空行）", () => {

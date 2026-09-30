@@ -29,17 +29,11 @@ export function computeVisibleModes(options: { isImageGen: boolean; planModeAvai
  *   「+」菜单不提供 LLM 模式；imagegen 会话走专用生图底栏。
  */
 export function useComposerModeAvailability(props: { backend?: AgentBackend; imageGenLocked?: boolean; value: ComposerAgentMode; disabled?: boolean; onChange: (mode: ComposerAgentMode) => void }) {
-	const isDsh = props.backend === "dsh";
 	const isImageGen = props.backend === "imagegen" || props.imageGenLocked === true;
 	const [planModeAvailable, setPlanModeAvailable] = useState(true);
 	const [goalModeAvailable, setGoalModeAvailable] = useState(true);
 
 	const refreshAvailability = useCallback(async () => {
-		if (isDsh) {
-			setPlanModeAvailable(true);
-			setGoalModeAvailable(true);
-			return;
-		}
 		try {
 			const result = await desktopApi.extensions.list();
 			const plan = result.extensions.find((extension) => extension.source === "pi-deck-plan-mode.ts");
@@ -51,7 +45,7 @@ export function useComposerModeAvailability(props: { backend?: AgentBackend; ima
 			setPlanModeAvailable(false);
 			setGoalModeAvailable(false);
 		}
-	}, [isDsh]);
+	}, []);
 
 	// 打开菜单时刷新（扩展开关可能刚在设置页改过）。不可用且当前正在用则强制回退，
 	// 这属于模式状态流转的边界：不在这里回退，用户会卡在一个扩展已删的模式上。

@@ -172,7 +172,6 @@ test("live Pi command discovery replaces draft suggestions once the runtime star
 	const live = [{ name: "skill:live", description: "Pi runtime command", source: "skill" }];
 	const draft = [{ name: "skill:draft", description: "Pre-agent command", source: "skill" }];
 
-	assert.strictEqual(selectComposerSuggestionCommands(false, true, live, draft), live);
-	assert.strictEqual(selectComposerSuggestionCommands(false, false, live, draft), draft);
-	assert.strictEqual(selectComposerSuggestionCommands(true, false, live, draft), live);
+	assert.strictEqual(selectComposerSuggestionCommands(true, live, draft), live);
+	assert.strictEqual(selectComposerSuggestionCommands(false, live, draft), draft);
 });

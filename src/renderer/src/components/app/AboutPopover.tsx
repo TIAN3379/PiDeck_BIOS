@@ -65,7 +65,6 @@ export function AboutPopover(props: AboutPopoverProps) {
 						<BlockLabel>{t("about.runtimeInfo")}</BlockLabel>
 						{/* 探测失败/未安装的版本显示 —，同样保留行结构便于对照 */}
 						<VersionRow label="pi CLI" value={info.piVersion} />
-						<VersionRow label={t("about.dshVersion")} value={info.dshRuntimeVersion} />
 						<VersionRow label={t("about.piAiVersion")} value={info.piAiVersion} />
 						<p className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
 							{t("about.runtimeStack", {

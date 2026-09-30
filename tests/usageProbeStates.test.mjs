@@ -43,7 +43,7 @@ function modelsFile(providers) {
 
 test("listUsageProbeStates：内置识别命中也不自动开（默认关，显式开启才查）", async () => {
 	await withConfigDir({ "models.json": modelsFile({ deepseek: { baseUrl: "https://api.deepseek.com/v1" } }) }, async (dir) => {
-		const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates("pi");
+		const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates();
 		const state = states.providers.deepseek;
 		assert.equal(state.enabled, false);
 		assert.equal(state.recognized, true);
@@ -62,7 +62,7 @@ test("listUsageProbeStates：显式 enabled=true 才生效（内置识别与已�
 			}),
 		},
 		async (dir) => {
-			const state = (await new ConfigManager(dir, (key) => key).listUsageProbeStates("pi")).providers.deepseek;
+			const state = (await new ConfigManager(dir, (key) => key).listUsageProbeStates()).providers.deepseek;
 			assert.equal(state.enabled, true);
 			assert.equal(state.configured, true);
 			assert.equal(state.recognized, true);
@@ -83,7 +83,7 @@ test("listUsageProbeStates：未识别且未配置 → 关；已配模板但未�
 			}),
 		},
 		async (dir) => {
-			const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates("pi");
+			const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates();
 			assert.equal(states.providers.mystery.enabled, false);
 			assert.equal(states.providers.mystery.configured, false);
 			assert.equal(states.providers.mystery.recognized, false);
@@ -102,7 +102,7 @@ test("listUsageProbeStates：覆盖认证页 provider（auth.json 并集）且�
 			"auth.json": JSON.stringify({ "auth-only": { type: "api_key", key: "sk-secret-value" } }),
 		},
 		async (dir) => {
-			const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates("pi");
+			const states = await new ConfigManager(dir, (key) => key).listUsageProbeStates();
 			assert.ok(states.providers["auth-only"]);
 			// 状态表只回开关/模板/间隔，任何密钥字段都不得出现。
 			const serialized = JSON.stringify(states);
@@ -120,9 +120,9 @@ test("通道只在 shared/ipc.ts、主进程 handler、preload 三处同步（�
 	assert.match(preload, /ipcChannels\.configListUsageProbeStates/);
 	assert.doesNotMatch(systemIpc, /configSetUsageProbeEnabled/);
 	assert.doesNotMatch(preload, /setUsageProbeEnabled/);
-	// 状态表 handler 只透传 backend + provider 名数组（路径/目录不接受渲染层输入）。
+	// 状态表 handler 只透传 provider 名数组（路径/目录不接受渲染层输入）。
 	const listHandler = systemIpc.match(/ipcMain\.handle\(ipcChannels\.configListUsageProbeStates,[\s\S]*?\n\t\}\);/)?.[0] ?? "";
-	assert.match(listHandler, /configManager\.listUsageProbeStates\(backend, providers\)/);
+	assert.match(listHandler, /configManager\.listUsageProbeStates\(providers\)/);
 	// 共享契约：状态表类型在 shared/types/providerUsage.ts。
 	assert.match(sharedTypes, /export type UsageProbeProviderState = \{/);
 	assert.match(sharedTypes, /export type UsageProbeStatesResult = \{/);
@@ -134,5 +134,5 @@ test("弹窗保存后回读状态表（徽章的开关态/间隔来自状态表�
 	// 保存成功分支里必须同时「清缓存 + 回读状态」。
 	const successBlock = dialog.match(/if \(result\.ok\) \{[\s\S]*?window\.setTimeout\(handleClose, 600\);/)?.[0] ?? "";
 	assert.match(successBlock, /invalidateAll\(\);/);
-	assert.match(successBlock, /void refreshProviderState\(props\.provider, props\.backend\);/);
+	assert.match(successBlock, /void refreshProviderState\(props\.provider\);/);
 });

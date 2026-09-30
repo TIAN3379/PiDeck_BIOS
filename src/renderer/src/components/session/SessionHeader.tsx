@@ -1,15 +1,13 @@
-import { HatGlasses, Maximize2, Target } from "lucide-react";
+import { HatGlasses, Maximize2 } from "lucide-react";
 import { useAtomValue } from "jotai";
 import { selectAtom } from "jotai/utils";
-import { useMemo, useState, type RefObject } from "react";
+import { useMemo, type RefObject } from "react";
 import type { AgentRuntimeState } from "../../../../shared/types";
-import { sessionRecordByIdAtomFamily, sessionRuntimeBySessionIdAtomFamily, sessionSendStateByIdAtom, projectByIdAtomFamily } from "../../atoms";
+import { sessionRecordByIdAtomFamily, sessionSendStateByIdAtom, projectByIdAtomFamily } from "../../atoms";
 import { isUserFacingSessionStart } from "../../hooks/useSessionTimelineController";
 import { t } from "../../i18n";
 import { displayProjectDirectoryName } from "../../rendererUtils";
 import { Button } from "../ui-shadcn/button";
-import { DshAgentPresetControl } from "./DshAgentPresetControl";
-import { DshAgentToolsPanel } from "./DshAgentToolsPanel";
 
 type HeaderActions = {
 	headerRef: RefObject<HTMLDivElement | null>;
@@ -80,8 +78,6 @@ export function SessionHeader(props: SessionHeaderProps) {
 					<HatGlasses size={14} aria-hidden="true" />
 				</span>
 			)}
-			{props.embedded && session?.backend === "dsh" && <DshAgentPresetControl sessionId={sessionId} />}
-			{sessionMode && session?.backend === "dsh" && <DshToolsButton sessionId={sessionId} />}
 		</div>
 	);
 
@@ -134,28 +130,8 @@ export function SessionHeader(props: SessionHeaderProps) {
 				) : (
 					<span className="min-w-0" aria-hidden="true" />
 				)}
-				{/* DSH 会话模式胶囊：草稿期可点开选择，激活后只读展示 */}
-				{session?.backend === "dsh" ? <DshAgentPresetControl sessionId={sessionId} /> : null}
 			</div>
 			{actions}
 		</div>
-	);
-}
-
-/**
- * DSH 工具按钮（G5/G6：目标 / 子代理面板入口）；仅运行时已激活（有 agentId）时可用。
- */
-function DshToolsButton(props: { sessionId: string }) {
-	const runtime = useAtomValue(sessionRuntimeBySessionIdAtomFamily(props.sessionId));
-	const [open, setOpen] = useState(false);
-	const agentId = runtime?.agentId;
-	if (!agentId) return null;
-	return (
-		<>
-			<Button type="button" variant="ghost" size="icon-sm" className="size-7 shrink-0 text-muted-foreground hover:text-foreground" title={t("dshTools.open")} aria-label={t("dshTools.open")} onClick={() => setOpen(true)}>
-				<Target className="size-3.5" aria-hidden="true" />
-			</Button>
-			{open && <DshAgentToolsPanel sessionId={props.sessionId} agentId={agentId} onClose={() => setOpen(false)} />}
-		</>
 	);
 }

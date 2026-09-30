@@ -152,15 +152,14 @@ test("uses only the canonical project refresh port", () => {
 	assert.equal(unarchive.match(/refreshProjectSessions\(/g)?.length, 1);
 });
 
-test("DSH delete toast no longer claims host data stays mapped", () => {
+test("delete toast uses the standard session copy", () => {
 	const remove = functionBlock("deleteHistorySession", "archiveHistorySession");
 	assert.doesNotMatch(remove, /session\.deletedDshKeepData/);
 	assert.match(remove, /app\.sessionDeleted/);
 });
 
-test("archive toast points users at the restore location by backend", () => {
+test("archive toast points users at the restore location", () => {
 	assert.match(source, /export function archivedSessionToastMessage/);
-	assert.match(source, /app\.sessionArchivedDsh/);
 	assert.match(source, /app\.sessionArchived/);
 	const archive = functionBlock("archiveHistorySession", "unarchiveHistorySession");
 	assert.match(archive, /archivedSessionToastMessage\(session\)/);

@@ -13,26 +13,17 @@ export const GUIDE_BOOTSTRAP_SESSION_ID = "renderer:guide-bootstrap";
 
 /** 欢迎页（未启动 Agent）选择的模型偏好存储 key。 */
 export const WELCOME_MODEL_KEY = "pideck:welcome-model";
-/**
- * 引导页切到 DSH 后的模型偏好存储 key（与 pi 的 WELCOME_MODEL_KEY 分开）。
- *
- * 必须独立存储：两份偏好被不同解析器消费——pi 侧进 launchDefaults（读 models.json），
- * DSH 侧进 createDraft 的显式 model（读 host 模型目录）。共用一个 key 会让两侧互相
- * 读到对方的模型：切到 DSH 后 pi 偏好里的 models.json 模型会被当成 DSH 选择，
- * 而 DSH 的 route 名（如 jiyuan）回切 pi 后又会被当成 models.json 的 provider。
- */
-export const WELCOME_DSH_MODEL_KEY = "pideck:welcome-dsh-model";
 /** 欢迎页（未启动 Agent）显式选择的思考级别存储 key；首次发送时提升到真实会话。 */
 export const WELCOME_THINKING_KEY = "pideck:welcome-thinking";
 /** 欢迎页（未启动 Agent）显式切换的后端存储 key；首次发送时提升到真实会话。 */
 export const WELCOME_BACKEND_KEY = "pideck:welcome-backend";
 
-/** 读取欢迎页最后显式切换的后端（仅认 pi/dsh；无则 undefined）。 */
+/** 读取欢迎页最后显式切换的后端。 */
 export function readWelcomeBackendPreference(): AgentBackend | undefined {
 	try {
 		const raw = localStorage.getItem(WELCOME_BACKEND_KEY);
 		// imagegen 是模式不是后端切换器的取值，历史脏数据一律忽略。
-		if (raw === "pi" || raw === "dsh") return raw;
+		if (raw === "pi") return raw;
 	} catch {
 		// localStorage 不可用时视为无偏好
 	}
@@ -40,22 +31,17 @@ export function readWelcomeBackendPreference(): AgentBackend | undefined {
 }
 
 /**
- * 引导页实际会创建的后端：用户显式切换优先，但 DSH runtime 不可用时回落 pi。
+ * 引导页实际会创建的后端：用户显式切换优先，否则用设置项默认。
  *
- * 为什么必须是纯函数并被展示与创建两侧共用：底栏/选择器按它选目录与默认值
- * （pi 读 models.json、DSH 读 host catalog），`ensureSessionForSend` 按它建会话。
- * 两侧各写一份就会分叉——用户看到 DSH 目录却建出 pi 会话（或反之）。
- *
- * 钳制规则与 `resolveEffectiveAgentBackend` 同源：DSH 不可用时不能让新建落到 dsh，
- * 否则首次发送才在 createDraft 的 runtime 门控上抛错。
+ * 为什么必须是纯函数并被展示与创建两侧共用：底栏/选择器按它选目录与默认值，
+ * `ensureSessionForSend` 按它建会话。两侧各写一份就会分叉。
  */
 export function resolveGuidePageBackend(input: {
 	/** 引导页显式切换的后端（localStorage 偏好，无则 undefined）。 */
 	override?: AgentBackend;
-	/** 设置项默认后端，已经过 DSH runtime 安装态钳制（effectiveAgentBackendAtom）。 */
+	/** 设置项默认后端（effectiveAgentBackendAtom）。 */
 	effectiveDefault: AgentBackend;
 }): AgentBackend {
-	if (input.override === "dsh" && input.effectiveDefault !== "dsh") return "pi";
 	return input.override ?? input.effectiveDefault;
 }
 
@@ -68,16 +54,7 @@ export function readWelcomeModelPreference():
 	return readStoredModelPreference(WELCOME_MODEL_KEY);
 }
 
-/** 读取引导页切到 DSH 后选择的模型偏好（无则 undefined）。 */
-export function readWelcomeDshModelPreference():
-	| {
-			model: { provider: string; modelId: string; modelName?: string };
-	  }
-	| undefined {
-	return readStoredModelPreference(WELCOME_DSH_MODEL_KEY);
-}
-
-/** 两份引导页模型偏好（pi / dsh）共用的读取与归一化。 */
+/** 引导页模型偏好的读取与归一化。 */
 function readStoredModelPreference(storageKey: string):
 	| {
 			model: { provider: string; modelId: string; modelName?: string };

@@ -1,8 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import { useAtomValue } from "jotai";
 import type { AppSettings } from "../../../../../shared/types";
-import { dshUiVisibilityFor } from "../../../../../shared/types/dshRuntime";
-import { dshRuntimeStatusAtom } from "../../../atoms";
 import { t } from "../../../i18n";
 import { desktopApi } from "../../../desktopApi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui-shadcn/select";
@@ -28,10 +25,6 @@ type SelectOption = { value: string; label: string; disabled?: boolean };
  */
 export const CommonTab = memo(function CommonTab(props: CommonTabProps) {
 	const { draft, updateDraft, isDirty } = props;
-	// DSH runtime 安装态：runtime 不可用时 dsh 选项禁选，
-	// 否则用户能选到一个「保存成功但新建会话必失败」的后端。
-	const dshRuntimeStatus = useAtomValue(dshRuntimeStatusAtom);
-	const dshAvailable = dshUiVisibilityFor(dshRuntimeStatus.state).canCreateDshSession;
 	const languageOptions: SelectOption[] = [
 		{ value: "system", label: t("settings.languageSystem") },
 		{ value: "zh-CN", label: t("settings.languageZh") },
@@ -187,32 +180,7 @@ export const CommonTab = memo(function CommonTab(props: CommonTabProps) {
 						</SelectContent>
 					</Select>
 				</SettingRow>
-				<SettingRow
-					anchor="common-default-agent-backend"
-					title={
-						<>
-							<span>{t("settings.defaultAgentBackend")}</span>
-							<DirtyMarker dirty={isDirty("defaultAgentBackend")} label={t("settings.defaultAgentBackend")} />
-						</>
-					}
-					description={t("settings.defaultAgentBackendDesc")}
-					alignEnd={false}
-				>
-					<Select value={draft.defaultAgentBackend} onValueChange={(value) => updateDraft({ defaultAgentBackend: value as AppSettings["defaultAgentBackend"] })}>
-						<SelectTrigger className="w-full">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="pi">{t("settings.defaultAgentBackendPi")}</SelectItem>
-							<SelectItem value="dsh" disabled={!dshAvailable}>
-								{dshAvailable ? t("settings.defaultAgentBackendDsh") : t("settings.defaultAgentBackendDshUnavailable")}
-							</SelectItem>
-						</SelectContent>
-					</Select>
-				</SettingRow>
-				{/* DSH runtime 管理已迁至 DSH 配置 → 概览页（DshRuntimeSection 区块：
-            未装→安装引导，已装→版本/目录/卸载/导入），这里不再重复放状态行。 */}
-				{/* 忙碌时投递行为：Agent 回复期间发送消息的默认语义（pi/dsh 统一）。 */}
+				{/* 忙碌时投递行为：Agent 回复期间发送消息的默认语义（pi）。 */}
 				<SettingRow
 					title={
 						<>

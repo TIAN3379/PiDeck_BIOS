@@ -31,8 +31,6 @@ import { BridgeGuiSingleSlot } from "./components/bridge/BridgeSlot";
 import { guiPageSectionId, useBridgeConfigPages } from "./hooks/useBridgeConfigPages";
 import { type ResourceScope } from "./config/ResourceScopeSelector";
 import { SecuritySection, type SecuritySectionHandle } from "./components/config/SecuritySection";
-import { DshLogo, PiLogo } from "./components/session/SessionSourceBadge";
-import { DshConfigTab, type DshConfigTabHandle } from "./config/DshConfigTab";
 import { t } from "./i18n";
 import { CodeMirrorEditor } from "./components/app/CodeMirrorEditor";
 import { translateBuiltinPromptDescription } from "./composerBehavior";
@@ -48,9 +46,6 @@ import { formatConfigUnsavedMessage, summarizeConfigUnsavedChanges, type ConfigU
 import { DirtyMarker } from "./components/app/settings/SettingRows";
 import { isValidProviderName } from "../../shared/providerName";
 import { mergeProviderDraft, type AddProviderDraft } from "./config/addProviderDraft";
-import { useAtomValue } from "jotai";
-import { dshModuleHiddenAtom, dshRuntimeStatusAtom } from "./atoms";
-import { dshUiVisibilityFor } from "../../shared/types/dshRuntime";
 
 const api: PiDesktopApi = (window as unknown as { piDesktop: PiDesktopApi }).piDesktop;
 
@@ -72,18 +67,6 @@ function sectionTabValue(section: ConfigSection, tab: ConfigTab): string {
 
 /** localStorage 键：Pi 管理页上次打开的 tab（重开弹窗时恢复位置，跨应用重启保留）。 */
 const CONFIG_LAST_TAB_KEY = "pideck-config-last-tab";
-
-/** localStorage 键：配置管理顶层后端分页（Pi/DSH）上次选择（重开弹窗时恢复）。 */
-const CONFIG_BACKEND_PANE_KEY = "pideck-config-backend-pane";
-
-/** 读取上次选定的配置管理后端分页；无记录/值失效时回退 Pi（默认后端，Pi 标签在左）。 */
-function loadLastConfigBackendPane(): "dsh" | "pi" {
-	try {
-		return localStorage.getItem(CONFIG_BACKEND_PANE_KEY) === "dsh" ? "dsh" : "pi";
-	} catch {
-		return "pi";
-	}
-}
 
 /** 全部合法 section / config 组子 tab，用于校验持久化值（避免版本更新后残留旧值导致无高亮）。 */
 const CONFIG_SECTIONS: readonly ConfigSection[] = ["config", "security", "skills", "prompts", "extensions"];
@@ -195,8 +178,6 @@ type ConfigModalProps = {
 	focusConfigTab?: ConfigTab;
 	/** 深链：models 页要定位展开的供应商名。 */
 	focusProvider?: string;
-	/** 深链：打开时落在的后端分页（DSH 配置 / Pi 管理）；缺省保持上次位置。 */
-	focusBackendPane?: "dsh" | "pi";
 };
 
 /**
@@ -239,8 +220,6 @@ export type ConfigPaneProps = {
 	focusConfigTab?: ConfigTab;
 	/** 深链：models 页要定位展开的供应商名。 */
 	focusProvider?: string;
-	/** 深链：打开时落在的后端分页（DSH 配置 / Pi 管理）；缺省保持上次位置。 */
-	focusBackendPane?: "dsh" | "pi";
 	/**
 	 * 头部按钮状态上报（saving 禁用保存 / hasDirty 黄点 / unsaved 关闭确认清单）。
 	 * 外壳把这些 UI 细节呈现在自己的标题栏，因此 ConfigPane 需要把内部状态同步给外壳。
@@ -257,7 +236,7 @@ export type ConfigPaneProps = {
  * 配置管理嵌入分区：供设置窗口内嵌渲染（共享同一窗口/标题栏，不再各自弹 Dialog）。
  * 不包错误边界——宿主 SettingsModal 的 ErrorBoundary 已兜底整个窗口。
  */
-export const ConfigPane = forwardRef<ConfigPaneHandle, ConfigPaneProps>(function ConfigPane({ onClose, onSaved, projectId, projectKind, projectName, projects, resourceOnly, focusConfigTab, focusProvider, focusBackendPane, onStateChange, onRequestClose }, ref) {
+export const ConfigPane = forwardRef<ConfigPaneHandle, ConfigPaneProps>(function ConfigPane({ onClose, onSaved, projectId, projectKind, projectName, projects, resourceOnly, focusConfigTab, focusProvider, onStateChange, onRequestClose }, ref) {
 	return (
 		<ConfigModalContent
 			open
@@ -270,7 +249,6 @@ export const ConfigPane = forwardRef<ConfigPaneHandle, ConfigPaneProps>(function
 			resourceOnly={resourceOnly}
 			focusConfigTab={focusConfigTab}
 			focusProvider={focusProvider}
-			focusBackendPane={focusBackendPane}
 			embedded
 			paneRef={ref}
 			onPaneStateChange={onStateChange}
@@ -363,7 +341,7 @@ type ConfigModalContentProps = ConfigModalProps & {
 };
 
 function ConfigModalContent(props: ConfigModalContentProps) {
-	const { open, onClose, onSaved, projectId, projectKind, projectName, projects = [], resourceOnly = false, embedded, focusConfigTab, focusProvider, focusBackendPane } = props;
+	const { open, onClose, onSaved, projectId, projectKind, projectName, projects = [], resourceOnly = false, embedded, focusConfigTab, focusProvider } = props;
 	/**
 	 * 资源作用域是派生值而非可切换 state：
 	 * - 主配置页固定 global（全局安装 + 用户 ~/.pi 自装 + PiDeck 内置）；项目级技能/扩展/提示词
@@ -392,14 +370,10 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	});
 	// 深链 provider：models 页展开该供应商卡片并滚动高亮（ModelsTab 消费）。
 	const [focusedProvider, setFocusedProvider] = useState<string | undefined>(focusProvider);
-	// 用量探针配置弹窗：由模型/认证/DSH 卡片触发（provider + backend 决定配置落盘位置）。
-	const [usageProbeDialog, setUsageProbeDialog] = useState<{
-		provider: string;
-		backend: "pi" | "dsh";
-	} | null>(null);
-	// 打开弹窗的公共入口：pi 侧（模型/认证）provider 与 DSH route 分开（DSH 走 $DSH_HOME 链路）。
-	const openUsageProbeDialogFor = useCallback((provider: string, backend: "pi" | "dsh") => {
-		setUsageProbeDialog({ provider, backend });
+	// 用量探针配置弹窗：由模型/认证卡片触发。
+	const [usageProbeDialog, setUsageProbeDialog] = useState<{ provider: string } | null>(null);
+	const openUsageProbeDialogFor = useCallback((provider: string) => {
+		setUsageProbeDialog({ provider });
 	}, []);
 	useEffect(() => {
 		if (!open) return;
@@ -417,34 +391,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		}
 		// focusProvider/focusConfigTab 变化即应用：设置窗口已开时点圆球跳转也要生效。
 	}, [open, focusConfigTab, focusProvider, resourceOnly]);
-	/** 配置管理顶层后端分页：以 Pi 为主（默认 Pi，且 Pi 标签在左），dsh 页在右。
-	 *  新建会话默认后端跟随设置项 defaultAgentBackend（默认 pi），与此处配置管理入口相互独立。
-	 *  弹窗每次打开都会重建 state，这里从 localStorage 恢复上次选定的后端分页。 */
-	const [backendPane, setBackendPane] = useState<"dsh" | "pi">(resourceOnly ? "pi" : (focusBackendPane ?? loadLastConfigBackendPane));
-	/**
-	 * 用户隐藏了 DSH 模块（设置 → 外观 → 功能模块）：不渲染 Pi/DSH 分页头，弹窗固定在 Pi 页。
-	 * 深链点名 DSH 页（runtime 提示「去安装」等）时例外：用户是主动要去，此时保留分页头供切回 Pi。
-	 */
-	const dshModuleHidden = useAtomValue(dshModuleHiddenAtom);
-	const dshPaneHidden = dshModuleHidden && focusBackendPane !== "dsh";
-	useEffect(() => {
-		// 上次停在 DSH 页、或弹窗开着时在设置里隐藏了 DSH：回到 Pi 页，避免停在一个没有入口的页面。
-		// 只改本次弹窗的 state，不覆写 localStorage 记忆——恢复显示后仍回到用户上次的选择。
-		if (dshPaneHidden) setBackendPane("pi");
-	}, [dshPaneHidden]);
-	/** 切换后端分页并持久化：退出配置管理再进入时停留在上次选定的后端。 */
-	const selectBackendPane = useCallback((value: string) => {
-		const next = value === "pi" ? "pi" : "dsh";
-		setBackendPane(next);
-		// 用量查询弹窗是 per-provider 的：切换 Pi/DSH 页时关闭，
-		// 避免「从认证页点开、切到模型页后弹窗还挂着」的越界出现（用户反馈的闪现 bug）。
-		setUsageProbeDialog(null);
-		try {
-			localStorage.setItem(CONFIG_BACKEND_PANE_KEY, next);
-		} catch {
-			/* localStorage 不可用（隐私模式等）时静默失败，仅本次会话内不记忆 */
-		}
-	}, []);
 	const [loading, setLoading] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -465,14 +411,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	/** 关闭弹框时存在未保存修改 → 弹出保存确认（借鉴设置页关闭逻辑） */
 	const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
 	const hasDirty = dirtyTabs.size > 0;
-	// DSH/Pi 顶层分页与 DSH 左侧导航的黄点来源：dsh:<nav> 归 DSH，其余归 Pi
-	const dshDirtyNavIds = useMemo(() => {
-		const ids = new Set<string>();
-		for (const key of dirtyTabs) if (key.startsWith("dsh:")) ids.add(key);
-		return ids;
-	}, [dirtyTabs]);
-	const hasDshDirty = dshDirtyNavIds.size > 0;
-	const hasPiDirty = dirtyTabs.size > 0 && !hasDshDirty;
 	/** 关闭确认摘要：列出全部脏 tab（不再只点第一条），供 AlertDialog 逐条展示。 */
 	const configUnsavedSummary = useMemo(() => summarizeConfigUnsavedChanges(dirtyTabs), [dirtyTabs]);
 	const configUnsavedMessage = useMemo(() => formatConfigUnsavedMessage(configUnsavedSummary, t), [configUnsavedSummary]);
@@ -497,20 +435,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		});
 	}, []);
 
-	/** DSH 页脏状态：保留聚合 "dsh" 给保存按钮，同时记下 dsh:<nav> 供侧栏黄点/关闭文案。 */
-	const handleDshDirtyChange = useCallback((dirty: boolean, keys: string[] = []) => {
-		setDirtyTabs((prev) => {
-			const next = new Set([...prev].filter((key) => key !== "dsh" && !key.startsWith("dsh:")));
-			if (dirty) {
-				next.add("dsh");
-				for (const key of keys) {
-					if (key.startsWith("dsh:")) next.add(key);
-				}
-			}
-			dirtyTabsRef.current = next;
-			return next;
-		});
-	}, []);
 	const [configDiagnostic, setConfigDiagnostic] = useState<ConfigFileDiagnostic | null>(null);
 	/* toast 已改用 sonner 实现 */
 
@@ -599,7 +523,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	 * 这里只增删对应的 config:* key，不动其它来源的脏标记。
 	 */
 	useEffect(() => {
-		// 以 ref 为源（markDirty/clearDirty/handleDshDirtyChange 都同步维护它），
+		// 以 ref 为源（markDirty/clearDirty 都同步维护它），
 		// 只增删这 5 个 config:* key，其它来源的脏标记原样保留。
 		const before = new Set(dirtyTabsRef.current);
 		const next = new Set(dirtyTabsRef.current);
@@ -631,13 +555,8 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	const [hiddenModels, setHiddenModels] = useState<string[]>([]);
 	/** 用户隐藏的认证供应商列表（持久化到 AppSettings.hiddenAuthProviders）。 */
 	const [hiddenAuthProviders, setHiddenAuthProviders] = useState<string[]>([]);
-	/**
-	 * 供应商卡片自定义顺序（Pi 页与 DSH 页各存一份，持久化到 AppSettings）。
-	 * 与 hiddenProviders 同类：属于 UI 展示偏好，不写进 models.json / DSH 配置，
-	 * 因此无需担心被外部改写 pi 配置的工具覆盖。
-	 */
+	/** 供应商卡片自定义顺序（UI 展示偏好，不写进 models.json）。 */
 	const [providerOrder, setProviderOrder] = useState<string[]>([]);
-	const [dshProviderOrder, setDshProviderOrder] = useState<string[]>([]);
 	/** 切换供应商隐藏状态：本地立即生效 + 持久化到 AppSettings（不影响 models.json 配置本身）。 */
 	const handleToggleHiddenProvider = useCallback((name: string) => {
 		setHiddenProviders((prev) => {
@@ -672,20 +591,10 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		setProviderOrder(next);
 		void api.settings.update({ providerOrder: next }).catch(() => undefined);
 	}, []);
-	/** DSH 模型页的供应商卡片重排（与 Pi 页分开存，两页的供应商集合不同）。 */
-	const handleReorderDshProviders = useCallback((next: string[]) => {
-		setDshProviderOrder(next);
-		void api.settings.update({ dshProviderOrder: next }).catch(() => undefined);
-	}, []);
 	/** 恢复默认顺序：清空自定义顺序（空数组）——两页与模型选择器立即回到配置本身的顺序。 */
 	const handleResetProviderOrder = useCallback(() => {
 		setProviderOrder([]);
 		void api.settings.update({ providerOrder: [] }).catch(() => undefined);
-	}, []);
-	/** DSH 页的「恢复默认顺序」（与 Pi 页分开清，避免改一页把另一页也重置）。 */
-	const handleResetDshProviderOrder = useCallback(() => {
-		setDshProviderOrder([]);
-		void api.settings.update({ dshProviderOrder: [] }).catch(() => undefined);
 	}, []);
 	/**
 	 * 「模型」与「认证」页共享的排序作用域：两页的供应商集合可能不同（models.json 与 auth.json
@@ -704,7 +613,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 					setHiddenModels(settings.hiddenModels ?? []);
 					setHiddenAuthProviders(settings.hiddenAuthProviders ?? []);
 					setProviderOrder(settings.providerOrder ?? []);
-					setDshProviderOrder(settings.dshProviderOrder ?? []);
 				}
 			})
 			.catch(() => undefined);
@@ -1064,15 +972,12 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 
 	// ── Models 操作 ──────────────────────────────────────
 
-	/** TokenDance 一键安装成功：刷新 Pi 模型数据 + DSH 配置页（主进程已直写两侧配置文件）。 */
+	/** TokenDance 一键安装成功：刷新 Pi 模型数据。 */
 	const handleTokendanceInstalled = useCallback(
 		(outcome: TokendanceInstallOutcome) => {
 			// 主进程已直接落盘 models.json：以磁盘为准整页重载（force 清空草稿保留集——
-			// 安装是明确的落盘动作，与保存/导入同语义）；DSH 侧若写入成功同步刷新配置页。
+			// 安装是明确的落盘动作，与保存/导入同语义）。
 			void loadConfig("models", { force: true }).catch(() => undefined);
-			if (outcome.dshSaved) {
-				void dshConfigRef.current?.reload().catch(() => undefined);
-			}
 		},
 		[loadConfig],
 	);
@@ -2281,13 +2186,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 
 	/** 安全管理面板句柄（顶部统一保存按钮经 saveByKey 调用其 save） */
 	const securitySectionRef = useRef<SecuritySectionHandle>(null);
-	/** DSH 配置页句柄（顶部统一保存按钮经 saveByKey 调用其 save）。 */
-	const dshConfigRef = useRef<DshConfigTabHandle>(null);
-
-	// DSH runtime 安装态门控：runtime 不可用时整 Tab 换成安装引导（含下载与手动导入），
-	// 不渲染任何 dsh 配置表单（表单此时项项都会失败）。
-	const dshRuntimeStatus = useAtomValue(dshRuntimeStatusAtom);
-	const dshUi = dshUiVisibilityFor(dshRuntimeStatus.state);
 
 	/** 安全管理草稿脏状态上报：有修改 markDirty("security")，保存成功/卸载清标记。 */
 	const handleSecurityDirtyChange = useCallback(
@@ -2309,16 +2207,6 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	/** 按 tab 编码分发到对应保存 handler；返回是否保存成功（false = 保存失败，由错误提示区展示原因）。 */
 	const saveByKey = async (tabKey: string): Promise<boolean> => {
 		switch (tabKey) {
-			case "dsh": {
-				// runtime 不可用时整页是安装引导，没有任何可保存草稿：直接视为保存通过，
-				// 否则统一保存按钮会因为拿不到 DshConfigTab 句柄而一直报「保存失败」。
-				if (!dshUi.showDshConfigForms) return true;
-				// DSH 页保存成功后显式清未保存标记：子分区草稿已清空并上报 false，
-				// 但卸载/收起的分区可能残留脏来源，这里兜底保证黄点消失。
-				const ok = (await dshConfigRef.current?.save()) ?? false;
-				if (ok) clearDirty("dsh");
-				return ok;
-			}
 			case "config:models":
 				// 新增/编辑页把字段保存在页内 state，先提交完整草稿；
 				// 提交回调会回写 modelsData 并回到列表，不能在同一次调用里读取尚未刷新的父级 state。
@@ -2364,8 +2252,8 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		}
 	};
 
-	/** 当前后端分页下的 tab 编码（DSH 页固定 "dsh"，Pi 页按 section:tab）。 */
-	const currentTabKey = backendPane === "dsh" ? "dsh" : sectionTabValue(section, tab);
+	/** 当前配置页的 tab 编码。 */
+	const currentTabKey = sectionTabValue(section, tab);
 
 	/**
 	 * 顶部统一保存按钮：模型页的新增/编辑供应商是一个页内子页面，
@@ -2376,7 +2264,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 		if (saving) return;
 		// 新增/编辑页的第一次点击只把页内草稿提交到 modelsData；
 		// React state 更新后下一轮 effect 会自动继续落盘，用户无需再点一次保存。
-		if (backendPane === "pi" && section === "config" && tab === "models" && (addingProvider || editingProvider)) {
+		if (section === "config" && tab === "models" && (addingProvider || editingProvider)) {
 			providerPageSavePendingRef.current = true;
 			providerPageSaveRef.current?.();
 			return;
@@ -2404,13 +2292,11 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 			saveCurrent: () => handleSaveCurrent(),
 			exportConfig: handleExport,
 			importConfig: handleImport,
-			// 外壳统一关闭确认时调用：把配置分区全部脏来源逐个保存（dsh:<nav> 归并 dsh），
+			// 外壳统一关闭确认时调用：把配置分区全部脏来源逐个保存，
 			// 与独立 ConfigModal「保存并关闭」走同一套 saveByKey 分发，任一失败返回 false 留在窗口。
 			saveAllDirty: async () => {
 				const roots = new Set<string>();
-				for (const key of dirtyTabs) {
-					roots.add(key.startsWith("dsh:") ? "dsh" : key);
-				}
+				for (const key of dirtyTabs) roots.add(key);
 				for (const key of orderDirtyKeysForSave(roots)) {
 					const ok = await saveByKey(key);
 					if (!ok) return false;
@@ -2444,14 +2330,12 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 
 	/**
 	 * 关闭确认框选择保存并关闭：汇总**全部**脏来源逐个保存（不是只存当前 tab），
-	 * dsh:<nav> 归并到 dsh 一个保存入口；任一保存失败则留下重试（错误已展示在内容区）。
+	 * 任一保存失败则留下重试（错误已展示在内容区）。
 	 * 顺序由 orderDirtyKeysForSave 保证 settings 最后（它的重载会连带刷新 models/auth/raw）。
 	 */
 	const handleSaveAndClose = async () => {
 		const roots = new Set<string>();
-		for (const key of dirtyTabs) {
-			roots.add(key.startsWith("dsh:") ? "dsh" : key);
-		}
+		for (const key of dirtyTabs) roots.add(key);
 		for (const key of orderDirtyKeysForSave(roots)) {
 			const ok = await saveByKey(key);
 			if (!ok) return;
@@ -2493,37 +2377,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 	// 唯一的差别是外壳（Dialog/标题栏按钮）由谁提供——embedded 时宿主 SettingsModal 承担。
 	const modalBody = (
 		<>
-			{/* 顶层后端分页：Pi 配置管理（默认，在左）/ DSH 配置管理（在右） */}
-			<Tabs value={backendPane} onValueChange={selectBackendPane} className="flex min-h-0 min-w-0 flex-1 flex-col">
-				{!resourceOnly && !dshPaneHidden && (
-					<TabsList
-						// 嵌入设置窗口时 Pi/DSH 用 shadcn line variant（下划线式）：与顶层「系统设置/配置管理」
-						// 的分段条（default variant）区分层级——上层页面级、下层内容级，避免两条同款 tab 冲突。
-						variant={embedded ? "line" : "default"}
-						className={cn("shrink-0", embedded ? "justify-start gap-1 px-3" : "config-backend-switch h-9 justify-start gap-1 border-b border-border/60 px-3")}
-					>
-						<TabsTrigger variant={embedded ? "line" : "default"} value="pi" className={cn("h-8 gap-1.5 px-3 text-[13px] font-medium", !embedded && "config-backend-tab")}>
-							<PiLogo className="size-3.5 shrink-0" />
-							{t("config.backend.pi")}
-							{hasPiDirty ? <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" /> : null}
-						</TabsTrigger>
-						<TabsTrigger variant={embedded ? "line" : "default"} value="dsh" className={cn("h-8 gap-1.5 px-3 text-[13px] font-medium", !embedded && "config-backend-tab")}>
-							<DshLogo className="size-3.5 shrink-0" />
-							{t("config.backend.dsh")}
-							{/* 后端分页黄点：该后端任意分区有草稿时提醒 */}
-							{hasDshDirty ? <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" /> : null}
-						</TabsTrigger>
-					</TabsList>
-				)}
-				{/* forceMount + inactive hidden：Pi/DSH 两个后端页都保持挂载，切换后端不会丢草稿；
-				    与 config:mcp 同款做法，inactive 必须 hidden 避免叠在另一页上。 */}
-				<TabsContent value="dsh" forceMount className="flex min-h-0 min-w-0 flex-1 data-[state=inactive]:hidden">
-					{/* runtime 安装态不再整页替换：概览页内嵌 DshRuntimeSection 状态自适应区块，
-					    未装→安装引导，已装→版本/目录/卸载/导入，一个页面操作完。 */}
-					{dshRuntimeStatus.state !== "checking" ? (
-						<DshConfigTab ref={dshConfigRef} onDirtyChange={handleDshDirtyChange} dirtyNavIds={dshDirtyNavIds} onOpenUsageProbeDialog={(provider) => openUsageProbeDialogFor(provider, "dsh")} providerOrder={dshProviderOrder} onReorderProviders={handleReorderDshProviders} onResetProviders={handleResetDshProviderOrder} />
-					) : null}
-				</TabsContent>
+			<Tabs value="pi" className="flex min-h-0 min-w-0 flex-1 flex-col">
 				<TabsContent value="pi" forceMount className="flex min-h-0 min-w-0 flex-1 data-[state=inactive]:hidden">
 					{/* 默认浅色主题整页同底（bg-background），避免顶栏白 / 下方多层灰的割裂感。
 			  左侧导航 = shadcn Vertical Tabs：TabsList 竖排（orientation=vertical），
@@ -2558,7 +2412,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 										<TabsTrigger key={item.id} value={`config:${item.id}`} className="config-nav-btn h-8 justify-start gap-1.5 px-2.5 text-control font-medium">
 											<span className="config-nav-icon">{item.icon}</span>
 											{item.label}
-											{/* 未保存黄点：与 DSH 导航同款 */}
+											{/* 未保存黄点：与设置页导航同款 */}
 											{dirtyTabs.has(`config:${item.id}`) || dirtyTabs.has(item.id) ? <span className="ml-auto size-1.5 rounded-full bg-amber-500" aria-hidden="true" /> : null}
 										</TabsTrigger>
 									))}
@@ -2622,13 +2476,13 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 								{configDiagnosticBlock}
 								{!loading && (
 									<>
-										{/* TokenDance：确认后一键写入配置（pi models.json + DSH 模型目录），不内置注入 */}
+										{/* TokenDance：确认后一键写入 Pi 配置，不内置注入 */}
 										<TokenDancePanel configured={!!modelsData.providers[TOKENDANCE_PROVIDER]} onInstalled={handleTokendanceInstalled} />
 										<ModelsTab
 											data={modelsData}
 											expandedProvider={expandedProvider}
 											focusProvider={focusedProvider}
-											onOpenUsageProbeDialog={(provider) => openUsageProbeDialogFor(provider, "pi")}
+											onOpenUsageProbeDialog={openUsageProbeDialogFor}
 											addingProvider={addingProvider}
 											providerPageSaveRef={providerPageSaveRef}
 											hiddenProviders={hiddenProviders}
@@ -2741,7 +2595,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 										onDeleteAuth={handleDeleteAuth}
 										onUpdate={handleUpdateAuth}
 										onSave={handleSaveAuth}
-										onOpenUsageProbeDialog={(provider) => openUsageProbeDialogFor(provider, "pi")}
+										onOpenUsageProbeDialog={openUsageProbeDialogFor}
 									/>
 								)}
 							</div>
@@ -2970,14 +2824,13 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 				</TabsContent>
 			</Tabs>
 
-			{/* 用量查询配置弹窗：模型/认证/DSH 共用入口；provider + backend 决定配置落盘位置。
+			{/* 用量查询配置弹窗：模型/认证共用入口。
 			    必须放在所有 Tabs 之外：Radix Tabs 默认卸载非激活内容，若放回 config:models
-			    TabsContent 内，切到认证 tab / DSH 页时弹窗组件会随卸载消失（点击无反应的 bug）。 */}
+			    TabsContent 内，切到认证 tab 时弹窗组件会随卸载消失（点击无反应的 bug）。 */}
 			<UsageProbeConfigDialog
 				open={usageProbeDialog != null}
 				onClose={() => setUsageProbeDialog(null)}
 				provider={usageProbeDialog?.provider ?? ""}
-				backend={usageProbeDialog?.backend}
 				// 「让 AI 帮我查」写入输入框后关宿主窗口：内嵌分区优先走宿主设置窗口的
 				// 统一关闭确认（含系统设置草稿），独立弹窗退回自身的未保存确认流程。
 				onCloseHost={props.onRequestHostClose ?? handleClose}
@@ -3070,7 +2923,7 @@ function ConfigModalContent(props: ConfigModalContentProps) {
 							{hasDirty && <span className="size-2 rounded-full bg-amber-400" aria-hidden="true" />}
 							{saving ? t("common.saving") : t("common.save")}
 						</Button>
-						{backendPane === "pi" && section === "config" ? (
+						{section === "config" ? (
 							<>
 								<Button variant="outline" size="sm" onClick={handleExport}>
 									{t("common.export")}

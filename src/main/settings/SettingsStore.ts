@@ -141,7 +141,6 @@ Gitmoji 对应关系：
 	gitCommitMessageModel: "",
 	// 空串 = 自动解析（PATH 中的 git → 各平台已知安装位置）；用户可在 Git 设置页显式指定。
 	gitExecutablePath: "",
-	dshRunnerNodePath: "",
 	closeToTray: true,
 	// 默认单实例：托盘隐藏后再次点击快捷方式会唤起原窗口，而不是再开一个进程
 	singleInstance: true,
@@ -219,7 +218,6 @@ Gitmoji 对应关系：
 	hiddenModules: [],
 	// 供应商卡片自定义顺序：空数组 = 未自定义，按配置原序展示
 	providerOrder: [],
-	dshProviderOrder: [],
 
 	// ── 扩展管理 ──
 	/** 用户手动移除的内置扩展，启动时跳过自动部署 */
@@ -249,15 +247,8 @@ Gitmoji 对应关系：
 	// 自定义镜像前缀（保留向下兼容字段），空串 = 未填
 	customUpdateSourceUrl: "",
 
-	// ── Agent 后端：默认 pi（经典后端），用户可在设置中切换为 dsh ──
+	// ── Agent 后端：BIOS Agent 仅使用 pi ──
 	defaultAgentBackend: "pi",
-
-	// ── DSH 外部会话：默认启动时只读扫磁盘入侧栏（不 boot host）──
-	dshAutoImportSessions: true,
-
-	// ── DSH host 手动停止：默认 false（按需自动启动）；用户在配置页停止后持久化，
-	// 跨重启不再自动 fork（不想用 DSH 的用户不用反复停）──
-	dshManualStopped: false,
 
 	// ── Agent 启动诊断/加速：offline 默认关（保证 pi 启动时模型目录走网络刷新，
 	// 用户新增/更新的模型能实时出现在模型列表）；扩展/技能默认加载 ──
@@ -401,12 +392,6 @@ export class SettingsStore {
 			// git 可执行文件路径来自旧 JSON 时可能是脏值（非字符串）；回落空串（自动解析），
 			// 避免 spawn 拿到非字符串路径把整个 Git 面板打挂。
 			this.settings.gitExecutablePath = typeof parsed.gitExecutablePath === "string" ? parsed.gitExecutablePath.trim() : "";
-			this.settings.dshRunnerNodePath = typeof parsed.dshRunnerNodePath === "string" ? parsed.dshRunnerNodePath.trim() : "";
-			// DSH 手动停止标记来自旧 JSON 时可能是脏值（字符串等）；非布尔一律回落 false，
-			// 否则一个 "true" 字符串会让 host 永远起不来，且 UI 开关状态不可信。
-			if (typeof this.settings.dshManualStopped !== "boolean") {
-				this.settings.dshManualStopped = false;
-			}
 			// 快捷键覆盖来自旧 settings.json 时可能是脏值（未知 id / 非法 accelerator）；
 			// 统一清洗，坏条目回落平台默认，避免主进程匹配读到无效键。
 			this.settings.shortcuts = sanitizeShortcutOverrides(parsed.shortcuts, process.platform);
@@ -588,7 +573,7 @@ export class SettingsStore {
 		// 供应商卡片顺序来自渲染层拖拽/上移下移结果，入参不可信：只接受字符串数组，
 		// 去重、去空、按上限截断。内容无变化时从 patch 中剔除——拖拽落在原位置、
 		// 或上移下移撞到列表边界时都会产生「和当前顺序一致的数组」，没必要写盘与刷审计。
-		for (const orderKey of ["providerOrder", "dshProviderOrder"] as const) {
+		for (const orderKey of ["providerOrder"] as const) {
 			if (!(orderKey in safePatch)) continue;
 			const candidate = safePatch[orderKey];
 			const cleaned: string[] = [];
@@ -638,11 +623,6 @@ export class SettingsStore {
 		if ("idleAgentTimeoutMin" in safePatch) {
 			const n = Math.floor(Number(safePatch.idleAgentTimeoutMin));
 			safePatch.idleAgentTimeoutMin = Number.isFinite(n) ? Math.min(24 * 60, Math.max(1, n)) : 60;
-		}
-		// DSH 手动停止标记来自渲染层，入参不可信：只接受布尔值，非法值不落盘，
-		// 避免脏值把 host 永久锁死在「已停止」态。
-		if ("dshManualStopped" in safePatch && typeof safePatch.dshManualStopped !== "boolean") {
-			delete safePatch.dshManualStopped;
 		}
 		this.settings = { ...this.settings, ...safePatch };
 		// 生图字段来自渲染层，非法值丢掉，避免下次请求带坏 size/watermark。

@@ -119,19 +119,6 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 	const controller = props.controller;
 	// DSH host 被用户手动停止：历史暂时读不了（main 侧降级成带原因的空页）。
 	// 与普通读盘失败分开渲染——DSH 会话没有 pi 会话文件，重试也永远不会自愈。
-	const dshHostStopped = messageLoadState?.status === "error" && messageLoadState.reason === "dsh-host-stopped";
-	const [startingDshHost, setStartingDshHost] = useState(false);
-	/** 专态主按钮：显式启动 host（唯一能解开手动停止标记的路径）+ 重载本会话历史。 */
-	const startDshHostAndRetry = useCallback(async () => {
-		if (startingDshHost) return;
-		setStartingDshHost(true);
-		try {
-			// 启动失败（host boot 报错）保留专态并提示；成功路径由控制器重载历史
-			if (!(await controller.startDshHostAndReload())) showNotice(t("config.dsh.hostStartFailed"), 6000);
-		} finally {
-			setStartingDshHost(false);
-		}
-	}, [controller, startingDshHost]);
 	const timelineRef = props.timelineRef ?? controller.timelineRef;
 	const activeMessages = controller.messages;
 	const paginatedMessages = controller.visibleMessages;
@@ -152,7 +139,7 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 		// 读取结果未到达 → 钉骨架屏；有条目（即使空）＝读取已返回，空会话起始页合法。
 		// 不依赖 catalog messageCount（摘要缺失时兑底为 0，不可靠）。
 		Boolean(surfaceCachedEntry),
-		// 用 controller 的 sticky：预热回写 filePath/dshSessionId 后仍不闪历史骨架。
+		// 用 controller 的 sticky：预热回写 filePath 后仍不闪历史骨架。
 		controller.knownEmpty,
 	);
 	const isConversationLoading = modernSurfaceState.isLoading;
@@ -859,10 +846,8 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 			)}
 
 			{/* 读盘失败终态：文件被删/路径失效/解析异常时不能无限滞留骨架，
-          也不裸显示起始页误导——明确错误文案 + 重试（2026-08 生图会话文件缺失）。
-          DSH host 被手动停止走下面的专态分支：DSH 会话没有 pi 会话文件，说成
-          「文件可能已被删除」会把用户引向错误方向，而且重试永远无效。 */}
-			{messageLoadState?.status === "error" && activeMessages.length === 0 && !dshHostStopped && (
+          也不裸显示起始页误导——明确错误文案 + 重试（2026-08 生图会话文件缺失）。 */}
+			{messageLoadState?.status === "error" && activeMessages.length === 0 && (
 				<div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
 					<p className="text-sm font-medium">{t("timeline.loadFailed")}</p>
 					<p className="max-w-[560px] text-xs text-muted-foreground" title={messageLoadState.error ?? ""}>
@@ -871,25 +856,6 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 					<Button type="button" variant="outline" size="sm" onClick={() => void controller.reloadFromDisk()}>
 						{t("common.retry")}
 					</Button>
-				</div>
-			)}
-
-			{/* DSH 手动停止专态：不是故障而是用户自己的选择（预热/按需兜底/崩溃重启全被
-			    门控，不会自愈），所以主操作是「启动 host」而非只给重试；启动成功后
-			    控制器自动重载历史，用户无感回到会话内容。 */}
-			{messageLoadState?.status === "error" && activeMessages.length === 0 && dshHostStopped && (
-				<div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-					<p className="text-sm font-medium">{t("timeline.dshHostStopped")}</p>
-					<p className="max-w-[560px] text-xs text-muted-foreground">{t("timeline.dshHostStoppedHint")}</p>
-					<div className="flex items-center gap-2">
-						<Button type="button" size="sm" className="gap-1.5" disabled={startingDshHost} onClick={() => void startDshHostAndRetry()}>
-							{startingDshHost ? <LoaderCircle className="size-3.5 animate-pideck-spin" aria-hidden="true" /> : <Power className="size-3.5" aria-hidden="true" />}
-							{t("timeline.dshHostStoppedStart")}
-						</Button>
-						<Button type="button" variant="outline" size="sm" onClick={() => void controller.reloadFromDisk()}>
-							{t("common.retry")}
-						</Button>
-					</div>
 				</div>
 			)}
 
@@ -916,7 +882,7 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 									key={item.id}
 									run={item}
 									sessionId={sessionId}
-									// 行头署名与后端一致：DSH 会话的回复标 dsh，而非 pi
+									// 行头署名与后端一致：生图会话的回复标 imagegen，而非 pi
 									backend={session?.backend ?? "pi"}
 									fresh={freshMessageIds.has(item.id)}
 									topFresh={topFreshIds.has(item.id)}
@@ -985,7 +951,7 @@ export function SessionMessageTimeline(props: SessionMessageTimelineProps) {
 							if (meta?.type === "customMessage") {
 								return shouldRenderNotifyCard(message) ? <NotifyMessageCard key={message.id} message={message} /> : null;
 							}
-							// 压缩摘要卡片已按产品决策下线（与 dsh 后端行为对齐）：
+							// 压缩摘要卡片已按产品决策下线：
 							// 压缩进行态由 RespondingIndicator「正在压缩」承担，压缩完成后
 							// 时间线直接呈现保留消息。pi 投影出的 compaction system 消息
 							// 仍会进入时间线数据（主进程继续维护），这里仅不渲染。

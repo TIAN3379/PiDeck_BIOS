@@ -174,9 +174,8 @@ export const SessionRuntimeInjector = React.memo(function SessionRuntimeInjector
 	// fork 对 pi/DSH 都始终提供入口：DSH 未激活时由 forkFromUserMessage 内部
 	// 先 activateRuntime 再 fork，不再用 canMutateActiveMessages 门控——否则打开
 	// 历史 DSH 会话（runtime 懒启动）时 fork 入口时有时无。
-	const isDshBackend = sessionRecord?.backend === "dsh" || activeAgent?.backend === "dsh";
-	const canEditOrDeleteMessages = !isDshBackend;
-	const canResend = !isDshBackend;
+	const canEditOrDeleteMessages = true;
+	const canResend = true;
 
 	// ── 回退到此消息：解析最近检查点 + 确认回退（仅 pi 后端注入入口）──
 	const [rewindConfirm, setRewindConfirm] = React.useState<RewindCheckpointSummary | null>(null);
@@ -260,7 +259,7 @@ export const SessionRuntimeInjector = React.memo(function SessionRuntimeInjector
 					onEditMessage={canEditOrDeleteMessages ? services.editMessage : undefined}
 					onDeleteMessage={canEditOrDeleteMessages ? services.deleteMessage : undefined}
 					onForkMessage={services.forkFromUserMessage}
-					onRewindToMessage={isDshBackend ? undefined : handleRewindToMessage}
+					onRewindToMessage={handleRewindToMessage}
 					forkingMessageId={services.forkingMessageId}
 					onToast={(message: string) => services.showToast(message)}
 					onQuickPrompt={(message) => services.insertQuickPrompt(currentSessionId, message)}

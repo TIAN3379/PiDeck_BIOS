@@ -2,7 +2,7 @@ import { touchRecentSessionAtom, forgetRecentSessionAtom } from "./recent-sessio
 import { atom } from "jotai";
 import type { Getter, Setter } from "jotai";
 import { atomFamily, selectAtom } from "jotai/utils";
-import type { AgentBackend, AgentRuntimeState, AgentStatus, AgentUiBatchQuestion, AgentUiRequest, ChatMessage, SessionHistoryUnavailableReason, SessionMessagePage, SessionRecord, SessionRuntimeEvent, SessionRuntimeInfo } from "../../../shared/types";
+import type { AgentBackend, AgentRuntimeState, AgentStatus, AgentUiBatchQuestion, AgentUiRequest, ChatMessage, SessionMessagePage, SessionRecord, SessionRuntimeEvent, SessionRuntimeInfo } from "../../../shared/types";
 import { mergeAgentRuntimeState } from "../utils/agentRuntimeState";
 import { findLastUserMessageIndex, shouldRefreshOutlineForRuntimeUpsert } from "./outlineRevision";
 import { releaseSessionOutlineProjection } from "./outlineProjectionCache";
@@ -70,11 +70,6 @@ export type StreamingThinkingEntry = {
 export type SessionLoadState = {
 	status: "idle" | "loading" | "ready" | "error";
 	error?: string;
-	/**
-	 * 结构化不可用原因（与 status:"error" 配合）：区分「读盘真的失败」与
-	 * 「历史暂时读不了但用户可恢复」。当前只有 DSH host 被手动停止一种。
-	 */
-	reason?: SessionHistoryUnavailableReason;
 };
 
 export type SessionMessageCacheEntry = {
@@ -1297,7 +1292,7 @@ export const applySessionRuntimeEventAtom = atom(null, (get, set, event: Session
 				createdAt: typeof payload.createdAt === "number" ? payload.createdAt : nextRuntime.createdAt,
 				compactionCount: typeof payload.compactionCount === "number" ? payload.compactionCount : nextRuntime.compactionCount,
 				noSession: payload.noSession === true || nextRuntime.noSession,
-				backend: payload.backend === "dsh" ? "dsh" : (nextRuntime.backend ?? "pi"),
+				backend: payload.backend === "imagegen" ? "imagegen" : (nextRuntime.backend ?? "pi"),
 			};
 		}
 	} else if (event.sourceChannel === "agents:runtime-state" && payload?.state) {

@@ -218,8 +218,6 @@ import type {
 import { msUntilNextThemeBoundary, resolveAppColorScheme } from "../shared/themeSchedule";
 import { ProjectStore } from "./projects/ProjectStore";
 import { runUserDataNameMigration, recordUserDataNameMigrationNotice, type UserDataNameMigration } from "./projects/userDataNameMigration";
-import { shouldAutoRegisterForeignCwd } from "./projects/projectPathPolicy";
-import { defaultPathCheck } from "./projects/projectPresence";
 import { FileSystemService } from "./fs/FileSystemService";
 import { AgentManager } from "./pi/AgentManager";
 import { PiProcess } from "./pi/PiProcess";
@@ -228,18 +226,7 @@ import { PiModelCapabilityCache, watchPiConfigDirectory } from "./pi/PiModelCapa
 // 生图消息不走 Agent 消息流，改名前需判断标题是否仍是占位名
 import { isDefaultAgentTitle } from "./pi/agentUtils";
 import { CompositeAgentGateway } from "./agents/CompositeAgentGateway";
-import { DshHost, resolveDshHomeDir } from "./dsh/DshHost";
-import { DshRuntimeStatusService } from "./dsh/runtime/DshRuntimeStatus";
-import { DshRuntimeManager, DSH_BUNDLED_RUNTIME_DIRNAME, readBundledRuntime, readDeclaredDshVersion } from "./dsh/runtime/DshRuntimeManager";
-import { DshRuntimeInstaller } from "./dsh/runtime/DshRuntimeInstaller";
-import { resolveDshRuntimeReleaseTag } from "./dsh/runtime/dshRuntimeReleaseTarget";
-import { resolveDshRuntimeIndexUrl } from "../shared/types/dshRuntimeManifest";
-import { autoUpdateDshRuntimeIfOutdated } from "./dsh/runtime/dshRuntimeAutoUpdate";
-import { createNetDownloader, createTarExtractor, fetchDshRuntimeIndex } from "./dsh/runtime/dshRuntimeIo";
-import { credentialValueFromDocument } from "./dsh/dshCredentials";
-import { DshAgentManager } from "./dsh/DshAgentManager";
-import { startDshHostInBackground } from "./dsh/startDshHostInBackground";
-import { importForeignSession, knownForeignSessionIds, syncForeignSessions, type DshForeignSyncDeps } from "./dsh/dshForeignSync";
+import { createNetDownloader, createTarExtractor } from "./runtime/archiveIo";
 import { PiLocator } from "./pi/PiLocator";
 import { PiAuthService } from "./pi/auth/PiAuthService";
 import { resolvePiAuthHostLaunch } from "./pi/auth/piAuthHostLaunch";
@@ -249,7 +236,7 @@ import { resolveLaunchDefaultOptions, isModelInModelsConfig } from "./sessions/l
 import { createSessionModelPreference } from "../shared/modelDisplayName";
 import { modelThinkingLevelOf } from "../shared/modelThinkingLevels";
 import { SessionCatalog, canAttachRuntimeMetadata } from "./sessions/SessionCatalog";
-import { aggregateDshProxyMode, buildHostProxyEnvPatch, resolveDshHostProxyMode, resolveEffectiveSessionProxyMode } from "./sessions/sessionProxyPolicy";
+import { resolveEffectiveSessionProxyMode } from "./sessions/sessionProxyPolicy";
 import { SessionRuntimeCoordinator, type SessionRuntimeBinding } from "./sessions/SessionRuntimeCoordinator";
 import { IdleAgentReleaser } from "./sessions/IdleAgentReleaser";
 import { SessionCommandIpcError } from "./sessions/SessionCommandIpcError";
@@ -401,16 +388,7 @@ let piLocator: PiLocator;
 let agentManager: AgentManager;
 /** 全局模型 capability snapshot；仅在启动/配置变更时临时拉起 Pi。 */
 let piModelCapabilityCache: PiModelCapabilityCache | undefined;
-/** DSH 深融合宿主与后端网关；窗口创建后后台预热，发送链路仍可按需兜底。 */
-let dshHost: DshHost;
-/** DSH runtime 安装态服务（AgentRuntimeProvider 阶段 1）：installed 门控 UI/新建会话。 */
-let dshRuntimeStatus: DshRuntimeStatusService;
-/** DSH runtime 生命周期管理（阶段 2）：外部 runtime 的扫描/下载/安装/回收。 */
-let dshRuntimeManager: DshRuntimeManager;
-/** DSH runtime 安装编排（阶段 2）：索引选版本 + 进度广播。 */
-let dshRuntimeInstaller: DshRuntimeInstaller;
-let dshAgentManager: DshAgentManager;
-/** 多后端合成网关（pi + dsh + 未来后端）；启动装配后赋值，供发送链路按 agentId 路由。 */
+/** Agent 网关；启动装配后赋值。 */
 let compositeAgentGateway: CompositeAgentGateway | undefined;
 let configManager: ConfigManager;
 let configBackupManager: ConfigBackupManager | undefined;
@@ -474,50 +452,6 @@ const handleWindowZoomShortcut = createWindowZoomShortcutHandler({
 	},
 });
 
-// ── DSH 外部会话同步（dshForeignSync 编排；本文件只做依赖装配）────────────
-// 清单来自磁盘只读扫描（不启动 host）；目标项目按会话自己的 cwd 建/挂，无 cwd 才兑底。
-// 标题优先官方 session_projcache；cwd 末段只作占位，下次扫描有投影名会覆盖。
-// 依赖闭包延迟引用模块级实例（registerIpc/whenReady 阶段才赋值），调用时已就绪。
-const foreignSyncDeps: DshForeignSyncDeps = {
-	listForeignSessions: () => dshHost.listForeignSessions(),
-	findProjectByPath: (cwd) => projectStore.findByPath(cwd),
-	// 会话自带工作目录但侧栏还没有该项目：按该目录注册，打开会话时 cwd 才对得上。
-	// 已删记录 / e2e 临时目录 / 磁盘不存在：拒绝注册，避免「删了重启又回来」。
-	shouldRegisterCwd: async (cwd) =>
-		shouldAutoRegisterForeignCwd(cwd, {
-			dismissedPaths: projectStore.listDismissedPaths(),
-			pathExists: await defaultPathCheck(cwd),
-		}),
-	ensureProjectForCwd: (cwd) => projectStore.add(cwd, undefined, settingsStore.get().wslEnabled ? "wsl" : "windows"),
-	ensureFallbackProject: () => projectStore.ensureExternalSessionsProject(mainCopy("project.externalSessions")),
-	createDraft: (input) => sessionCatalog.createDraft(input),
-	// 纠正归属时看现有标题是不是 cwd 兑底占位；有官方投影名时必须覆盖。
-	getExistingDraft: (dshSessionId) => {
-		const existing = sessionCatalog.listEntries().find((entry) => entry.dshSessionId === dshSessionId);
-		return existing ? { title: existing.title } : undefined;
-	},
-	getEnvironment: () => (settingsStore.get().wslEnabled ? "wsl" : "native"),
-	// 惰性：此对象在模块顶层创建，此时 settingsStore 尚未赋值，eager mainCopy 会崩。
-	fallbackTitle: () => mainCopy("session.dshUntitled"),
-	onError: (dshSessionId, error) => {
-		void appLogger.warn("session", "Foreign DSH session import failed", {
-			dshSessionId,
-			error: error instanceof Error ? error.message : String(error),
-		});
-	},
-	// 用户删过的 DSH 会话：host 目录可能还在，自动同步不得再导入。
-	dismissedDshSessionIds: () => sessionCatalog.listDismissedDshSessionIds(),
-};
-
-/** 导入/同步落库后向渲染层广播对应项目刷新（侧栏静默重拉，新会话立即可见）。 */
-function notifyDshCatalogRefreshed(projectIds: Iterable<string>): void {
-	const window = mainWindow;
-	if (!window || window.isDestroyed()) return;
-	for (const projectId of new Set(projectIds)) {
-		window.webContents.send(ipcChannels.sessionsCatalogRefreshed, { projectId });
-	}
-}
-
 /** 按当前设置过滤可见项目并推给渲染层（启动 load / 自动导入兑底项目后共用）。 */
 function broadcastVisibleProjects(): void {
 	const window = mainWindow;
@@ -527,43 +461,6 @@ function broadcastVisibleProjects(): void {
 	// 这里只广播 store 清单；渲染层接到事件后会再调用 projects:list 附加实时 presence。
 	// 直接把未检测版本写进 atom 会短暂抹掉 missing 标记，使失效目录看起来又恢复正常。
 	window.webContents.send(ipcChannels.projectsChanged, visible);
-}
-
-/**
- * 启动自动导入：catalog + projects 都已就绪后扫磁盘，把外部根会话写入侧栏。
- * 设置 dshAutoImportSessions=false 时跳过；失败只记日志，不阻断启动。
- */
-async function scheduleDshForeignAutoImport(): Promise<void> {
-	if (settingsStore.get().dshAutoImportSessions === false) return;
-	try {
-		await runDshForeignSync();
-		// 按会话 cwd 新建的项目必须立刻出现在侧栏，否则会话挂在看不见的项目上。
-		broadcastVisibleProjects();
-	} catch (error: unknown) {
-		void appLogger.warn("session", "Foreign DSH sessions auto-sync failed", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
-}
-
-/** DSH 外部会话全量同步：启动扫描与配置页「全部导入」共用（只读磁盘，不 boot host）。
- *  结果含本轮导入数/已导入跳过数；有新增时广播受影响项目刷新侧栏。 */
-async function runDshForeignSync(): Promise<{ imported: number; skipped: number }> {
-	const result = await syncForeignSessions(foreignSyncDeps, knownForeignSessionIds(sessionCatalog.listEntries()));
-	if (result.imported > 0 || result.skipped > 0) {
-		// skipped>0 也可能是纠正归属（从兑底拆到各自目录），侧栏要重拉。
-		notifyDshCatalogRefreshed(
-			sessionCatalog
-				.listEntries()
-				.filter((entry) => entry.backend === "dsh" && entry.dshSessionId)
-				.map((entry) => entry.projectId),
-		);
-	}
-	void appLogger.info("session", "Foreign DSH sessions synced", {
-		imported: result.imported,
-		skipped: result.skipped,
-	});
-	return result;
 }
 
 function sendSessionRuntimeEnvelope(event: SessionRuntimeEvent): void {
@@ -591,8 +488,7 @@ function emitSessionRuntimeEvent(agentId: string, sourceChannel: string, payload
 		if (typeof tab.sessionPath === "string" && tab.sessionPath) {
 			const entry = sessionCatalog.get(runtimeBinding.sessionId);
 			if (canAttachRuntimeMetadata(entry, tab) && (entry?.filePath !== tab.sessionPath || entry.piSessionId !== tab.sessionId)) {
-				// 仅 pi JSONL 走文件配对。DSH 的 sessionPath 是 zstd，canAttach 已拒绝；
-				// host id 由 Coordinator activate/dispatch 回写 dshSessionId。
+				// 仅 pi JSONL 走文件配对（canAttachRuntimeMetadata 已按此过滤）。
 				void sessionCatalog
 					.attachRuntime({
 						sessionId: runtimeBinding.sessionId,
@@ -656,7 +552,6 @@ async function createAnonymousSession(input: CreateAnonymousSessionInput): Promi
 		// 缺省填充与引导页展示共用同一解析器（launchDefaults，含「最后一次使用」优先）：
 		// 保证「预选的默认」与「创建时真正套用的默认」永远同源。
 		const defaults = resolveLaunchDefaultOptions({
-			backend: "pi",
 			settings: settingsResult.parsed,
 			models: modelsResult.parsed,
 			lastUsedModel: settingsStore.get().lastUsedModel,
@@ -759,23 +654,6 @@ async function stopAgentFromMonitor(agentId: string): Promise<SessionCommandResu
 	return result;
 }
 
-/**
- * 进程监控停 DSH host：先按会话走完整停止（detach 推送，运行标记熄灭），
- * 再 dispose utilityProcess。不能把 dsh-host 当 pi agentId 丢给 stopAgentById。
- */
-async function stopDshHostFromMonitor(): Promise<SessionCommandResult<undefined>> {
-	const tabs = dshAgentManager.list();
-	for (const tab of tabs) {
-		const result = await sessionRuntimeCoordinator.stopAgentById(tab.id);
-		if (!result.ok) return result;
-		terminalManager.closeAgent(tab.id);
-		if (result.value) emitSessionRuntimeDetach(result.value);
-	}
-	await dshAgentManager.stopAll();
-	await dshHost.dispose();
-	return { ok: true, value: undefined };
-}
-
 function emitReplacementState(binding: SessionRuntimeBinding, includeMessages: boolean): void {
 	const tab = agentManager.list().find((candidate) => candidate.id === binding.agentId);
 	if (!tab) return;
@@ -798,12 +676,6 @@ async function readCatalogSessionReferenceMessages(sessionId: string) {
 
 async function copyCatalogSession(sessionId: string) {
 	const entry = sessionCatalog.get(sessionId);
-	// DSH 会话复制走运行中 agent 的 clone（sessionsRuntimeClone 已按 backend 分流）；
-	// 历史 DSH 会话没有宿主文件可复制（host 会话在 $DSH_HOME），显式拒绝并提示正确入口，
-	// 而不是报「文件不存在」误导（A8）。
-	if (entry?.backend === "dsh") {
-		throw new Error(mainCopy("session.copyDshUnsupported"));
-	}
 	if (!entry?.filePath) throw new Error(mainCopy("session.fileNotFound"));
 	const result = (await agentManager.cloneSessionFile(entry.projectId, entry.filePath, entry.environment)) as {
 		cancelled?: boolean;
@@ -853,13 +725,6 @@ function resolveImageGenStorageRoots(): { sessions: string; blobs: string } {
 
 async function exportCatalogSessionHtml(sessionId: string): Promise<{ path: string }> {
 	const entry = sessionCatalog.get(sessionId);
-	// G10：DSH 会话投影式导出（无活跃 runtime 时从 host 分页拉全量渲染），
-	// 与 pi 的 export_html 同协议返回导出文件路径。
-	if (entry?.backend === "dsh") {
-		if (!entry.dshSessionId) throw new Error(mainCopy("session.fileNotFound"));
-		const project = projectStore.get(entry.projectId);
-		return dshAgentManager.exportSessionHtml(entry.dshSessionId, entry.title, project?.path);
-	}
 	if (!entry?.filePath) throw new Error(mainCopy("session.fileNotFound"));
 	const result = await agentManager.exportSessionHtml(entry.projectId, entry.filePath);
 	if (!result || typeof result !== "object" || !("path" in result) || typeof result.path !== "string") {
@@ -1898,114 +1763,8 @@ function currentMainProcessLocale(): MainProcessLocale {
 	return normalizeMainProcessLocale(language === "system" ? app.getLocale() : language);
 }
 
-/**
- * runtime 变更（安装 / 导入）后重启已运行的 DSH host。
- *
- * 为什么必须重启：host 进程是在 fork 时通过 `--dsh-node-modules` 拿到 runtime 路径的，
- * 之后路径就固化在那个进程里。装了新 runtime 而 host 还在跑，它用的仍是旧路径
- * （通常是 app 内置那份），用户会看到「装完了但行为没变」。
- *
- * 两个收敛点：
- * - host 没启动过就直接返回——此时用户没在用 DSH，不该为一次安装动作白起一个
- *   utilityProcess（约 200MB）。下次要用 DSH 时 ensureStarted 会自动用新 runtime fork。
- * - host 本来在跑说明用户在用 DSH，重启后要重新拉起，否则活跃会话静默失效。
- */
-/**
- * 磁盘操作（runtime 安装/导入/卸载）前释放 DSH host 的文件锁。Windows 上 host 进程把
- * runtime 里的 .node 原生模块（如 koffi.node）映射成 DLL 句柄，进程存活时替换/删除
- * 同版本 runtime 目录必报 EPERM（文件被占用）。停活跃会话 + dispose host 释放锁。
- * 返回 host 原本是否在跑：操作结束后用 startDshHostAfterRuntimeDiskOperation 拉回。
- */
-async function stopDshHostForRuntimeDiskOperation(): Promise<boolean> {
-	const wasRunning = dshHost.isStarted() || dshHost.isHostProcessRunning();
-	if (!wasRunning) return false;
-	try {
-		// 会话只在 boot 完成后才存在（isStarted 为真时停）；进程存活就 dispose。
-		if (dshHost.isStarted()) await dshAgentManager.stopAll();
-		await dshHost.restart();
-	} catch (error) {
-		// 停 host 失败不阻塞磁盘操作：rm 自带退避重试，锁仍在则返回结构化错误。
-		void appLogger?.warn("dsh-runtime", "stop host before runtime disk operation failed", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
-	return wasRunning;
-}
-
-/**
- * DSH 后台预热是否允许：默认后端是 dsh、runtime 可用，且用户没有手动停止过 host。
- * 手动停止优先级最高——即使用户把默认后端切成 dsh，也不该把用户明确停掉的 host
- * 又悄悄拉起来（预热失败只记日志，用户无感，所以这里必须直接不开）。
- */
-function dshWarmupEnabled(): boolean {
-	return settingsStore.get().defaultAgentBackend === "dsh" && dshRuntimeStatus.canCreateDshSession() && settingsStore.get().dshManualStopped !== true;
-}
-
-/**
- * DSH host 手动停止（用户显式动作，IPC dsh:stop-host）：
- * 1. 先写 settings.dshManualStopped = true 再停——顺序保证「停止意图」优先落地：
- *    即使 stopAll/dispose 中途失败，自动拉起路径也已经全部被门控住；
- * 2. 停掉所有活跃 DSH 会话（与 DSH_HOME 切换同一链路，避免旧 mux 悬挂）；
- * 3. dispose host（utilityProcess 退出，释放 ~200MB 与 DSH_HOME 文件锁）。
- * 返回停进程是否顺利完成（标记写入与否不影响返回值语义——门控已生效）。
- */
-async function stopDshHostManually(): Promise<boolean> {
-	// 先持久化停止意图：后续任何 ensureStarted（含并发在途调用）都会被拒。
-	await settingsStore.update({ dshManualStopped: true });
-	try {
-		if (dshHost.isStarted()) await dshAgentManager.stopAll();
-		await dshHost.restart();
-		return true;
-	} catch (error) {
-		void appLogger?.warn("dsh-host", "manual stop: stopAll/dispose failed", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return false;
-	}
-}
-
-/**
- * DSH host 显式启动（用户显式动作，IPC dsh:start-host）：清除手动停止标记后 boot。
- * 必须先清标记再 boot——DshHost 的启动门控按 settings 实时读取。
- * 返回 host 是否真正就绪（boot 完成），渲染层据此刷新状态徽标。
- */
-async function startDshHostManually(): Promise<boolean> {
-	await settingsStore.update({ dshManualStopped: false });
-	return dshHost.startManually();
-}
-
-async function startDshHostAfterRuntimeDiskOperation(wasRunning: boolean): Promise<void> {
-	if (!wasRunning) return;
-	try {
-		await dshHost.ensureStarted();
-	} catch (error) {
-		void appLogger?.warn("dsh-runtime", "restart host after runtime disk operation failed", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
-}
-
 function mainCopy(key: MainProcessTranslationKey, params?: Record<string, string | number>): string {
 	return mainProcessT(currentMainProcessLocale(), key, params);
-}
-
-/**
- * 把 DSH runtime 导入/安装的内部错误码翻译为用户可读文案。
- * 错误码是 DshRuntimeManager.verifyStagedRuntime 的返回值契约（tests 亦断言裸码），
- * 因此这里只做「码 → 文案」映射，不修改下层返回值。
- */
-function dshRuntimeErrorCopy(error: string): string {
-	if (error === "manifest missing") return mainCopy("dsh.runtime.errors.manifestMissing");
-	if (error === "manifest unreadable") return mainCopy("dsh.runtime.errors.manifestUnreadable");
-	if (error === "manifest schema unsupported") return mainCopy("dsh.runtime.errors.schemaUnsupported");
-	if (error === "app version incompatible") return mainCopy("dsh.runtime.errors.appIncompatible");
-	if (error === "node_modules missing") return mainCopy("dsh.runtime.errors.nodeModulesMissing");
-	if (error.startsWith("required package missing: "))
-		return mainCopy("dsh.runtime.errors.requiredPackageMissing", {
-			pkg: error.slice("required package missing: ".length),
-		});
-	if (error === "directory not found" || error === "cancelled") return error;
-	return error;
 }
 
 function sessionCommandIpcError(error: SessionCommandError): SessionCommandIpcError {
@@ -2357,7 +2116,7 @@ function registerFeishuIpc() {
 }
 
 async function sendAgentPromptWithIntegrations(input: SendPromptInput): Promise<SendPromptResult> {
-	// 多后端路由：非 pi 后端（dsh/未来新增后端）不经过 pi 专属的飞书/扩展链路，
+	// 多后端路由：非 pi 后端（生图）不经过 pi 专属的飞书/扩展链路，
 	// 按 agentId 交给合成网关路由到所属后端网关（pi 后端继续走下方集成链路）。
 	const gateway = compositeAgentGateway;
 	const agentTab = gateway?.list().find((item) => item.id === input.agentId);
@@ -2662,12 +2421,11 @@ function registerIpc() {
 		log: (message, ...args) => appLogger.info("imagegen", message, ...args),
 		readImageBlob: (ref) => imageBlobStore.readPayload(ref),
 		// 生图记录落盘：user 提示词 + assistant 图片两条消息写入 pi 会话文件，
-		// 让「不走 pi/dsh 直连 API」的生图结果也进会话历史（重启后可见）。
-		// DSH 会话无 pi 会话文件且 host 无消息追加 API，跳过（生图仍正常返回）。
+		// 让「不走 pi 直连 API」的生图结果也进会话历史（重启后可见）。
 		// agentManager/sessionCatalog 在此处尚未初始化，闭包延迟引用（IPC 调用时已就绪）。
 		persistImageGen: async ({ sessionId, provider, model, prompt, image, size, referenceImages }) => {
 			const entry = sessionCatalog?.get(sessionId);
-			if (!entry || entry.backend === "dsh") return;
+			if (!entry) return;
 			// 标题更新不依赖会话文件：生图 draft 会话不启动 pi agent，无 filePath，
 			// 但仍要把占位标题（Chat agent）换成首行提示词，否则历史/侧栏永远停在占位名；
 			// 用户已手动改过名（非占位标题）则不覆盖。
@@ -2790,166 +2548,6 @@ function registerIpc() {
 		copyCatalogSession,
 		exportCatalogSessionHtml,
 		replaceAgentSession,
-		// C1：DSH 后端专用 IPC 依赖按后端分组（注册表化铺路；未来新增后端各自提供一份）
-		dshBackend: {
-			listDshModels: () => dshHost.listModels(),
-			discoverDshModels: (input) => dshHost.discoverModels(input),
-			listDshProviders: () => dshHost.listProviders(),
-			listDshAgentPresets: () => dshHost.listAgentPresets(),
-			removeDshAgentPreset: (id: string) => dshHost.removeAgentPreset(id),
-			getDshDefaultModel: () => Promise.resolve(dshHost.getDefaultModelSelection()),
-			getDshStatus: () => dshHost.getStatus(),
-			// AgentRuntimeProvider 阶段 1：runtime 安装态门控（未安装时 UI 走安装引导、
-			// 新建 dsh 会话在 sessionIpc 边界被拒）。
-			getDshRuntimeStatus: () => dshRuntimeStatus.getStatus(),
-			canCreateDshSession: () => dshRuntimeStatus.canCreateDshSession(),
-			// 安装/导入/卸载后必须重探测并广播：否则 UI 还停在旧状态，
-			// 用户会看到「刚装完但仍提示未安装」。
-			installDshRuntime: async () => {
-				// 同版本重装时 host 可能仍持有 runtime 内 .node 原生模块的 DLL 句柄，
-				// 落位 rm 必报 EPERM：与卸载同一套路，先停会话 + dispose host 释放锁。
-				const wasRunning = await stopDshHostForRuntimeDiskOperation();
-				const result = await dshRuntimeInstaller.installFromIndex();
-				dshRuntimeStatus.refresh();
-				if (result.ok) await startDshHostAfterRuntimeDiskOperation(wasRunning);
-				return result;
-			},
-			importDshRuntime: async (filePath: string) => {
-				const wasRunning = await stopDshHostForRuntimeDiskOperation();
-				const result = await dshRuntimeInstaller.installFromLocalFile(filePath);
-				dshRuntimeStatus.refresh();
-				if (result.ok) await startDshHostAfterRuntimeDiskOperation(wasRunning);
-				// 失败时把内部错误码映射为用户可读文案（配置页直接展示 error 字段）。
-				// 只映射已知校验码；未知错误（如磁盘满、权限）保留原始信息以便排查。
-				if (!result.ok) return { ok: false, error: dshRuntimeErrorCopy(result.error) };
-				return result;
-			},
-			uninstallDshRuntime: async () => {
-				// 卸载会删掉 host 正在用的 runtime 目录：Windows 上 host 的 .node 原生模块
-				// 已映射成 DLL 句柄，进程存活时删目录必报 EPERM（文件被占用）。所以先停
-				// 活跃会话、杀掉 host 释放文件锁，再删；删完若原本在用 DSH 就把 host 拉回
-				// 来（删失败时旧目录还在，重启 fork 仍走旧 runtime，用户可稍后重试卸载）。
-				const wasRunning = await stopDshHostForRuntimeDiskOperation();
-				const result = await dshRuntimeInstaller.uninstall();
-				dshRuntimeStatus.refresh();
-				await startDshHostAfterRuntimeDiskOperation(wasRunning);
-				return result;
-			},
-			describeDshSettings: () => dshHost.describeSettings(),
-			updateDshSettings: (ns, patch, expectedRevision) => dshHost.updateSettings(ns, patch, expectedRevision),
-			mutateDshSettings: (ns, ops, expectedRevision) => dshHost.mutateSettings(ns, ops, expectedRevision),
-			describeDshCredentials: (refs) => dshHost.describeCredentials(refs),
-			setDshCredential: (ref, value) => dshHost.setCredential(ref, value),
-			unsetDshCredential: (ref) => dshHost.unsetCredential(ref),
-			readDshCredential: (ref) => dshHost.readCredentialValue(ref),
-			openDshDocument: () => dshHost.openDocument(),
-			stopDshHost: () => stopDshHostManually(),
-			startDshHost: () => startDshHostManually(),
-			restartDshHost: async () => {
-				// 切换 DSH_HOME 前先停掉全部活跃 DSH 会话（host 侧会话仍在 $DSH_HOME
-				// 持久化，catalog 保留 dshSessionId，重新打开会话时 attach 恢复），
-				// 避免旧目录的 mux 悬挂在已 dispose 的 transport 上；再重启 host。
-				// D16：restart 后校验 host 真正拉起（boot 完成），失败返回 false 而非恒 true。
-				await dshAgentManager.stopAll();
-				await dshHost.restart();
-				try {
-					await dshHost.ensureStarted();
-					return dshHost.isHostProcessRunning() && dshHost.isHostReady();
-				} catch {
-					return false;
-				}
-			},
-			readDshHistoryPage: (dshSessionId, beforeSeq, options) => dshAgentManager.readHistoryPage(dshSessionId, beforeSeq, options),
-			readDshProcessEvents: (agentId, dshSessionId) => dshAgentManager.readProcessEvents(agentId, dshSessionId),
-			readDshSystemPrompt: (agentId, dshSessionId) => dshAgentManager.readSystemPrompt(agentId, dshSessionId),
-			readDshMessageFullText: (agentId, messageId) => dshAgentManager.readMessageFullText(agentId, messageId),
-			resolveDshSessionFilePath: async (sessionId) => {
-				// F5：DSH 会话没有 pi 会话文件，「复制会话文件路径」按 catalog 的
-				// dshSessionId + 项目 cwd 推导 host 持久化路径。
-				const entry = sessionCatalog.get(sessionId);
-				if (!entry?.dshSessionId) return undefined;
-				const project = projectStore.get(entry.projectId);
-				if (!project?.path) return undefined;
-				return dshAgentManager.resolveSessionFilePath(project.path, entry.dshSessionId);
-			},
-			searchDshSessions: (query) => dshHost.searchSessions(query),
-			createDshGoal: (agentId, objective, maxGoalRounds) => dshAgentManager.createGoal(agentId, objective, maxGoalRounds),
-			runDshGoalAction: (agentId, action) => dshAgentManager.goalAction(agentId, action),
-			listDshSubagents: (agentId) => dshAgentManager.listSubagents(agentId),
-			listDshSkills: (agentId) => dshAgentManager.listSkills(agentId),
-			readDshSubagentHistory: (agentId, childSessionId, beforeSeq, maxMessages) => dshAgentManager.readSubagentHistory(agentId, childSessionId, beforeSeq, maxMessages),
-			listDshOrphans: async () => {
-				// G3/D11：host 持久化会话中，catalog 无 dshSessionId 映射的视为孤儿
-				// （被删除映射的记录、匿名会话残留等）。wire 无删除 API，仅用于提示。
-				const hostIds = await dshHost.listSessionIds();
-				const known = new Set(
-					sessionCatalog
-						.listEntries()
-						.map((entry) => entry.dshSessionId)
-						.filter((id): id is string => Boolean(id)),
-				);
-				return hostIds.filter((id) => !known.has(id));
-			},
-			// 跨工具兼容（2026-12）：dsh-web 等其他工具创建的 host 根会话（含标题/cwd）；
-			// 已映射进 catalog 的在 IPC 层（sessionIpc）过滤，配置页只显示「待导入」。
-			listDshForeignSessions: () => dshHost.listForeignSessions(),
-			// 外部会话导入：把 host 会话映射进 catalog（status=active，侧栏可见可加载）。
-			// 幂等：同 dshSessionId 重复导入被 SessionCatalog.createDraft 吸收（只更新标题/归属）。
-			importDshForeignSession: async (dshSessionId) => {
-				const record = await importForeignSession(foreignSyncDeps, dshSessionId);
-				notifyDshCatalogRefreshed([record.projectId]);
-				void appLogger.info("session", "Foreign DSH session imported", {
-					dshSessionId,
-					projectId: record.projectId,
-					title: record.title,
-				});
-				return record;
-			},
-			// 外部会话全量同步：catalog 未映射的磁盘根会话全部导入（不启动 host）。
-			// 配置页「全部导入」与启动自动同步共用此入口。
-			syncDshForeignSessions: () => runDshForeignSync(),
-			// G14：DSH 归档/恢复（目录移动 + manifest，与 pi 归档同语义，不销毁数据）
-			archiveDshSession: (dshSessionId, cwd, title) => dshHost.archiveSession(dshSessionId, cwd, title),
-			unarchiveDshSession: (dshSessionId) => dshHost.unarchiveSession(dshSessionId),
-			listArchivedDshSessions: () => dshHost.listArchivedSessions(),
-			deleteArchivedDshSession: (dshSessionId) => dshHost.deleteArchivedSession(dshSessionId),
-			// G13 深化：动态 Cordis 插件管理（进程内临时扩展，define/run/stop/undefine）
-			listDshDynamicPlugins: () => dshHost.listDynamicPlugins(),
-			listDshStaticPlugins: () => dshHost.listStaticPlugins(),
-			uninstallDshUserPlugin: (input) => dshHost.uninstallUserPlugin(input),
-			installDshPlugin: (input) => dshHost.installDynamicPlugin(input),
-			runDshPlugin: (input) => dshHost.runDynamicPlugin(input),
-			stopDshPlugin: (input) => dshHost.stopDynamicPlugin(input),
-			uninstallDshPlugin: (input) => dshHost.uninstallDynamicPlugin(input),
-			isDshAgent: (agentId) => dshAgentManager?.list().some((tab) => tab.id === agentId) === true,
-			forkDshAgentSession: async (target, entryId) => {
-				// DSH fork：runtime 已原地换绑到新会话（agentId 不变，焦点会话 id 不变），
-				// 这里只需把 catalog 的 dshSessionId 同步为新 fork 会话，重启后 attach 正确。
-				const result = await dshAgentManager.forkSession(target.agentId, entryId);
-				const tab = dshAgentManager.list().find((candidate) => candidate.id === target.agentId);
-				if (tab?.sessionId) {
-					await sessionCatalog.attachRuntime({
-						sessionId: target.sessionId,
-						dshSessionId: tab.sessionId,
-						promoteToActive: true,
-					});
-				}
-				return { ...result };
-			},
-			cloneDshAgentSession: async (target) => {
-				// DSH clone：fork 无锚点（完整副本），runtime 换绑到新会话，语义同 fork。
-				const result = await dshAgentManager.cloneSession(target.agentId);
-				const tab = dshAgentManager.list().find((candidate) => candidate.id === target.agentId);
-				if (tab?.sessionId) {
-					await sessionCatalog.attachRuntime({
-						sessionId: target.sessionId,
-						dshSessionId: tab.sessionId,
-						promoteToActive: true,
-					});
-				}
-				return { ...result };
-			},
-		},
 	});
 
 	// ── 启动预扫描（2026-08 展开项目卡顿优化）──
@@ -3103,7 +2701,7 @@ function registerIpc() {
 		appLogger,
 		rpcLogger,
 		sessionRuntimeCoordinator,
-		// pi 环境引导：便携 Node 安装器的真实 IO（下载/解压与 DSH runtime 同源，
+		// pi 环境引导：便携 Node 安装器的真实 IO。
 		// 测试里注入替身；未装配时引导安装入口降级不可用）。
 		piRuntimeNodeInstaller: {
 			download: createNetDownloader((scope, message, detail) => {
@@ -3111,46 +2709,22 @@ function registerIpc() {
 			}),
 			extract: createTarExtractor((scope, message, detail) => void appLogger.warn(scope, message, detail)),
 		},
-		// 「关于」面板读取启用中的 DSH 运行时版本
-		dshRuntimeManager: dshRuntimeManager ?? undefined,
-		// G17：RPC 日志按 backend 分流（DSH 走 DshAgentManager 领域调用记录）
-		isDshAgent: (agentId) => dshAgentManager?.list().some((tab) => tab.id === agentId) === true,
-		setDshRpcLogging: (agentId, enabled) => dshAgentManager.setRpcLogging(agentId, enabled),
-		isDshRpcLogging: (agentId) => dshAgentManager.isRpcLogging(agentId),
 		diagnosticsMonitor: diagnosticsMonitor ?? undefined,
 		environmentDoctor: environmentDoctor ?? undefined,
 		logBundleExporter: logBundleExporter ?? undefined,
 		// 进程监控停止 agent：按 agentId 走完整会话停止链路（含 detach 推送）
 		stopAgentFromMonitor,
-		getDshHostPid: () => dshHost.getHostPid(),
-		restartDshHost: async () => {
-			await dshAgentManager.stopAll();
-			await dshHost.restart();
-			try {
-				await dshHost.ensureStarted();
-				return dshHost.isHostProcessRunning() && dshHost.isHostReady();
-			} catch {
-				return false;
-			}
-		},
-		dshHostIsStarted: () => dshHost.isStarted(),
-		providerMigration: {
-			configManager,
-			dshHost,
-		},
 		modelCapabilityCache: piModelCapabilityCache,
 		// 内置 TokenDance 模型目录（live fetch + userData 缓存；
 		// 作为一键配置的数据源：目录模型写入 models.json 后由 pi 运行时自行解析）
 		tokendanceCatalog: tokendanceCatalogStore,
 		// 内置 TokenDance OAuth 授权（PKCE S256 headless；verifier 内存持有，重启失效）
 		tokendanceAuth: new TokendanceAuthStore(),
-		// 一键安装：pi models.json + DSH llm-pi-ai 双落盘（复用迁移服务的写盘策略：
-		// host 就绪走官方 settings API，否则直写 settings.yaml/.credentials.yaml）
+		// 一键安装：写入 pi models.json。
 		tokendanceInstall: (apiKey) =>
 			installTokendanceProvider(
 				{
 					configManager,
-					dshHost,
 					tokendanceCatalog: tokendanceCatalogStore,
 					// 能力字段补全：目录只下 id/name/context_length，maxTokens/reasoning/
 					// input/thinkingLevelMap 按模型 id 从 pi-ai 目录精确匹配（无模糊匹配，
@@ -3159,8 +2733,6 @@ function registerIpc() {
 				},
 				{ apiKey },
 			),
-		listDshMonitorSessions: () => dshAgentManager.list().map((tab) => ({ title: tab.title })),
-		stopDshHostFromMonitor,
 		getMainWindow: () => mainWindow,
 		mainCopy: mainCopy as (key: string, params?: Record<string, string | number>) => string,
 		// 适配层：checkForAppUpdate 直接触发 UpdateService 检查（结果经快照推送）；
@@ -3219,9 +2791,6 @@ function registerIpc() {
 		configureConfigManagerWsl: (env) => configManager.configureWsl(env),
 		configureXuePromptManagerWsl: (env) => xuePromptManager.configureWsl(env),
 		configureAgentManagerWsl: (env) => agentManager.configureWsl(env),
-		// DSH host 同样需要 WSL 环境：它拿到的 workspace 路径必须是 Windows 主机路径
-		// （WSL 模式下项目是 /mnt/...，host 的 realpath 会算到 C:\mnt 而报 ENOENT）。
-		configureDshHostWsl: (env) => dshHost.configureWsl(env),
 		sessionCommandIpcError,
 		// 重启路径需要同步 isQuitting / 停服务，避免 closeToTray 吞掉 relaunch
 		webServiceManager,
@@ -3429,12 +2998,9 @@ app
 			});
 		}
 		rpcLogger = new RpcLogger();
-		// 用量统计：pi-tracker 的 <agentDir>/analytics/usage.jsonl
-		// + dsh-bill 的 <DSH_HOME>/dsh-bill/records.jsonl（采集由插件负责，此处只读）。
-		// DSH_HOME 与 DshHost 同一套解析（设置覆盖 > ~/.dsh > 应用私有目录）。
+		// 用量统计：pi-tracker 的 <agentDir>/analytics/usage.jsonl。
 		usageStatsService = new UsageStatsService({
 			agentDir: join(app.getPath("home"), ".pi", "agent"),
-			getDshHomeDir: () => resolveDshHomeDir(settingsStore.get().dshHomeDir ?? "", app.getPath("userData")),
 			logger: {
 				info: (message) => void appLogger?.info("usage-stats", message),
 				warn: (message) => void appLogger?.warn("usage-stats", message),
@@ -3472,23 +3038,7 @@ app
 		});
 		// C12：退出清理登记（before-quit 统一 runAll）——登录子进程必须随之回收。
 		quitCleanup.register("pi-auth", () => piAuthService?.dispose());
-		// DSH 用量链路（backend="dsh"）：配置落 $DSH_HOME/usage-probes.json、凭据从
-		// $DSH_HOME/.credentials.yaml 读，与 pi 侧链路（~/.pi/agent）完全同构、互不干扰。
-		// DSH_HOME 解析与 DshHost 同一套（设置覆盖 > ~/.dsh > 应用私有目录），getter 每次求值，
-		// 用户改设置立即生效；readCredential 环境层优先、文件层兜底（与 DshHost 相同优先级）。
-		configManager = new ConfigManager(undefined, mainCopy, {
-			getHomeDir: () => resolveDshHomeDir(settingsStore.get().dshHomeDir ?? "", app.getPath("userData")),
-			readCredential: async (ref) => {
-				const envValue = process.env[ref]?.trim();
-				if (envValue) return envValue;
-				try {
-					const filePath = join(resolveDshHomeDir(settingsStore.get().dshHomeDir ?? "", app.getPath("userData")), ".credentials.yaml");
-					return credentialValueFromDocument(await readFile(filePath, "utf8"), ref);
-				} catch {
-					return undefined;
-				}
-			},
-		});
+		configManager = new ConfigManager(undefined, mainCopy);
 		// 配置备份：pi 配置文件 + pideck 设置的快照（手动模式：仅首次使用自动建 first-run，
 		// 之后备份/恢复都由用户在设置页手动触发）。
 		// 依赖注入生效目录与 userData，WSL 切换后跟随 configManager.getConfigDir()。
@@ -3696,166 +3246,6 @@ app
 			configManager,
 		});
 		logBundleExporter = new LogBundleExporter({ appLogger });
-		// DSH runtime 管理器（阶段 2）：外部 runtime 落在 userData/runtimes/dsh/<version>。
-		// 暂存目录与版本目录同级，便于整体清理；两者都在 userData 内，卸载应用时一并带走。
-		dshRuntimeManager = new DshRuntimeManager({
-			layout: {
-				runtimesRoot: join(app.getPath("userData"), "runtimes", "dsh"),
-				tempRoot: join(app.getPath("userData"), "runtimes", ".tmp"),
-			},
-			appVersion: () => app.getVersion(),
-			download: createNetDownloader((scope, message, detail) => void appLogger.warn(scope, message, detail)),
-			extract: createTarExtractor((scope, message, detail) => void appLogger.warn(scope, message, detail)),
-			log: (scope, message, detail) => void appLogger.info(scope, message, detail),
-		});
-		// DSH runtime 安装态服务先于 DshHost 装配（探测只依赖 appPath，不 fork host）。
-		// 探测顺序：外部已装 runtime 优先 → 兼容旧版 full/存量包时才回退 app 内置。
-		// 官方 lite 包与 dev 都把 runtime 获取统一到 userData 外部目录，未安装时从同一份
-		// Release 索引下载；这样开发环境验证的就是用户实际走的远程安装链路。
-		// allowBundledFallback 仅保留给显式 full/存量包兼容，不再按 app.isPackaged 区分；
-		// 新的 dev/lite 默认关闭，避免项目 node_modules 或残留资源绕过远程安装。
-		dshRuntimeStatus = new DshRuntimeStatusService(
-			() => app.getAppPath(),
-			(scope, message, detail) => void appLogger.info(scope, message, detail),
-			() => {
-				const active = dshRuntimeManager.resolveActive();
-				return active ? { nodeModules: active.nodeModules, runtimeVersion: active.manifest.runtimeVersion } : undefined;
-			},
-			// dev 不把项目 node_modules 当成「已安装 runtime」；统一走外部 Release 下载。
-			() => false,
-			// 保留构造位次供旧调用方兼容；安装入口现在由状态服务统一开放，不读取打包态。
-			() => app.isPackaged,
-			// 声明的配套 dsh 版本（package.json）：与已装 runtime 比对得出 updateAvailable，
-			// 升级 PiDeck 后旧 runtime 仍「兼容」会被一直选用，UI 需要这个信号提示更新。
-			() => readDeclaredDshVersion(app.getAppPath()),
-		);
-		dshRuntimeStatus.subscribe((status) => {
-			if (mainWindow && !mainWindow.isDestroyed()) {
-				mainWindow.webContents.send(ipcChannels.dshRuntimeStatusChanged, status);
-			}
-		});
-		// runtime 安装编排：索引拉取 + 选版本 + 落位，进度统一广播给渲染层。
-		// 索引地址默认指向与 app update 同一仓库的 release 资产，settings 可覆盖为镜像。
-		dshRuntimeInstaller = new DshRuntimeInstaller({
-			manager: dshRuntimeManager,
-			// 优先级：环境变量（本地/内网验证用，免改设置）> 设置项（镜像）> 当前 latest 应用 Release。
-			// 禁止独立 dsh-runtime tag：会抢走 GitHub /releases/latest。
-			indexUrl: () =>
-				resolveDshRuntimeIndexUrl({
-					indexUrl: process.env.DSH_RUNTIME_INDEX_URL || settingsStore.get().dshRuntimeIndexUrl,
-					updateSource: settingsStore.get().updateSource,
-				}),
-			updateSource: () => settingsStore.get().updateSource,
-			releaseTag: () =>
-				resolveDshRuntimeReleaseTag({
-					explicitTag: process.env.PIDECK_RELEASE_TAG,
-					isPackaged: app.isPackaged,
-					appVersion: app.getVersion(),
-				}),
-			appVersion: () => app.getVersion(),
-			fetchIndex: fetchDshRuntimeIndex,
-			// dev 与官方 lite 包统一走远程 Release；只给显式 full/存量包保留离线兼容入口。
-			// 通过显式环境变量开启，避免开发机或新包因残留资源误绕过远程下载链路。
-			bundledRuntime: () => (process.env.PIDECK_DSH_ALLOW_BUNDLED_RUNTIME === "1" ? readBundledRuntime(process.resourcesPath ? join(process.resourcesPath, DSH_BUNDLED_RUNTIME_DIRNAME) : undefined, app.getVersion()) : undefined),
-			onProgress: (progress) => {
-				if (mainWindow && !mainWindow.isDestroyed()) {
-					mainWindow.webContents.send(ipcChannels.dshRuntimeInstallProgress, progress);
-				}
-			},
-			log: (scope, message, detail) => void appLogger.info(scope, message, detail),
-		});
-		// DSH host 实例先装配；是否后台预热看 defaultAgentBackend（见 createWindow 后）。
-		// 发送/历史/配置链路仍走 ensureStarted 幂等兜底，不用 DSH 的用户不常驻 host。
-		// DSH_HOME 可用设置 dshHomeDir 覆盖（用户自己的 ~/.dsh 等），空串 = 应用私有目录。
-		dshHost = new DshHost(
-			() => app.getPath("userData"),
-			() => app.getAppPath(),
-			undefined,
-			() => settingsStore.get().dshHomeDir ?? "",
-			// 会话级代理覆盖（DSH 降级方案，用户确认的取舍）：DSH 是单一共享 host、无 per-session
-			// 通道，只能聚合所有 DSH 会话（backend=dsh）的开关应用到共享 host 的 fork env。
-			// 冲突规则 off 优先于 on（直连是安全默认）；全 follow → 不动（保持 host 现有行为）。
-			// 生效机制：buildHostProxyEnvPatch 在 on 时会额外注入 NODE_USE_ENV_PROXY=1，让 host
-			// 内部 globalThis.fetch（undici）真正按注入的 HTTP_PROXY/NO_PROXY 走代理（Node 22.21+
-			// 行为，Electron 43 内置 Node 24.18.1 已实测）；off 时剥离该开关。
-			() => {
-				const settings = settingsStore.get();
-				// DSH 共享 host 的代理需按供应商过滤逐会话计算有效模式，再聚合（与 pi 会话链路一致的 provider 感知）。
-				const dshOverrides = (sessionCatalog?.listEntries() ?? [])
-					.filter((entry) => entry.backend === "dsh")
-					.map((entry) => {
-						const effectiveMode = resolveEffectiveSessionProxyMode(entry.proxy?.mode, entry.model?.provider, entry.model?.modelId, settings.piProxyProviders, settings.piProxyModels);
-						return effectiveMode === "follow" ? undefined : ({ mode: effectiveMode } as import("../shared/types/session").SessionProxyOverride);
-					});
-				const mode = aggregateDshProxyMode(dshOverrides);
-				// 全局开关兜底：所有 DSH 会话都 follow（无显式覆盖、无名单命中）时，仍应让 host
-				// 跟随全局 pi 代理开关——否则用户在设置页只开全局开关，DSH 永远直连（与 pi 会话
-				// 「名单空时跟随全局」语义不一致）。名单非空时不做兜底（见 resolveDshHostProxyMode）。
-				const settingsSnapshot = settingsStore.get();
-				const hasProxyList = (settingsSnapshot.piProxyModels?.length ?? 0) > 0 || (settingsSnapshot.piProxyProviders?.length ?? 0) > 0;
-				const finalMode = resolveDshHostProxyMode(mode, {
-					piProxyEnabled: settingsSnapshot.piProxyEnabled,
-					hasList: hasProxyList,
-				});
-				return buildHostProxyEnvPatch(finalMode, {
-					url: settingsSnapshot.piProxyUrl,
-					bypass: settingsSnapshot.piProxyBypass,
-				});
-			},
-			// 外部 runtime 根目录；未安装时保持 undefined，随后由 canCreateDshSession 门控，
-			// 不再把 dev 项目 node_modules 当作远程 runtime 的隐式回退。
-			() => dshRuntimeStatus.resolveAppRoot(),
-			// 永久删除归档目录：统一走系统回收站（与 pi 会话删除同语义，可恢复；拒绝静默硬删）。
-			async (path) => {
-				await shell.trashItem(path);
-			},
-			() => settingsStore.get().dshRunnerNodePath ?? "",
-			// 手动停止标记（持久化）：为真时 ensureStarted 拒绝自动拉起，只有用户显式启动才 boot。
-			() => settingsStore.get().dshManualStopped === true,
-		);
-		dshAgentManager = new DshAgentManager(
-			dshHost,
-			(projectId) => projectStore.get(projectId),
-			// 审批自动放行：运行时读取设置（即时生效，无需重启 host），见 settings.ts dshApprovalAutoAllow。
-			() => settingsStore.get().dshApprovalAutoAllow === true,
-			// DSH host 会话标题变化（attach 初值 / session/title 事件 / rename）写回 catalog：
-			// DSH 会话没有 pi 会话文件，标题只存在于 host（dsh-session-title fold），
-			// 不写回则侧栏/重启后一直显示 draft 占位名（如「pi-desktop DSH」）。
-			// 更新后推送 catalog-refreshed，渲染层 useProjectSync 静默重拉刷新侧栏标题。
-			(dshSessionId, title) => {
-				const entry = sessionCatalog?.findByDshSessionId(dshSessionId);
-				if (!entry || entry.title === title) return;
-				void sessionCatalog
-					.update(entry.id, { title })
-					.then(() => {
-						// index.ts 作用域用模块级 mainWindow（本文件没有 getMainWindow 助手）
-						if (mainWindow && !mainWindow.isDestroyed()) {
-							mainWindow.webContents.send(ipcChannels.sessionsCatalogRefreshed, { projectId: entry.projectId });
-						}
-					})
-					.catch((error: unknown) => {
-						void appLogger.warn("session", "DSH title sync to catalog failed", {
-							dshSessionId,
-							title,
-							error: error instanceof Error ? error.message : String(error),
-						});
-					});
-			},
-			// G17：DSH RPC 日志复用 RpcLogger（按 agentId=dsh:<sessionId> 分文件）
-			rpcLogger,
-			// G10：DSH 会话 HTML 导出目录（应用数据目录内，AGENTS.md 路径安全约束）
-			() => join(app.getPath("userData"), "exports"),
-			// 新会话无标题时的兜底标题（i18n；与外部会话导入兜底一致）
-			() => mainCopy("session.dshUntitled"),
-		);
-		// C12/E15：DSH 退出清理——先停全部活跃会话（清 mux/订阅/pending）再 dispose host，
-		// 顺序保证避免 host 先被杀导致会话清理路径访问已死 transport。
-		quitCleanup.register("dsh", async () => {
-			await dshAgentManager?.stopAll();
-			await dshHost?.dispose();
-		});
-		// DSH 外部会话自动导入改到 projectStore.load 之后（见下方 scheduleDshForeignAutoImport）：
-		// 必须走只读磁盘扫描，不能依赖 host-ready——否则会与 dsh-web 抢同一份 DSH_HOME。
 		webServiceManager = new WebServiceManager({
 			// dev 模式（electron-vite dev 不产出 out/renderer 构建物）下，静态资源
 			// 代理到 vite dev server，外部 Web 端加载重构后的 React 版页面并支持热更新；
@@ -3948,15 +3338,6 @@ app
 				// Web 删除与桌面 IPC 同一策略：先解绑再删 catalog，agent 后台停。
 				await sessionRuntimeCoordinator.releaseRuntimeForDelete(sessionId);
 				if (entry.filePath) await sessionScanner.delete(entry.filePath);
-				// DSH 没有 session.delete：与 pi 端同语义删除——把 host 会话目录移入系统回收站
-				// （可恢复；trashPath 失败时抛错由 IPC 呈现，拒绝静默硬删；目录已不在=幂等成功）。
-				// cwd 取项目目录（DSH workspace 编码同源）；项目被移除过则扫 sessions 树兑底。
-				if (entry.backend === "dsh" && entry.dshSessionId) {
-					const project = projectStore.get(entry.projectId);
-					await dshHost.deleteSession(entry.dshSessionId, project?.path ?? "");
-					// 记下墓碑：host 目录已移出 sessions 树，避免刷新把残留索引/回收站路径再导回侧栏。
-					await sessionCatalog.rememberDismissedDshSession(entry.dshSessionId);
-				}
 				await sessionCatalog.removeWithDescendants(sessionId);
 				return true;
 			},
@@ -3965,12 +3346,6 @@ app
 			readSessionReferenceMessages: (sessionId) => readCatalogSessionReferenceMessages(sessionId),
 			readSessionMessages: async (sessionId) => {
 				const entry = sessionCatalog.get(sessionId);
-				// DSH 会话没有 pi 会话文件：读 host 历史事件流的一页（有界），
-				// 与分页路径同源；未挂载 DSH 后端时返回空窗口。
-				if (entry?.backend === "dsh" && entry.dshSessionId && dshAgentManager) {
-					const page = await dshAgentManager.readHistoryPage(entry.dshSessionId, undefined, { maxMessages: 1000 });
-					return { messages: page.messages, total: page.total, windowStart: 0, truncated: false };
-				}
 				if (!entry?.filePath) return { messages: [], total: 0, windowStart: 0, truncated: false };
 				// 有界加载窗口（9 轮 + 条目预算），不是全量历史：全量下发在大会话上会同时顶爆
 				// 主进程与渲染层（#213）。更早历史请走分页接口（Web：/messages/page）。
@@ -3979,11 +3354,6 @@ app
 			},
 			readSessionMessagePage: async (sessionId, before, pageSize) => {
 				const entry = sessionCatalog.get(sessionId);
-				// DSH 会话没有 pi 会话文件：历史浏览走 host 的 session.history 事件流翻页
-				// （游标 = 事件 seq），与 pi 的磁盘分页同形状（messages/total/nextBefore）。
-				if (entry?.backend === "dsh" && entry.dshSessionId && dshAgentManager) {
-					return dshAgentManager.readHistoryPage(entry.dshSessionId, before, { turnCount: pageSize });
-				}
 				if (!entry?.filePath) return { messages: [], total: 0, nextBefore: null };
 				return agentManager.readSessionDisplayTurnPage(entry.filePath, sessionId, before, pageSize);
 			},
@@ -3998,18 +3368,6 @@ app
 			listSessionRuntimes: () => sessionRuntimeCoordinator.listRuntimes(),
 			listPendingUiRequests: () => sessionRuntimeCoordinator.listPendingUiRequests(),
 			respondToUi: (input) => sessionRuntimeCoordinator.respondToUi(input),
-			// S6.3：Web 端 DSH 工具面板（goals/subagents/skills）——与桌面 IPC 同源
-			listDshSubagents: (agentId) => dshAgentManager.listSubagents(agentId),
-			readDshSubagentHistory: (agentId, childSessionId, beforeSeq, maxMessages) => dshAgentManager.readSubagentHistory(agentId, childSessionId, beforeSeq, maxMessages),
-			listDshSkills: (agentId) => dshAgentManager.listSkills(agentId),
-			// S6.5：Web 端 DSH 插件管理（动态 Cordis 插件，与桌面配置页同源）
-			listDshDynamicPlugins: () => dshHost.listDynamicPlugins(),
-			listDshStaticPlugins: () => dshHost.listStaticPlugins(),
-			uninstallDshUserPlugin: (input) => dshHost.uninstallUserPlugin(input),
-			installDshPlugin: (input) => dshHost.installDynamicPlugin(input),
-			runDshPlugin: (input) => dshHost.runDynamicPlugin(input),
-			stopDshPlugin: (input) => dshHost.stopDynamicPlugin(input),
-			uninstallDshPlugin: (input) => dshHost.uninstallDynamicPlugin(input),
 			listSessionRuntimeModels: (target) => sessionRuntimeCoordinator.listRuntimeModels(target),
 			stopSessionRuntime: stopSessionRuntime,
 			abortSessionRuntime: (target) => sessionRuntimeCoordinator.abortRuntime(target),
@@ -4138,9 +3496,7 @@ app
 			(filePath, options) => sessionScanner.inferSessionNameAndValidity(filePath, options),
 		);
 		await sessionCatalog.load();
-		// 多后端网关装配：pi + dsh（DSH 在窗口创建后后台预热，失败时按需重试）。
-		// Coordinator 与事件桥接均面向合成器，新增后端只需追加网关实例。
-		compositeAgentGateway = new CompositeAgentGateway([agentManager, dshAgentManager]);
+		compositeAgentGateway = new CompositeAgentGateway([agentManager]);
 		sessionRuntimeCoordinator = new SessionRuntimeCoordinator(sessionCatalog, compositeAgentGateway, sendAgentPromptWithIntegrations, appLogger);
 
 		// 定时任务调度器与执行编排器装配
@@ -4177,9 +3533,10 @@ app
 				});
 				notification.show();
 			},
-			// catalog 变更广播：automation createDraft / dispatch 接受后让侧栏静默重拉，
-			// 避免新会话行延迟出现、DSH agent 行先落成孤儿条目（复用 DSH 刷新同一条 IPC 通道）。
-			notifySessionCatalogChanged: (projectId) => notifyDshCatalogRefreshed([projectId]),
+			// catalog 变更广播：automation createDraft / dispatch 接受后让侧栏静默重拉。
+			notifySessionCatalogChanged: (projectId) => {
+				if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ipcChannels.sessionsCatalogRefreshed, { projectId });
+			},
 		});
 		automationScheduler = new AutomationScheduler(automationStore);
 		automationScheduler.setTriggerHandler(async (task, scheduledFor, trigger) => {
@@ -4269,9 +3626,6 @@ app
 				});
 				await sessionScanner.configureWsl(wslEnv);
 				agentManager.configureWsl(wslEnv);
-				// DSH host 是 Windows 原生进程：WSL 项目的 workspace 路径与会话目录编码
-				// 都要按主机路径算，否则 workspace.resolve 失败、会话建不出来。
-				dshHost.configureWsl(wslEnv);
 				skillManager.configureWsl(wslEnv);
 				promptManager.configureWsl(wslEnv);
 				extensionManager.configureWsl(wslEnv);
@@ -4284,7 +3638,6 @@ app
 			} else {
 				sessionScanner.clearWsl();
 				agentManager.configureWsl(null);
-				dshHost.configureWsl(null);
 				skillManager.configureWsl(null);
 				promptManager.configureWsl(null);
 				extensionManager.configureWsl(null);
@@ -4322,43 +3675,6 @@ app
 		void cleanupPasteFiles?.().catch((error: unknown) => {
 			void appLogger.warn("app", "Paste file cleanup failed during startup", error);
 		});
-		// DSH runtime 自动更新：升级 PiDeck 后若已装 runtime 与声明版本不一致
-		// （outdated，被硬门控挡住无法启动 host），启动期后台自动重装配套版本并回收旧
-		// 版本目录——与其让用户手动点「重新安装」，不如升级后首次启动自动完成。
-		// notInstalled 不自动装（用户未选择使用 DSH，保持安装引导）；dev 与打包版都允许
-		// 手动安装，但自动更新只处理已有 runtime 的版本错配。fire-and-forget，不挡首帧。
-		void autoUpdateDshRuntimeIfOutdated({
-			getStatus: () => dshRuntimeStatus.getStatus(),
-			refresh: () => dshRuntimeStatus.refresh(),
-			install: () => dshRuntimeInstaller.installFromIndex(),
-			listInstalled: () => dshRuntimeManager.listInstalled(),
-			resolveActiveDirName: () => dshRuntimeManager.resolveActive()?.dirName,
-			uninstall: async (dirName) => {
-				await dshRuntimeManager.uninstall(dirName);
-			},
-			appVersion: () => app.getVersion(),
-			isPackaged: () => app.isPackaged,
-			// 自动更新完成前 warmup 因 outdated 被跳过：装好且默认后端是 dsh 时补一次预热。
-			onRuntimeReady: () => {
-				startDshHostInBackground(dshHost, appLogger, {
-					enabled: dshWarmupEnabled(),
-				});
-			},
-			log: (scope, message, detail) => void appLogger.info(scope, message, detail),
-		}).catch((error: unknown) => {
-			void appLogger.warn("dsh-runtime", "DSH runtime auto-update crashed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		});
-
-		// 窗口已可用后再按需预热 DSH：默认后端是 dsh 且 runtime 可用才后台 boot，
-		// 避免纯 pi 用户空转 utilityProcess（约 200MB），也避免 runtime 不在时 boot 必然失败。
-		// 用户手动停止过 DSH（dshManualStopped）时也跳过——不弹错误，用户下次显式启动即可。
-		// 发送/历史/配置路径仍由 ensureStarted 兜底。
-		startDshHostInBackground(dshHost, appLogger, {
-			enabled: dshWarmupEnabled(),
-		});
-
 		// 模型 capability cache 的 hydration 在 syncWslConfig 后启动，确保它与 PiProcess
 		// 使用同一套 WSL HOME/config 目录；不阻塞首帧。
 		void syncWslConfig()
@@ -4451,8 +3767,6 @@ app
 					await sessionCatalog.removeByProjectId(projectId).catch(() => 0);
 				}
 				broadcastVisibleProjects();
-				// 项目表就绪后再扫 DSH_HOME：cwd 才能匹配已注册项目；不启动 host。
-				await scheduleDshForeignAutoImport();
 			})
 			.catch(() => undefined);
 

@@ -40,7 +40,7 @@ export const askEchoBySessionIdAtomFamily = atomFamily((sessionId: string) => at
  */
 export const recordAskEchoAtom = atom(null, (get, set, input: { sessionId: string; request: AgentUiRequest; response: AgentUiResponse }) => {
 	const runtime = get(sessionRuntimeBySessionIdAtomFamily(input.sessionId));
-	if (!runtime?.agentId || runtime.backend !== "dsh") return;
+	if (!runtime?.agentId) return;
 	const echo = buildAskEcho(input.request, input.response);
 	if (!echo) return;
 	const messages = get(sessionMessageCacheBySessionIdAtomFamily(input.sessionId))?.messages ?? [];

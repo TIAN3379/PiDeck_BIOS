@@ -68,8 +68,7 @@ describe("recentProviders 链路契约（源码级）", () => {
 		assert.match(sessionIpc, /settingsStore\.get\(\)\.recentProviders/);
 		// 当前供应商提到首位：最近使用的语义由「数组顺序」承载。
 		assert.match(sessionIpc, /\[provider, \.\.\.current\.filter/);
-		// DSH 会话跳过记录（与 lastUsedModel 同规则）。
-		const acceptedBlock = sessionIpc.slice(sessionIpc.indexOf('record?.backend !== "dsh"'), sessionIpc.indexOf('"Session prompt IPC completed"'));
+		const acceptedBlock = sessionIpc.slice(sessionIpc.indexOf("if (result.accepted)"), sessionIpc.indexOf('"Session prompt IPC completed"'));
 		assert.match(acceptedBlock, /recentProviders/);
 	});
 

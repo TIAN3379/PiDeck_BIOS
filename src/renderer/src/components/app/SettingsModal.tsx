@@ -49,7 +49,6 @@ const ImageGenSettingsTab = lazy(() => import("./settings/ImageGenSettingsTab").
 const ConfigPane = lazy(() => import("../../ConfigModal").then((m) => ({ default: m.ConfigPane })));
 import type { ConfigPaneHandle, ConfigPaneState } from "../../ConfigModal";
 
-// DSH 配置（HOME / 审批 / 外部会话）只放配置管理，避免设置页再开一个重复 tab
 // SettingsTabId 定义在 atoms，深链与侧栏共用同一套合法 tab；
 // 展示顺序与分组分割线统一收敛在 settings/settingsTabLayout.ts。
 
@@ -263,14 +262,14 @@ function SettingsModalContent(props: SettingsModalProps) {
 	const [focusPaneTarget] = useAtom(settingsFocusAtom);
 	// 深链的配置分页/供应商定位：快照进本地 state（focus atom 随后会被 useSettingsFocus 清空，
 	// 配置分区深链「圆球 → 去配置用量」需要在整个设置会话期间保持可投递给 ConfigPane）。
-	const [configFocus, setConfigFocus] = useState<{ configTab?: "models" | "auth" | "settings" | "trust" | "mcp" | "raw"; provider?: string; backendPane?: "dsh" | "pi" } | null>(() => {
+	const [configFocus, setConfigFocus] = useState<{ configTab?: "models" | "auth" | "settings" | "trust" | "mcp" | "raw"; provider?: string } | null>(() => {
 		const target = getDefaultStore().get(settingsFocusAtom);
-		return target?.pane === "config" ? { configTab: target.configTab, provider: target.provider, backendPane: target.backendPane } : null;
+		return target?.pane === "config" ? { configTab: target.configTab, provider: target.provider } : null;
 	});
 	useEffect(() => {
 		if (focusPaneTarget?.pane === "config") {
 			setPane("config");
-			setConfigFocus({ configTab: focusPaneTarget.configTab, provider: focusPaneTarget.provider, backendPane: focusPaneTarget.backendPane });
+			setConfigFocus({ configTab: focusPaneTarget.configTab, provider: focusPaneTarget.provider });
 		}
 	}, [focusPaneTarget]);
 	useSettingsFocus(activeTab, setActiveTab, persistTab);
@@ -290,7 +289,7 @@ function SettingsModalContent(props: SettingsModalProps) {
 	const dirtyFields = useMemo(() => computeDirtyFields(draftSettings as Record<string, unknown>, baseSnapshotRef.current as Record<string, unknown>), [draftSettings, baselineToken]);
 	// ── 视觉桥草稿：独立于全局设置（写 pi-deck-vision.json，走独立 IPC），脏标记/保存/取消由弹框统一管理 ──
 	const visionDraft = useVisionBridgeDraft();
-	// ── 生图草稿：独立文件 userData/imagegen.json，不属于 pi/dsh，放在设置页统一管理 ──
+	// ── 生图草稿：独立文件 userData/imagegen.json，不属于 pi 配置，放在设置页统一管理 ──
 	const imageGenRef = useRef<{ save: () => Promise<boolean> } | null>(null);
 	const [imageGenDirty, setImageGenDirty] = useState(false);
 	const handleImageGenDirtyChange = useCallback((dirty: boolean) => setImageGenDirty(dirty), []);
@@ -593,7 +592,7 @@ function SettingsModalContent(props: SettingsModalProps) {
 						</DialogClose>
 					</div>
 				</DialogHeader>
-				{/* 顶层分区：系统设置 / 配置管理。样式对齐配置页 Pi/DSH 分页（config-backend-switch），
+				{/* 顶层分区：系统设置 / 配置管理。样式对齐配置页分页（config-backend-switch），
 			    黄点 = 对应分区的未保存草稿；两个分区都保持挂载（forceMount + hidden）不丢草稿 */}
 				<Tabs
 					value={pane}
@@ -631,7 +630,6 @@ function SettingsModalContent(props: SettingsModalProps) {
 								projects={props.projects}
 								focusConfigTab={configFocus?.configTab}
 								focusProvider={configFocus?.provider}
-								focusBackendPane={configFocus?.backendPane}
 								onStateChange={handleConfigPaneStateChange}
 								// 嵌套弹层（用量查询「让 AI 帮我查」）整窗关闭走统一关闭确认，
 								// 不直连 onClose 裸关闭——系统设置/配置管理草稿都不能被静默丢弃。
@@ -851,7 +849,7 @@ function SettingsModalContent(props: SettingsModalProps) {
 									</Suspense>
 								</TabsContent>
 							)}
-							{/* ── 生图 tab：独立 imagegen.json，不属于 pi/dsh，放在设置页统一管理。
+							{/* ── 生图 tab：独立 imagegen.json，不属于 pi 配置，放在设置页统一管理。
 					    草稿保存在 ImageGenSection 内部，切换 tab 时保持挂载（hidden 而非卸载）以免丢失未保存修改。 */}
 							<TabsContent value="imagegen" className="settings-panel min-w-0" hidden={activeTab !== "imagegen"}>
 								<Suspense fallback={<SettingsTabLoading />}>

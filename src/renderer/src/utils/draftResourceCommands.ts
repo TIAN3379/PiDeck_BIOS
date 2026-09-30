@@ -31,8 +31,8 @@ export function draftResourceCommandsForProject(snapshot: DraftResourceCommandSn
 	return snapshot.projectId === projectId ? snapshot.commands : [];
 }
 
-export function selectComposerSuggestionCommands(isDshBackend: boolean, runtimeStarted: boolean, runtimeCommands: PiCommand[], draftCommands: PiCommand[]): PiCommand[] {
-	return isDshBackend || runtimeStarted ? runtimeCommands : draftCommands;
+export function selectComposerSuggestionCommands(runtimeStarted: boolean, runtimeCommands: PiCommand[], draftCommands: PiCommand[]): PiCommand[] {
+	return runtimeStarted ? runtimeCommands : draftCommands;
 }
 
 /** Maps Pi-discoverable local resources to the slash names Pi exposes before an agent starts. */

@@ -51,7 +51,7 @@ function loadConfigManager() {
 			}
 			if (id === "../../shared/i18n/mainProcessCopy") return { mainProcessT: () => "" };
 			if (id === "./parseProviderModels") return { parseProviderModelsResponse: () => [] };
-			if (id === "./providerMigration") {
+			if (id === "./piProviderConfig") {
 				return { isSafeProviderName: () => true };
 			}
 			if (id === "./tokendanceAttribution") {

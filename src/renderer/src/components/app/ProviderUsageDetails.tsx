@@ -15,7 +15,7 @@
 import { AlertCircle, Clock, RefreshCw } from "lucide-react";
 import { t } from "../../i18n";
 import { cn } from "../../lib/utils";
-import type { ProviderUsageResult, UsageProbeBackend } from "../../../../shared/types/providerUsage";
+import type { ProviderUsageResult } from "../../../../shared/types/providerUsage";
 import { useProviderUsageEntry, useProviderUsageRefresh, useProviderUsageState } from "../../hooks/useProviderUsage";
 import { formatAmount, formatBalance, relativeTimeParts, USAGE_TONE_BAR_CLASS, USAGE_TONE_TEXT_CLASS, usageToneForPercent, usageWindowLabelText, type UsageTone } from "../../utils/providerUsageDisplay";
 
@@ -78,15 +78,12 @@ const LABEL_CLASS = "shrink-0 text-caption leading-5 text-text-secondary";
 
 export function ProviderUsageDetails(props: {
 	provider: string;
-	/** 查询/缓存链路：dsh（$DSH_HOME 配置 + DSH 凭据库）或 pi（缺省）。
-	 *  圆球面板按会话后端透传——DSH 会话配在 dsh 链路的探针不会被当成 pi 配置漏查。 */
-	backend?: UsageProbeBackend;
 	/** 失败态「去配置」动作：圆球面板/选择器深链模型设置。缺省不渲染按钮。 */
 	onConfigureUsage?: () => void;
 	className?: string;
 }) {
-	const entry = useProviderUsageEntry(props.provider || undefined, props.backend);
-	const state = useProviderUsageState(props.provider || undefined, props.backend);
+	const entry = useProviderUsageEntry(props.provider || undefined);
+	const state = useProviderUsageState(props.provider || undefined);
 	const refresh = useProviderUsageRefresh();
 	if (!props.provider) return null;
 	const loading = entry.status === "loading";
@@ -116,7 +113,7 @@ export function ProviderUsageDetails(props: {
 					data-testid="provider-usage-refresh"
 					title={t("config.usage.refresh")}
 					aria-label={t("config.usage.refresh")}
-					onClick={() => refresh(props.provider, props.backend)}
+					onClick={() => refresh(props.provider)}
 					className="ml-auto flex h-5 w-5 flex-none items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-muted/60 hover:text-foreground"
 				>
 					<RefreshCw size={12} className={loading ? "animate-pideck-spin" : undefined} />

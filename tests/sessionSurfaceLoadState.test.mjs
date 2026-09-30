@@ -34,7 +34,6 @@ const sandbox = createTsSandbox({
 const sessionAtoms = sandbox("src/renderer/src/atoms/session-atoms.ts");
 const composerAtoms = sandbox("src/renderer/src/atoms/composer-atoms.ts");
 const timeline = sandbox("src/renderer/src/hooks/useSessionTimelineController.ts");
-const historyAvailability = sandbox("src/renderer/src/utils/sessionHistoryAvailability.ts");
 
 test("session load and send selectors retain current references across background patches", () => {
 	const store = createStore();
@@ -75,7 +74,7 @@ test("timeline controller exposes surface loading for the bottom composer gate",
 	assert.match(controllerSource, /isKnownEmptySessionRecord/);
 	// 切会话已有缓存或空草稿时不得把 loadState 打成 loading（否则空会话闪骨架）。
 	assert.match(controllerSource, /if \(cachedEntry \|\| knownEmpty\) return/);
-	// 预热写 filePath/dshSessionId 后仍粘住空会话，避免起始页 / 历史骨架抽搐。
+	// 预热写 filePath 后仍粘住空会话，避免起始页 / 历史骨架抽搐。
 	assert.match(controllerSource, /stickyEmptyRef/);
 	// 无锚点恢复必须等读盘完成，否则冷会话 scrollHeight≈0 把 restorePhase 钉成 complete。
 	assert.match(controllerSource, /if \(isSurfaceLoading\) return;\s*const requestOwnerKey = ownerKey;\s*if \(!anchor\)/);
@@ -133,15 +132,6 @@ test("isKnownEmptySessionRecord only treats drafts and file-less empty sessions 
 		}),
 		false,
 	);
-	assert.equal(
-		isKnownEmptySessionRecord({
-			status: "active",
-			messageCount: 0,
-			backend: "dsh",
-			dshSessionId: "sess_1",
-		}),
-		false,
-	);
 	// imagegen 会话历史独立存 ImageSessionStore，不体现在 filePath/messageCount：
 	// 已 promote 的 active 生图会话不能判空，否则重启后打开跳过历史加载显示空引导页。
 	assert.equal(
@@ -158,16 +148,6 @@ test("isKnownEmptySessionRecord only treats drafts and file-less empty sessions 
 			status: "draft",
 			messageCount: 0,
 			backend: "imagegen",
-		}),
-		true,
-	);
-	// 预热已写 host id，但草稿尚未开聊：仍是空会话，不能去拉历史骨架。
-	assert.equal(
-		isKnownEmptySessionRecord({
-			status: "draft",
-			messageCount: 0,
-			backend: "dsh",
-			dshSessionId: "sess_1",
 		}),
 		true,
 	);
@@ -209,14 +189,14 @@ test("ready with zero record count and no cache entry still stays loading", () =
 	assert.equal(staleRecordAfterDisk.isLoading, false);
 });
 
-test("history availability gate only flags pages main marked unavailable", () => {
-	const { sessionHistoryUnavailableState } = historyAvailability;
-	// DSH host 被手动停止：main 返回带原因的空页，渲染层必须进错误专态而不是写空缓存。
-	const stopped = sessionHistoryUnavailableState({ messages: [], total: 0, nextBefore: null, unavailable: "dsh-host-stopped" });
-	// 跨 realm 对象用字段比较（deepStrictEqual 会拿 prototype 身份，必然不等）
-	assert.equal(stopped?.status, "error");
-	assert.equal(stopped?.reason, "dsh-host-stopped");
-	// 真空会话（无 unavailable 字段）不能被误判成不可用——否则空草稿永远进错误态。
-	assert.equal(sessionHistoryUnavailableState({ messages: [], total: 0, nextBefore: null }), null);
-	assert.equal(sessionHistoryUnavailableState({ messages: [{ role: "user" }], total: 1, nextBefore: 0 }), null);
+test("session history pages no longer carry a host-unavailable reason", () => {
+	// 宿主不可读（DSH host 被停）这条链路已随 DSH 后端一起删除：
+	// 读取错误统一走普通 error 态，不再有 unavailable / reason 专态分支。
+	const types = readFileSync("src/shared/types/session.ts", "utf8");
+	assert.doesNotMatch(types, /unavailable/);
+	assert.doesNotMatch(types, /SessionHistoryUnavailableReason/);
+	assert.doesNotMatch(types, /dsh-host-stopped/);
+	const atoms = readFileSync("src/renderer/src/atoms/session-atoms.ts", "utf8");
+	assert.doesNotMatch(atoms, /SessionHistoryUnavailableReason/);
+	assert.doesNotMatch(atoms, /reason\?:/);
 });

@@ -178,7 +178,7 @@ export function SessionHoverCard({ children, session, title, projectName, status
 						</span>
 					)}
 
-					{/* 后端标识（dsh / imagegen） */}
+					{/* 后端标识（imagegen） */}
 					{session?.backend && session.backend !== "pi" && <SessionBackendMark backend={session.backend} />}
 
 					{/* 外部导入来源（codex / claude / workbuddy 等） */}

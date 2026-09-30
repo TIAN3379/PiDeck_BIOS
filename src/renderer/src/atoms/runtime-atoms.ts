@@ -69,7 +69,6 @@ const agentInventorySourceAtom = atom((get) => {
 				runtimeGeneration: runtime.runtimeGeneration,
 				createdAt: runtime.createdAt,
 				compactionCount: runtime.compactionCount,
-				// DSH 会话的 piSessionId 存的是 host 的 dshSessionId（agents:state 事件透传）；
 				// backend 标记运行时后端，侧栏徽章与「agent↔会话」配对依赖它。
 				backend: runtime.backend ?? "pi",
 			};

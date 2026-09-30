@@ -1,5 +1,5 @@
 /**
- * 「用量查询」入口按钮（柱状图图标，模型页/认证页/DSH 卡片头部图标组共用）。
+ * 「用量查询」入口按钮（柱状图图标，模型页/认证页卡片头部图标组共用）。
  *
  * 行为：**常驻**。这里既是探针配置入口（通用 / New API / Cookie 模板），也是
  * provider 级「是否启用用量查询」开关的唯一位置（弹窗里的开关，默认关）——
@@ -7,11 +7,10 @@
  * 已改为无条件渲染。
  */
 import { BarChart3 } from "lucide-react";
-import type { UsageProbeBackend } from "../../../../shared/types/providerUsage";
 import { t } from "../../i18n";
 import { Button } from "../ui-shadcn/button";
 
-export function UsageQueryEntryButton(props: { provider: string; backend?: UsageProbeBackend; onOpen: () => void; className?: string; iconClassName?: string }) {
+export function UsageQueryEntryButton(props: { provider: string; onOpen: () => void; className?: string; iconClassName?: string }) {
 	return (
 		<Button
 			variant="ghost"

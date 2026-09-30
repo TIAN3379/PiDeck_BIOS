@@ -15,11 +15,11 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 
 // ── shared/hiddenModules.ts ─────────────────────────────────────────────
 
-test("可隐藏 tab 都是真实存在的设置 tab；dsh 是唯一的非 tab 模块", () => {
+test("可隐藏模块都是真实存在的设置 tab", () => {
 	for (const id of HIDEABLE_SETTINGS_TAB_IDS) {
 		assert.ok(SETTINGS_TAB_IDS.includes(id), `${id} 不是 SETTINGS_TAB_IDS 里的 tab`);
 	}
-	assert.deepEqual(plain(HIDEABLE_MODULE_IDS), [...plain(HIDEABLE_SETTINGS_TAB_IDS), "dsh"]);
+	assert.deepEqual(plain(HIDEABLE_MODULE_IDS), plain(HIDEABLE_SETTINGS_TAB_IDS));
 	// 应用基础项不可隐藏（外观放着开关本身，隐藏后无法找回）
 	for (const id of ["common", "appearance", "shortcuts", "notification", "proxy", "dev", "storage", "backup", "editors"]) {
 		assert.equal(HIDEABLE_SETTINGS_TAB_IDS.includes(id), false, `${id} 不应可隐藏`);
@@ -34,7 +34,7 @@ test("normalizeHiddenModules：非数组回落空数组，只收非空字符串�
 });
 
 test("normalizeHiddenModules：容忍未知 id（可能来自更新版本），不按清单过滤", () => {
-	assert.deepEqual(plain(normalizeHiddenModules(["future-module", "dsh"])), ["future-module", "dsh"]);
+	assert.deepEqual(plain(normalizeHiddenModules(["future-module", "legacy-module"])), ["future-module", "legacy-module"]);
 });
 
 test("normalizeHiddenModules：按上限截断", () => {
@@ -44,12 +44,12 @@ test("normalizeHiddenModules：按上限截断", () => {
 
 test("toggleHiddenModule 不改入参且幂等；isModuleHidden 读成员关系", () => {
 	const base = Object.freeze(["im"]);
-	assert.deepEqual(plain(toggleHiddenModule(base, "dsh", true)), ["im", "dsh"]);
+	assert.deepEqual(plain(toggleHiddenModule(base, "pet", true)), ["im", "pet"]);
 	assert.deepEqual(plain(toggleHiddenModule(base, "im", true)), ["im"]);
 	assert.deepEqual(plain(toggleHiddenModule(base, "im", false)), []);
-	assert.deepEqual(plain(toggleHiddenModule(base, "dsh", false)), ["im"]);
-	assert.equal(isModuleHidden(["dsh"], "dsh"), true);
-	assert.equal(isModuleHidden(["dsh"], "im"), false);
+	assert.deepEqual(plain(toggleHiddenModule(base, "pet", false)), ["im"]);
+	assert.equal(isModuleHidden(["pet"], "pet"), true);
+	assert.equal(isModuleHidden(["pet"], "im"), false);
 });
 
 // ── settingsTabVisibility.ts ────────────────────────────────────────────
@@ -59,7 +59,7 @@ test("默认（空数组）不过滤任何 tab，布局原样输出", () => {
 });
 
 test("不可隐藏的 tab 即使出现在 hiddenModules 里也不会消失", () => {
-	const visible = resolveVisibleSettingsTabs(["common", "appearance", "dsh", "unknown"], new Set());
+	const visible = resolveVisibleSettingsTabs(["common", "appearance", "legacy-module", "unknown"], new Set());
 	assert.deepEqual(plain(visible), plain(SETTINGS_TAB_LAYOUT));
 	assert.equal(isSettingsTabHidden(["common"], "common"), false);
 	assert.equal(isSettingsTabHidden(["im"], "im"), true);

@@ -288,9 +288,9 @@ test("IPC / preload 三处同步注册 pi 环境引导通道", () => {
 	assert.match(body, /useMirror === true/);
 });
 
-test("安装器复用 DSH runtime IO，index.ts 装配真实下载/解压实现", () => {
+test("安装器复用通用归档 IO，index.ts 装配真实下载/解压实现", () => {
 	const installer = readFileSync("src/main/pi/runtimeNodeInstall.ts", "utf8");
-	assert.match(installer, /from "\.\.\/dsh\/runtime\/DshRuntimeManager"/);
+	assert.match(installer, /from "\.\.\/runtime\/archiveIo"/);
 	const index = readFileSync("src/main/index.ts", "utf8");
 	assert.match(index, /piRuntimeNodeInstaller:\s*\{/);
 	assert.match(index, /createNetDownloader/);

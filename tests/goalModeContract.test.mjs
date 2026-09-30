@@ -5,10 +5,8 @@ import test from "node:test";
 const agentTypes = readFileSync("src/shared/types/agent.ts", "utf8");
 const composerComponents = readFileSync("src/renderer/src/components/session/ComposerComponents.tsx", "utf8");
 const composerModeSelect = readFileSync("src/renderer/src/components/session/ComposerComponents.tsx", "utf8");
-const controller = readFileSync("src/renderer/src/hooks/useSessionComposerController.ts", "utf8");
 const builtIns = readFileSync("src/main/extensions/builtInExtensions.ts", "utf8");
 const extension = readFileSync("resources/extensions/pi-deck-goal-mode.ts", "utf8");
-const sendHook = readFileSync("src/renderer/src/hooks/useSessionSend.ts", "utf8");
 const timelineCss = readFileSync("src/renderer/src/styles/timeline.css", "utf8");
 
 test("goal mode is a first-class ComposerAgentMode", () => {
@@ -29,13 +27,6 @@ test("mode picker lists goal between plan and imagegen", () => {
 	const goalOrder = composerModeSelect.indexOf('mode === "goal"');
 	const imagegenOrder = composerModeSelect.indexOf('mode === "imagegen"');
 	assert.ok(planOrder >= 0 && goalOrder >= 0 && imagegenOrder >= 0);
-});
-
-test("DSH setMode pauses on normal and resumes paused goals", () => {
-	assert.match(controller, /runDshGoalAction\(agentId, "pause"\)/);
-	assert.match(controller, /runDshGoalAction\(agentId, "resume"\)/);
-	assert.match(controller, /dshGoal\.pendingNotice/);
-	assert.match(controller, /deriveComposerAgentMode/);
 });
 
 test("pi goal extension auto-continues until complete, blocked, or max rounds", () => {
@@ -85,7 +76,4 @@ test("pi goal extension: resume kicks off a turn and abort stops the loop", () =
 	assert.match(extension, /停止会话却停不下来/);
 });
 
-test("send path keeps DSH off agentMessage and uses /goal transform", () => {
-	assert.match(sendHook, /applyDshGoalSendTransform/);
-	assert.match(sendHook, /isDshSend \? "normal" : sendMode/);
-});
+// End of goal-mode contract coverage.

@@ -1334,116 +1334,6 @@ test("reselecting an already-applied model or thinking level skips duplicate run
 	assert.equal(harness.calls.runtimeState, 0);
 });
 
-test("DSH model change preserves the recorded thinking preference", async () => {
-	// 模型和思考档位是独立选择。即使 host 此次返回了规范化后的 high，PiDeck 也不能
-	// 擅自把用户保存的 max 改掉；用户切回别的模型时仍应保留原选择。
-	const { SessionRuntimeCoordinator } = loadCoordinator();
-	const harness = createHarness({
-		entry: { backend: "dsh", thinkingLevel: "max" },
-		tabs: [{ id: "agent-a", status: "idle", createdAt: 1 }],
-		runtimeState: { provider: "jiyuan", modelId: "deepseek-v4-flash-0731", thinkingLevel: "high" },
-	});
-	harness.agents.backend = "dsh";
-	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
-	const runtimeGeneration = coordinator.bindExistingAgent("session-1", "agent-a");
-
-	const result = await coordinator.setRuntimeModel({ sessionId: "session-1", agentId: "agent-a", runtimeGeneration }, "jiyuan", "deepseek-v4-flash-0731");
-
-	assert.equal(result.ok, true);
-	assert.equal(harness.entry.model?.provider, "jiyuan");
-	assert.equal(harness.entry.model?.modelId, "deepseek-v4-flash-0731");
-	assert.equal(harness.entry.thinkingLevel, "max", "换模型不得改写用户保存的思考档位");
-});
-
-test("DSH model change keeps the thinking preference when the new model reports none", async () => {
-	// 模型目录没有 reasoningEfforts 不是 PiDeck 清空选择的理由；后端后续决定如何处理。
-	const { SessionRuntimeCoordinator } = loadCoordinator();
-	const harness = createHarness({
-		entry: { backend: "dsh", thinkingLevel: "max" },
-		tabs: [{ id: "agent-a", status: "idle", createdAt: 1 }],
-		runtimeState: { provider: "jiyuan", modelId: "deepseek-v4-flash-0731" },
-	});
-	harness.agents.backend = "dsh";
-	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
-	const runtimeGeneration = coordinator.bindExistingAgent("session-1", "agent-a");
-
-	const result = await coordinator.setRuntimeModel({ sessionId: "session-1", agentId: "agent-a", runtimeGeneration }, "jiyuan", "deepseek-v4-flash-0731");
-
-	assert.equal(result.ok, true);
-	assert.equal(harness.entry.thinkingLevel, "max", "新模型未返回档位时也不得清除用户选择");
-});
-
-test("DSH activation preserves a thinking preference the host explicitly rejects", async () => {
-	// 能力判断属于 host / pi-ai。当前模型拒绝档位时仍保留用户偏好，以便 provider、
-	// 模型或其配置随后变化后再次应用；PiDeck 不可根据一次错误静默清空选择。
-	const { SessionRuntimeCoordinator } = loadCoordinator();
-	const harness = createHarness({
-		entry: {
-			status: "active",
-			backend: "dsh",
-			model: { provider: "jiyuan", modelId: "deepseek-v4-flash-0731" },
-			thinkingLevel: "max",
-		},
-		tabs: [
-			{
-				id: "agent-old",
-				projectId: "project-1",
-				cwd: "C:/project",
-				title: "Session 1",
-				status: "idle",
-				createdAt: 1,
-			},
-		],
-	});
-	harness.agents.backend = "dsh";
-	harness.agents.setThinking = async () => {
-		harness.calls.setThinking += 1;
-		throw new Error('provider "jiyuan" model "deepseek-v4-flash-0731" does not support reasoning effort "max"');
-	};
-	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
-	const firstGeneration = coordinator.bindExistingAgent("session-1", "agent-old");
-
-	const restarted = await coordinator.restartSession("session-1", "agent-old");
-
-	assert.ok(restarted, "DSH 档位被拒不应让重启失败（警告 + 保留偏好）");
-	assert.equal(firstGeneration, 1);
-	assert.equal(harness.entry.thinkingLevel, "max", "host 拒绝也不得清空用户选择");
-});
-
-test("DSH activation keeps the thinking preference on non-effort host errors", async () => {
-	// busy/未就绪等 host 错误不代表档位不受支持：不得误清用户偏好。
-	const { SessionRuntimeCoordinator } = loadCoordinator();
-	const harness = createHarness({
-		entry: {
-			status: "active",
-			backend: "dsh",
-			model: { provider: "jiyuan", modelId: "deepseek-v4-flash-0731" },
-			thinkingLevel: "max",
-		},
-		tabs: [
-			{
-				id: "agent-old",
-				projectId: "project-1",
-				cwd: "C:/project",
-				title: "Session 1",
-				status: "idle",
-				createdAt: 1,
-			},
-		],
-	});
-	harness.agents.backend = "dsh";
-	harness.agents.setThinking = async () => {
-		harness.calls.setThinking += 1;
-		throw new Error("dsh selectModel busy: {}");
-	};
-	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
-	coordinator.bindExistingAgent("session-1", "agent-old");
-
-	await coordinator.restartSession("session-1", "agent-old");
-
-	assert.equal(harness.entry.thinkingLevel, "max", "非档位类 host 错误不得清掉用户偏好");
-});
-
 test("pi model change keeps the recorded thinking level untouched", async () => {
 	// pi 的思考档位是独立偏好，换模型不改变它；catalog.thinkingLevel 只由
 	// setRuntimeThinking / applyPreferences 管理，换模型不得顺带清掉。
@@ -1630,19 +1520,6 @@ test("catalog message mutation writes the file only after the runtime is stopped
 		harness.calls.mutatePersisted.map((item) => item.operation),
 		["edit", "delete", "resend"],
 	);
-});
-
-test("catalog message mutation refuses DSH sessions", async () => {
-	const { SessionRuntimeCoordinator } = loadCoordinator();
-	const harness = createHarness({
-		entry: catalogEntry({ backend: "dsh", dshSessionId: "dsh-1", status: "active" }),
-	});
-	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
-	const result = await coordinator.deleteCatalogMessage("session-1", "message-1");
-	assert.equal(result.ok, false);
-	assert.equal(result.error.code, "SESSION_COMMAND_FAILED");
-	assert.match(result.error.debugDetails, /dsh/);
-	assert.equal(harness.calls.mutatePersisted.length, 0);
 });
 
 test("SessionCommandIpcError maps MESSAGE_NOT_FOUND to the dedicated copy key", () => {

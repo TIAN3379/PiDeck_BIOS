@@ -56,7 +56,7 @@ export type TurnRowProps = {
 	run: AgentRunItem;
 	/** 所属会话 id（转交给 live InterimAnswer） */
 	sessionId?: string;
-	/** 运行时后端（pi/dsh）：决定行头回复者署名；缺省 "pi"（旧调用方兼容） */
+	/** 运行时后端（pi/生图）：决定行头回复者署名；缺省 "pi"（旧调用方兼容） */
 	backend?: AgentBackend;
 	/** 新消息入场动画：仅发送后尾部新增的消息播放一次 */
 	fresh?: boolean;
@@ -287,7 +287,7 @@ export const TurnRow = memo(function TurnRow(props: TurnRowProps) {
 	return (
 		<article ref={rowRef} className={`turn-row mb-6 w-full min-w-0 max-w-full ${props.agentRunning && !isComplete ? "turn-row--running" : isComplete ? "turn-row--complete" : "turn-row--pending"} ${props.fresh ? "turn-row--fresh" : ""} ${props.topFresh ? "turn-row--top-fresh" : ""}`} data-message-id={run.id}>
 			<div className="flex min-w-0 flex-col gap-3">
-				{/* 行头：头像 + Pi/DSH 署名 + 时间。耗时不放行头——回复生成时用户视线在底部，
+				{/* 行头：头像 + Pi/生图 署名 + 时间。耗时不放行头——回复生成时用户视线在底部，
 				    统一显示在 turn 尾部（见底部耗时行），不用翻回开头看跑了多久。 */}
 				<TurnAuthorHeader backend={props.backend} endedAt={run.endedAt} />
 

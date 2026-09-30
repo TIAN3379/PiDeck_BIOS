@@ -29,15 +29,10 @@ type UseProjectSyncInput = {
 	api: {
 		projects: { list: () => Promise<Project[]> };
 		git: { worktreeList: (projectId: string) => Promise<WorktreeEntry[]>; branches: (projectId: string) => Promise<{ current: string | null; branches: string[] }> };
-		settings?: {
-			get: () => Promise<{ dshAutoImportSessions?: boolean }>;
-		};
 		sessions: {
 			listCatalog: (projectId: string, options?: { scan?: boolean }) => Promise<SessionRecord[]>;
 			/** 后台扫描完成推送（主进程 → 渲染层）；可选，缺省时退化为纯轮询。 */
 			onCatalogRefreshed?: (listener: (input: { projectId: string }) => void) => () => void;
-			/** 只读扫 $DSH_HOME，把外部根会话写入 catalog；关闭自动导入时调用方不应触发。 */
-			syncDshForeignSessions?: () => Promise<{ imported: number; skipped: number }>;
 		};
 		files: {
 			list: (projectId: string, options?: { maxDepth?: number; directory?: string }) => Promise<FileTreeNode[]>;
@@ -281,21 +276,6 @@ export function useProjectSync(input: UseProjectSyncInput) {
 	}, [api, replaceProjectSessions, setCatalogLoadStateGuarded]);
 
 	/**
-	 * DSH 会话在 $DSH_HOME，不在项目目录 JSONL。添加项目 / 右键刷新若只扫 pi，
-	 * 侧栏会缺刚对上 cwd 的外部会话。关闭自动导入后保持现状，不偷偷写入。
-	 */
-	async function syncDshForeignSessionsIfEnabled() {
-		if (!api.sessions.syncDshForeignSessions || !api.settings?.get) return;
-		const settings = await api.settings.get();
-		if (settings.dshAutoImportSessions === false) return;
-		try {
-			await api.sessions.syncDshForeignSessions();
-		} catch {
-			// 磁盘扫描失败不阻断项目刷新：已入册的 DSH/pi 会话仍应出现。
-		}
-	}
-
-	/**
 	 * loading 兜底两级看门狗：一级超时静默重试一轮（主进程目录缓存在扫描后已含记录，
 	 * 重试即揭开）；二级仍超时则强制置 ready，不让侧栏永远转圈，数据靠后续推送/轮询补齐。
 	 * 重试或揭开产生的任何状态变更都会经 guarded setter 取消本看门狗。
@@ -324,7 +304,6 @@ export function useProjectSync(input: UseProjectSyncInput) {
 	}
 
 	async function refreshProjectTree(project: Project) {
-		await syncDshForeignSessionsIfEnabled();
 		const latestProjects = await refreshProjects();
 		const latestProject = latestProjects.find((candidate) => candidate.id === project.id);
 		// 项目可能在菜单打开后被外部删除。刷新存在性后立即停止后续会话/Git 扫描，
@@ -391,7 +370,6 @@ export function useProjectSync(input: UseProjectSyncInput) {
 		refreshProjectSessions,
 		refreshFiles,
 		refreshProjectTree,
-		syncDshForeignSessionsIfEnabled,
 		beginFileTreeRequest,
 		isFileTreeRequestCurrent,
 	};

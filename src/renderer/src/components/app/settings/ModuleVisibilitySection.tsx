@@ -1,9 +1,9 @@
-import { memo, useMemo } from "react";
+import { memo } from "react";
 import { useAtomValue } from "jotai";
 import type { AppSettings } from "../../../../../shared/types";
 import { HIDEABLE_MODULE_IDS, isModuleHidden, toggleHiddenModule, type HideableModuleId } from "../../../../../shared/hiddenModules";
 import { t, type TranslationKey } from "../../../i18n";
-import { imageGenConfigAtom, sessionRecordsAtom, sessionRuntimeByIdAtom } from "../../../atoms";
+import { imageGenConfigAtom } from "../../../atoms";
 import { useFeishuBridge } from "../../../hooks/useFeishuBridge";
 import { Badge } from "../../ui-shadcn/badge";
 import { SettingsSection } from "./SettingsStorageTab";
@@ -29,7 +29,6 @@ const MODULE_LABEL_KEYS: Record<HideableModuleId, TranslationKey> = {
 	git: SETTINGS_TAB_LABEL_KEYS.git,
 	usage: SETTINGS_TAB_LABEL_KEYS.usage,
 	process: SETTINGS_TAB_LABEL_KEYS.process,
-	dsh: "settings.modules.dsh",
 };
 
 /** 每个模块隐藏后受影响的入口说明（行描述）。 */
@@ -42,7 +41,6 @@ const MODULE_DESC_KEYS: Record<HideableModuleId, TranslationKey> = {
 	git: "settings.modules.gitDesc",
 	usage: "settings.modules.usageDesc",
 	process: "settings.modules.processDesc",
-	dsh: "settings.modules.dshDesc",
 };
 
 /**
@@ -63,17 +61,11 @@ export const ModuleVisibilitySection = memo(function ModuleVisibilitySection(pro
 	const hiddenModules = draft.hiddenModules ?? [];
 	const feishu = useFeishuBridge();
 	const imageGenConfig = useAtomValue(imageGenConfigAtom);
-	const sessionRecords = useAtomValue(sessionRecordsAtom);
-	const runtimeById = useAtomValue(sessionRuntimeByIdAtom);
-	// 会话目录里带 DSH 后端且进程未关闭的会话数：closed/detached 的不算「还在跑」
-	const dshActive = useMemo(() => Object.values(sessionRecords).some((record) => record.backend === "dsh" && runtimeById[record.id] !== undefined && runtimeById[record.id]?.status !== "closed" && runtimeById[record.id]?.status !== "detached"), [sessionRecords, runtimeById]);
 
 	const activeBadge = (moduleId: HideableModuleId): TranslationKey | null => {
 		switch (moduleId) {
 			case "im":
 				return feishu.status.status === "connected" ? "settings.modules.statusConnected" : null;
-			case "dsh":
-				return dshActive ? "settings.modules.statusRunning" : null;
 			case "pet":
 				return draft.petEnabled ? "settings.modules.statusEnabled" : null;
 			case "web":

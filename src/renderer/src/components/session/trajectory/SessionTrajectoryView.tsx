@@ -88,25 +88,12 @@ function durationLabel(record: TrajectoryRecord): string {
  * 数据来自当前栏已加载的 ChatMessage（含历史页），不另开 IPC。
  * drawer 变体改为竖排：概览 / 账本 / inspector 叠放，适配右侧窄栏。
  */
-export function SessionTrajectoryView(props: {
-	sessionId: string;
-	messages: ChatMessage[];
-	processEvents?: SessionProcessEvent[];
-	systemPrompt?: string;
-	/** 会话是否 DSH 后端（系统提示说明文案按后端区分）。 */
-	isDsh?: boolean;
-	hasMoreMessages?: boolean;
-	isLoadingMoreMessages?: boolean;
-	onLoadMore?: () => void;
-	variant?: "page" | "drawer";
-}) {
+export function SessionTrajectoryView(props: { sessionId: string; messages: ChatMessage[]; processEvents?: SessionProcessEvent[]; systemPrompt?: string; hasMoreMessages?: boolean; isLoadingMoreMessages?: boolean; onLoadMore?: () => void; variant?: "page" | "drawer" }) {
 	const runtime = useAtomValue(sessionRuntimeBySessionIdAtomFamily(props.sessionId));
-	// 对外「N 轮」口径（统一轮次契约）：DSH 会话用 host sessionStats（官方，与
-	// dsh-web 一致，含 goal 自动续跑轮）；pi 会话（及 DSH 投影未到时的兜底）按
-	// 发言权周期计（countUserTurns，与分页/缓存协议同口径，开口即算一轮）。
+	// 对外「N 轮」按发言权周期计（开口即算一轮）。
 	// 账本分组结构仍按 user 开轮（buildTrajectory），连发 user 时组数可能略多于
 	// 发言权轮数——账本是结构展示，对外计数统一走 countUserTurns。
-	const dialogueTurns = props.isDsh === true && runtime?.state?.dshSessionStats ? runtime.state.dshSessionStats.turns : countUserTurns(props.messages);
+	const dialogueTurns = countUserTurns(props.messages);
 	const [now, setNow] = useState(() => Date.now());
 	const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
 	const [range, setRange] = useState<TrajectoryTimeRange | undefined>(undefined);
@@ -176,7 +163,7 @@ export function SessionTrajectoryView(props: {
 			<TrajectoryOverview records={model.records} domainStart={model.domainStart} domainEnd={model.domainEnd} range={range} selectedId={selected?.id} onSelect={setSelectedId} onRangeChange={setRange} onHoverTick={refreshNow} />
 			<div className={drawer ? "grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(140px,38%)]" : "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(220px,32%)]"}>
 				<TrajectoryLedger records={visible} turns={model.turns} now={now} selectedId={selected?.id} onSelect={setSelectedId} borderBottom={drawer} scrollRef={ledgerScrollRef} />
-				<TrajectoryInspector record={selected} runtimeState={runtime?.state} isDsh={props.isDsh} />
+				<TrajectoryInspector record={selected} runtimeState={runtime?.state} />
 			</div>
 		</div>
 	);
@@ -370,7 +357,7 @@ function TrajectoryLedger(props: {
 }
 
 /**
- * dsh-web 详情面板的复制控件（CodeBlock / JsonTree）：
+ * 详情面板的复制控件（CodeBlock / JsonTree）：
  * 工具入参、结果、思考正文各自一块，点复制写整段。
  */
 function CopyableBlock(props: { label?: string; text: string }) {
@@ -402,12 +389,7 @@ function CopyableBlock(props: { label?: string; text: string }) {
 	);
 }
 
-function TrajectoryInspector(props: {
-	record?: TrajectoryRecord;
-	runtimeState?: AgentRuntimeState;
-	/** 会话是否 DSH 后端（系统提示说明文案按后端区分）。 */
-	isDsh?: boolean;
-}) {
+function TrajectoryInspector(props: { record?: TrajectoryRecord; runtimeState?: AgentRuntimeState }) {
 	const record = props.record;
 	const state = props.runtimeState;
 	if (!record) {
@@ -419,7 +401,7 @@ function TrajectoryInspector(props: {
 				{record.kind === "tool" ? <Wrench size={14} /> : <Hash size={14} />}
 				{record.kind === "tool" ? record.toolName : kindLabel(record)}
 			</div>
-			{record.kind === "systemPrompt" ? <p className="mb-2 text-caption text-muted-foreground">{props.isDsh ? t("session.trajectory.systemPromptHintDsh") : t("session.trajectory.systemPromptHint")}</p> : null}
+			{record.kind === "systemPrompt" ? <p className="mb-2 text-caption text-muted-foreground">{t("session.trajectory.systemPromptHint")}</p> : null}
 			<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-caption">
 				{record.startedAt > 0 ? (
 					<>
