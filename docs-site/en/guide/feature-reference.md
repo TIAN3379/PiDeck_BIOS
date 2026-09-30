@@ -55,11 +55,11 @@ Three pills switch the sidebar view; the selection is remembered:
 - **Session row**:
   - Click → **preview** in the center; double-click → **pin** as a permanent tab.
   - Status dot: running (yellow) / idle (blue) / error (red).
-  - Row badges: backend (pi / DSH / Codex / Claude / OpenCode / imagegen), anonymous, pinned, sub-agent count (click to expand the sub-agent list).
+  - Row badges: backend (pi / imagegen), source (Codex / Claude / OpenCode), anonymous, pinned, sub-agent count (click to expand the sub-agent list).
   - `⋯` / right-click → session menu (below).
   - Drag a session row to the chat area edge → **split view**.
 - **Show more**: each project shows the latest 5 sessions by default; click the bottom button to page.
-- **Source filter** (Filter icon on the project row on hover): filter that project's history by source (pi / codex / claude / opencode / dsh / imagegen…), remembered locally.
+- **Source filter** (Filter icon on the project row on hover): filter that project's history by source (pi / codex / claude / opencode / imagegen…), remembered locally.
 
 ### Projects view
 
@@ -97,7 +97,7 @@ Three pills switch the sidebar view; the selection is remembered:
 | Rename | In-place title edit |
 | Pin / Unpin | Pin to the top of the tree (persisted) |
 | Duplicate session | Copy as a new session |
-| Export HTML | Export the session as a web page (not for DSH) |
+| Export HTML | Export the session as a web page |
 | Copy session file path / Open session JSONL | Debug helpers; shown when the file exists |
 | Restart session | Restart the Agent process (running sessions) |
 | Reload session | Only for sessions without a live process |
@@ -135,8 +135,6 @@ Three pills switch the sidebar view; the selection is remembered:
 
 - **Breadcrumb**: `project / session title`; hover for the full name.
 - **Anonymous badge**: shown for the project-less "Chat area".
-- **DSH tools button** (DSH sessions with a running Agent): goal (progress/pause/resume/complete/clear/new), sub-agents, skills.
-- **Permission preset pill** (DSH draft phase): pick a permission preset; locked after activation.
 - **Exit split** (maximize button on a split pane): leaves split view.
 
 ### Composer
@@ -163,8 +161,8 @@ Three pills switch the sidebar view; the selection is remembered:
 
 - **`+` menu**: attachment (hidden in imagegen), skills, prompt templates, mode switch (normal / goal / plan / imagegen; a `×` appears when a special mode is active).
 - **Model / thinking chip** (center): shows `model · thinking level`. Click for the model picker (search, grouped by provider, favorites, usage badges, refresh) or the thinking picker (off → max). Switching models mid-run applies after the current round ("old → new"); switches that need a restart prompt for confirmation. You can also cycle with shortcuts: `Ctrl+M` through favorite models, `Ctrl+T` through the levels the current model supports (both rebindable in Settings → Shortcuts).
-- **Backend switcher** (bottom-left logo): pi / DSH / imagegen. Locked once the session is active.
-- **Safety level** (bottom-left): security gate levels (off/standard/strict) for pi; permission presets for DSH.
+- **Backend switcher** (bottom-left logo): pi / imagegen. Locked once the session is active.
+- **Safety level** (bottom-left): security gate levels (off/standard/strict) for pi.
 - **Context ring** (next to send): context usage; click to expand: two-segment usage, cache hits, token details, reply performance, usage query, compaction entry.
 - **Git branch chip** (bottom-right): current branch; switching asks for confirmation.
 
@@ -193,7 +191,7 @@ Below the input card: rounds/steps, duration, first-token latency, tps, total to
 
 ### Info strips (above the composer)
 
-- **Goal strip**: current goal + phase (active / paused / blocked), with pause/resume/clear (clear asks confirmation). DSH goal mode.
+- **Goal strip**: current goal + phase (active / paused / blocked), with pause/resume/clear (clear asks confirmation).
 - **Todo strip**: synced from the Agent's todo card, with completed/in-progress counts.
 - **Files strip**: files modified this round; expand to see diffs, "Save all"; per-row open-file and diff-viewer actions.
 - **Sub-agents strip**: running sub-agents; "Open sub-session" jumps there, "View full result" opens a dialog.
@@ -279,7 +277,7 @@ Shows the current session's run trace (message/tool events in per-round lanes). 
   - **All**: files + conversation; a conversation scope **forks into a new session** (the original is kept).
   - All restores confirm first.
 - **Refresh / Load more**: manual refresh and paging.
-- **Boundary**: pi-backend sessions only; DSH / imagegen say unsupported.
+- **Boundary**: pi-backend sessions only; imagegen says unsupported.
 
 ---
 
@@ -330,6 +328,6 @@ Shows the current session's run trace (message/tool events in per-round lanes). 
 ## 7. Settings Entry Points
 
 - **System settings** (bottom-left gear): appearance, proxy, web service, editors, Git commit, dev/updates, Feishu, desktop pet, storage & logs, usage stats, process monitor, vision bridge, imagegen — see [Settings & Skills](/en/guide/settings).
-- **Config management** (switchable inside the settings dialog): pi / DSH backend models, auth, settings.json, trust, MCP, raw JSON files, security (tool confirmation), extensions, skills, prompts.
+- **Config management** (switchable inside the settings dialog): pi backend models, auth, settings.json, trust, MCP, raw JSON files, security (tool confirmation), extensions, skills, prompts.
 
 For problems, see the [Troubleshooting guide](/en/guide/troubleshooting).

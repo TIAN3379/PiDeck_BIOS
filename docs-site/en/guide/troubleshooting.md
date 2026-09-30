@@ -183,7 +183,7 @@ Settings → Storage & logs:
 ### Where are sessions stored / how to back up
 
 - Session files: Settings → Storage & logs → Open data directory; the chat record directory is changeable via the Chat section `⋯` menu;
-- Export a single session: session menu → Export HTML (not for DSH).
+- Export a single session: session menu → Export HTML.
 
 ### Privacy & telemetry
 
@@ -212,7 +212,6 @@ Settings → Dev → Update source: switch gateway (ghfast / ghproxy.net / CN mi
 | Generate images | Settings → Imagegen (provider/model/reference-image mode) |
 | Feishu bot | Settings → Feishu bot (the "Usage guide" dialog has the full flow) |
 | Usage/balance queries | Usage-query button (generic / New API templates), or Settings → Usage stats |
-| DSH backend | Settings dialog → Config → DSH (install/version/models/permissions) |
 | External editors | Settings → External editors (detect/path/enable) |
 | LAN access (phone preview) | Settings → Web service (port/QR code) |
 
