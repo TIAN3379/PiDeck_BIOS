@@ -45,6 +45,21 @@ jobs:
         # 修复用 npm run format（或编辑器装 Biome 插件保存即格式化）。
         run: npm run check:format
 
+      - name: Install BIOS Agent package dependencies
+        # 独立 Pi Package 自带依赖与锁文件：Pi 宿主包（@earendil-works/pi-coding-agent）
+        # 由 packages/bios-agent 的 devDependency 声明并在这里安装，
+        # 包内类型检查与集成用例因此不依赖开发机的磁盘布局。
+        working-directory: packages/bios-agent
+        run: npm ci
+
+      - name: BIOS Agent package gates
+        # 包内门禁（类型 / 格式 / 测试）单独成一步：根 `npm run check:format` 与
+        # 根 tsconfig 都不覆盖 packages/，必须在这里显式执行，
+        # 否则"包内检查通过"只能靠本地手工跑。
+        # Pi 集成用例要求宿主可用，因此这一步不得在宿主缺失时静默跳过。
+        working-directory: packages/bios-agent
+        run: npm run typecheck && npm run check:format && npm test
+
       - name: Test
         # 串行执行：并发模式（--test-concurrency=4）下测试文件共享进程全局状态，
         # Windows runner 偶发死锁挂起（二分定位：546 文件串行全过、并发偶发挂）；

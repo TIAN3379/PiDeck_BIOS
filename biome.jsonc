@@ -45,6 +45,12 @@
 			"tests/**",
 			"scripts/**",
 			"e2e/**",
+			// 独立 Pi Package（packages/bios-agent）有自己的格式门禁
+			// （包内 `npm run check:format`，已接入 CI）。根命令
+			// `biome format src tests scripts e2e` 不会扫到这里，
+			// 登记在 includes 只是让编辑器与全量工具认识这些文件；
+			// 其他 packages/*（历史 DSH 遗留包）不登记，避免引入无关格式改动。
+			"packages/bios-agent/**",
 			// Tailwind v4 语法（@custom-variant/@theme）css formatter 尚不支持；
 			// 且项目 CSS 有精确匹配的契约测试与双轨迁移纪律（AGENTS.md），
 			// 全量重排 foundation/surfaces 等手写样式文件风险远超收益——CSS 整体不参与格式化。
