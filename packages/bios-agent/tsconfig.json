@@ -1,0 +1,28 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "ESNext",
+		// Pi 的 dist/index.d.ts 内部以 `.ts` 后缀再导出（bundled 声明），
+		// 且本包源码会被 Node 原生 type stripping 与 jiti 直接执行——
+		// 因此相对 import 统一写 `.ts` 后缀，两种加载器都接受。
+		"moduleResolution": "Bundler",
+		"allowImportingTsExtensions": true,
+		// 强制 `import type`：Node 原生 type stripping 不做类型分析，
+		// 值空间混入类型导入会在运行时炸。
+		"verbatimModuleSyntax": true,
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		// 自检脚本是 .mjs（无需编译即可运行），但必须一起参与类型检查，
+		// 否则"导入了不存在的契约导出"这类漂移要等到运行时才暴露。
+		"allowJs": true,
+		"checkJs": true,
+		"types": ["node"]
+	},
+	// 宿主类型由本包自己的 devDependency 提供（`npm install` 后落在 ./node_modules），
+	// 不使用 paths 指向开发机的兄弟目录——那会让"干净 clone 能否检查"取决于个人磁盘布局。
+	"include": ["extensions/**/*.ts", "core/**/*.ts", "cli/**/*.mjs"]
+}
