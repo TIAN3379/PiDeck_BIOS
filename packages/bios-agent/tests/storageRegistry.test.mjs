@@ -265,9 +265,11 @@ test("resolveProjectBinding：缺失、命中、多项目冲突、无查询条�
 			},
 		],
 	};
+	// 唯一性先于解析（BM-02AR / S5）：同一路径归属两个项目时，
+	// 整份 registry 已经不成立，任何"解析成功"都不可信，因此报 inconsistent-registry 而不是挑一个。
 	const conflict = resolveProjectBinding(conflicting, { workspacePath: workspaceA });
 	assert.equal(conflict.status, "conflict");
-	assert.equal(conflict.reason, "ambiguous-workspace");
+	assert.equal(conflict.reason, "inconsistent-registry");
 	assert.equal(conflict.candidates.length, 2);
 });
 

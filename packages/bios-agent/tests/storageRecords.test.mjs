@@ -396,10 +396,13 @@ test("绑定边界：同项目两工作区分别可解析，无桌面 ID 的项�
 	assert.equal(worktree.workspace.workspaceId, WORKSPACE_ID_TWO);
 	assert.notEqual(main.workspace.workspaceId, worktree.workspace.workspaceId);
 
-	// 无桌面 ID 的项目仍可按 biosProjectId 解析；缺失路径应报 no-match 而不是新建项目。
+	// 多工作区只给项目 ID 时必须返回歧义（BM-02AR / S5）：不再用 workspaces[0] 猜一个。
 	const byProject = resolveProjectBinding(registry, { biosProjectId: PROJECT_ID });
-	assert.equal(byProject.status, "resolved");
-	assert.equal(byProject.project.biosProjectId, PROJECT_ID);
+	assert.equal(byProject.status, "conflict");
+	assert.equal(byProject.reason, "ambiguous-workspace");
+	assert.deepEqual(byProject.candidates, [WORKSPACE_ID, WORKSPACE_ID_TWO].sort());
+
+	// 缺失路径应报 no-match 而不是新建项目。
 	assert.equal(resolveProjectBinding(registry, { workspacePath: join(SANDBOX, "never-bound") }).reason, "no-match");
 });
 
