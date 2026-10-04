@@ -10,5 +10,11 @@ export * from "./ids.ts";
 export * from "./common.ts";
 export * from "./records.ts";
 export * from "./validate.ts";
+// 审核审计是**独立类别**（自己的 auditVersion），不进入 RECORD_SCHEMAS，也不复用 schemaVersion 闸门。
+// 事件 → 意图（决定）→ 关联（意图/投影/已有事件的纯比较）三层各自成文件，公共出口只在这里加一次。
+export * from "./audit.ts";
+export * from "./auditValidation.ts";
+export * from "./auditIntent.ts";
+export * from "./auditAssociation.ts";
 // registry 是知识库索引的契约（不是"记录"），因此不进入 RECORD_SCHEMAS。
 export * from "./registry.ts";
