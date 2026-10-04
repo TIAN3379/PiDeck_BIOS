@@ -90,6 +90,57 @@ function realDirectory(path: string): string | undefined {
 	}
 }
 
+/** 真实路径优先、失败时退回词法路径（用于"目录当前不可达但仍要判定授权"的场景）。 */
+function realOrLexical(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+export type BoundWorkspaceAuthorization = {
+	readonly authorized: boolean;
+	readonly matchedRoot: string | null;
+	/** 目标当前是否可达（不存在/无权访问时为 false；不可达不等于"未授权"）。 */
+	readonly reachable: boolean;
+};
+
+/**
+ * 判定一个**已入档的工作区路径**是否仍在本次会话的授权范围内（R28-4）。
+ *
+ * 为什么不能只靠 bind 时的检查：registry/profile 里保存的是**过去的**路径，
+ * 而每次读取都带进来一份 cwd/授权根。若 open/detect/read/refresh 不重新执行这条判定，
+ * 绑定记录就变成了一条长期通行证——用户明确收窄了授权，服务却仍然去读那份检出。
+ *
+ * 与 `resolveAuthorizedTargetDir` 的两点区别（都是刻意的）：
+ * - 目标不存在时**不报错**：不可达要如实报告为 unreachable，而不是伪装成授权失败；
+ * - 根与目标都用"真实路径优先、词法兜底"解析：目录离线时仍要能判定它是否在根内。
+ */
+export function authorizeWorkspacePath(options: { cwd: string; authorizedRoots?: readonly string[]; path: string }): BoundWorkspaceAuthorization {
+	let cwdAbsolute: string;
+	try {
+		cwdAbsolute = requireFullyQualifiedRoot(options.cwd, "会话工作目录");
+	} catch (error) {
+		if (error instanceof KnowledgePathError) throw new AuthorizedTargetError("invalid-cwd", `会话工作目录必须是完全限定的绝对路径：${options.cwd}`);
+		throw error;
+	}
+	const target = requireFullyQualifiedRoot(options.path, "工作区路径");
+
+	const roots: string[] = [realOrLexical(cwdAbsolute)];
+	for (const candidate of options.authorizedRoots ?? []) {
+		const validated = validateAuthorizedRoot(candidate);
+		roots.push(realOrLexical(validated));
+	}
+
+	const targetResolved = realOrLexical(target);
+	const reachable = realDirectory(target) !== undefined;
+	for (const root of roots) {
+		if (isWithinAuthorizedRoot(root, targetResolved)) return { authorized: true, matchedRoot: root, reachable };
+	}
+	return { authorized: false, matchedRoot: null, reachable };
+}
+
 /** 配置里的额外根：先校验形态（非法即报配置错误），再看是否可达。 */
 function validateAuthorizedRoot(candidate: string): string {
 	try {
