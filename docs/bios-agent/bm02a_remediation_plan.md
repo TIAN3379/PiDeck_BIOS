@@ -1,6 +1,8 @@
 # 下一轮任务：BM-02AR 存储边界收尾
 
-日期：2026-10-01。依据 [第四轮独立验收](round4_acceptance.md)。G1 和 BM-01 基础已经通过，本轮不要重做它们。
+日期：2026-10-01。依据 [第四轮历史摘要](acceptance_history.md#第四轮与-s1s5)。G1 和 BM-01 基础已经通过，不重做它们。
+
+> 历史任务依据：本轮及最后的 B0 已闭环；最新见[第六轮验收](round6_acceptance.md)。继续开发请用 [next_development.md](next_development.md)，不要再次执行本文整轮提示词。
 
 ## 1. 本轮目标
 
@@ -85,7 +87,7 @@
 ```text
 请在 D:\BIOS_Pi_Agent\PiDeck_BIOS 当前 BIOS_Agent 工作区完成 BM-02AR。
 完整阅读 AGENTS.md、docs/bios-agent/mvp_development_plan.md、
-docs/bios-agent/round4_acceptance.md 和 docs/bios-agent/bm02a_remediation_plan.md，
+docs/bios-agent/acceptance_history.md 和 docs/bios-agent/bm02a_remediation_plan.md，
 然后核对源码/git 状态，保留所有用户已有修改和未跟踪文件。
 
 G1 及 BM-01 骨架已通过，不要重做。当前 89 个用例：88 通过、1 个文件符号链接权限 skip，

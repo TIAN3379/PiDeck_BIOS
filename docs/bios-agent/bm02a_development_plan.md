@@ -1,8 +1,8 @@
 # 下一轮开发：G1 小修 + BM-02A 存储基础与 registry
 
-日期：2026-10-01。前置结论见 [第三轮验收](round3_acceptance.md)，整体目标沿用 [MVP 方案](mvp_development_plan.md)。本文是当前下一轮指令，替代第二轮的 F1～F4 收尾提示词。
+日期：2026-10-01。前置结论见 [第三轮历史摘要](acceptance_history.md#第三轮与-g1)，整体目标沿用 [MVP 方案](mvp_development_plan.md)。本文为已实施的历史需求依据。
 
-> 后续状态：本任务主体已实施，G1 通过；BM-02A 有条件通过。本文保留为原始需求依据，当前执行 [BM-02AR 收尾说明](bm02a_remediation_plan.md)，不重新开发整个存储层。
+> 后续状态：本任务及 G1/存储基础收尾已闭环。本文保留为原始需求依据，当前执行 [next_development.md](next_development.md)，不重新开发整个存储层。
 
 ## 1. 本轮目标与顺序
 
@@ -124,7 +124,7 @@ Package 门禁：typecheck、check:format、test、selfcheck。根 typecheck/che
 ```text
 请在 D:\BIOS_Pi_Agent\PiDeck_BIOS 当前 BIOS_Agent 工作区开发。
 先完整阅读 AGENTS.md、docs/bios-agent/mvp_development_plan.md、
-docs/bios-agent/round3_acceptance.md、docs/bios-agent/bm02a_development_plan.md，
+docs/bios-agent/acceptance_history.md、docs/bios-agent/bm02a_development_plan.md，
 核对当前源码和 git 状态。已有修改/未跟踪文件均保留，不 reset、不擅自提交或推送。
 
 本轮目标限定为：先关闭 G1 目录句柄清理遗漏，再实施 BM-02A 存储基础与 registry。

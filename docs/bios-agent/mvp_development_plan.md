@@ -1,8 +1,15 @@
 # BIOS Agent 专业开发 MVP 方案
 
-日期：2026-10-01
+更新：2026-10-04
 
-状态：第四轮独立验收完成；G1 关闭，BM-02A 主体落地，89 用例中 88 通过、1 个权限 skip。存储 S1～S5 边界待 BM-02AR 收尾，通过后再进入 BM-02B。未列为通过的功能仍是开发要求。
+历史节点：第十一轮独立验收完成（253 用例/251 通过/0 失败/2 权限 skip）；C2A/C2AR 的协议与纯校验通过，A1～A3 关闭。
+C2B 的审核持久化主体已落地；第十二轮独立复跑 295 项/293 通过/0 失败/2 权限 skip，但额外诊断 R1～R4 阻塞，**整体未通过**。
+C2BR 经第十三轮独立复跑 326 项/324 通过/0 失败/2 权限 skip；R1/R3 与恢复二次中断关闭，**R2/R4 各留一处遗漏，整体未通过**。
+C2BR2 经第十四轮独立复跑 343 项/341 通过/0 失败/2 权限 skip，F1 关闭，F2 主要路径通过；
+[§6 的 I1](bm02c2br2_development_plan.md#6-当前唯一接续任务i1) 经[第十五轮独立验收](round15_acceptance.md)关闭：348 项/346 通过/0 失败/2 权限 skip，六文件 165 项全绿。审核持久化整改收口。
+当前：[第二十九轮独立验收](round29_acceptance.md)：732 项（727 通过、0 失败、5 skip）、targeted 309 项（307 通过、2 skip）、旧存储 249 项（246 通过、3 skip）及指定门禁通过。已有项目业务与经验/Feature 录入、审核、关键词搜索、跨项目参考和人工 CLI；正常流程通过，但 R29 四组阻塞整批通过。真实双确认进程已执行，R28-3 关系范围/授权尚未完整关闭。正式语义历史、任务业务、Session 注入与知识 UI 尚未交付。
+已补 [分层记忆与时态一致性设计](layered_memory_temporal_design.md)；只更新后续路线，不重写底座、不打断 C3，也不立即升 schema 或引入向量库。
+C1/C1R 的第九轮通过结论保持，后续功能仍是开发要求，不提前做 UI。
 
 代码基线：BIOS Agent 桌面端 v0.9.0，当前开发分支 `BIOS_Agent`。
 
@@ -137,7 +144,11 @@ Pi 宿主提供的依赖按官方要求声明为 peer dependencies，不打包�
 ├── projects/<biosProjectId>/tasks/<taskId>.json
 ├── experiences/<experienceId>.json
 ├── features/<featureId>.json
-├── audit/<recordId>.json
+├── projects/<biosProjectId>/context/<contextId>.json
+├── journal/<operationId>.json       # 已有 v1/v2 分族核对，不是业务历史库
+├── audit/intents/<operationId>.json
+├── audit/<recordId>/<eventId>.json
+├── locks/
 └── cache/                           # 可删除、可重建，不能是唯一事实来源
 ```
 
@@ -237,6 +248,16 @@ ExperienceCard 状态：`draft | reviewed | verified | deprecated`。
 
 MVP 的复用控制是应用层的数据访问规则。Pi 普通文件／终端工具仍具有其原有系统权限，不能声称这些规则能防止任意绕过；首版不自动挂载未授权的跨客户源码目录。
 
+### 7.5 分层记忆与时态一致性（业务阶段新增要求）
+
+详细规则、兼容边界和验收矩阵以 [分层记忆设计](layered_memory_temporal_design.md) 为准；这是待实现设计，不是当前底座已具备的能力。
+
+工作/任务/项目/复用/流程五层分别复用 Pi 上下文与 Manifest、TaskRecord、ProjectProfile、Experience/Feature/Evidence、Skills；不建立五套数据库。检索只找候选，权威记录负责有效性；首版仍用关键词/别名。
+
+工程发生/录入/业务生效时间分开，revision 负责同记录因果与冲突。确认状态、有效状态、适用范围和验证快照分开判断；替代/撤回必须有明确目标，不能按 timestamp 最新者胜出。当前读取与历史读取分开，缓存/旧摘要不得让撤回结论复活。
+
+进入 BM-03～05 前完成 M1 纯策略契约及 M2 兼容闸门；历史/时态字段若需正式新 schema，先明确转换与备份恢复再编码。此处不修改当前 schema v1 或审核/journal 协议。UI 仍在 BM-07。
+
 ## 8. Pi 工具与 Skills
 
 | 首版工具 | 作用与边界 |
@@ -286,11 +307,13 @@ UI 使用现有 shadcn 原语、Jotai、i18n 和布局约定。新增 IPC 同步
 
 ## 11. 开发任务与依赖
 
-当前进度（2026-10-01）：BM-00/01 基础及 G1 资源收尾独立验收通过；BM-02A 实现显式初始化、registry 与读取/列表，主体有条件通过，S1～S5 待修；BM-02B～09 尚未实现或验收。
+当前进度（2026-10-04）：历史存储/审核/journal/盘点/离线备份恢复通过范围保持；BM-03/BM-04 正常业务可运行，完整通过待 R29 收尾；M1 已实施，关系剩余项归 R29-4；M2 仅认可 v1，正式格式升级/迁移未批准。当前批次 BM-05，BM-05～09 尚未完成。
 
-最新证据见 [第四轮验收](round4_acceptance.md)；下一轮范围和可复制提示词见 [BM-02AR 收尾说明](bm02a_remediation_plan.md)。先闭环存储已有边界，再按 BM-02B～D 分批完成更新与恢复，不同时铺开桌面 UI 或 RAG；前三轮报告保留为历史依据。
+最新事实见 [第二十九轮验收](round29_acceptance.md)。当前执行 [R29 有限收尾＋BM-05 完整任务/上下文批次](bm05_development_plan.md)：内部过闸后直接交任务事实/重开、人工交接包/Manifest 重验及经验草稿沉淀，一次交回；不升 schema、不重做历史底座、不提前 UI/RAG/自动学习。
 
-下表定义任务依赖，实际状态见上方进度与 task_breakdown.md。按顺序推进，每次只实现一个任务或一个可独立验收的小任务。
+下表定义任务依赖，实际状态见上方进度与 task_breakdown.md。同一模块内可将小修复并入能力批次，内部节点顺序实现、测试，整批统一验收；不同时扩展多个无关模块。
+
+节奏调整：每批以可运行能力交付，小修复内部门禁通过后直接继续同批业务。真实覆盖/泄漏、虚假结论与实际预算失效仍阻塞依赖模块，低风险维护项记录技术债。当前节奏与完成标准见 [BM-03 批次](bm03_development_plan.md)，不为单条修复反复人工转交。
 
 | 编号 | 任务 | 前置 | 主要落点 | 验收标准 |
 |---|---|---|---|---|
@@ -300,9 +323,16 @@ UI 使用现有 shadcn 原语、Jotai、i18n 和布局约定。新增 IPC 同步
 | BM-01R2 | 第二轮验收小收尾 | BM-01R 主体 | core、tests、docs | F1～F4 通过；后续 G1 已关闭，见第四轮验收 |
 | BM-02AR | 存储基础边界收尾 | BM-02A 主体 | core/storage、contracts、tests、docs | 关闭第四轮 S1～S5，不提前开放更新或模型写工具 |
 | BM-02 | 存储、registry、并发与迁移 | BM-01R2 | core/storage、contracts | 两进程竞争无覆盖；冲突可见；崩溃恢复；损坏文件不被清空 |
-| BM-03 | 档案与有界项目检测 | BM-02 | core/projects、search | 未知／多平台／非 Git fixture 正确；字段有证据；人工确认保留 |
-| BM-04 | Feature 与经验录入／检索 | BM-02 | core/experiences、search | 状态／客户过滤正确；别名搜索；来源可追踪；无权结果不泄漏 |
-| BM-05 | 任务记忆与上下文选择 | BM-03、04 | core/tasks、context | 新 Session 恢复；taskId 隔离；预算生效；不重复注入；过期可见 |
+| BM-02D1 / D1R | 备份协议与纯校验及收尾 | C3/C3R、第二十一轮 B1/B2 | backup 纯校验、测试 | 第二十二轮通过纯校验范围；103 项，B1/B2 关闭，不重做 |
+| BM-02D2 / D2R | 离线导出与安全收尾 | D1/D1R | storage/backup、真实 IO 测试 | 第二十五轮已发现整改收口；导出已实现，整批覆盖/恢复验证待 D3 |
+| BM-02D3 | 新目录恢复 | D2R 节点门禁通过 | storage/backup、真实往返测试 | 第二十七轮本机离线范围通过，R26-1/2 关闭 |
+| BM-02D4 | 最小人工 CLI | D3 内部门禁通过 | cli | 第二十七轮声明范围通过，R26-3 关闭 |
+| BM-M0 | 分层记忆与时态设计 | 当前契约 | docs | 五层归属、时间/状态/范围、兼容与分阶段验收明确；本轮文档已补齐 |
+| BM-M1 | 记忆决策纯契约 | M0、R26 已通过 | core/memory、纯策略 tests | 已实施，29 项既有回归通过；R27-1/3 保持，R28-3 范围/授权剩余项归 R29-4 |
+| BM-M2 | 兼容与持久化闸门 | M1、备份恢复 | 有限格式/协议方案，后续实现 | v1 项目路线可执行；历史字段/沿革/耐久来源指纹与迁移另评审、未实施 |
+| BM-03 | 档案与有界项目检测 | BM-02、M1/M2 对应契约 | core/projects、人工 CLI | 正常新进程闭环和 R28 核心项目整改通过；共享关系边界仍待 R29-4 |
+| BM-04 | Feature 与经验录入／检索 | BM-03、M1/M2 对应契约 | core/knowledge、人工 CLI | 已实施正常业务，R29 四组待有限收尾；不冒称完整授权/专有别名联动或真实厂商适配 |
+| BM-05 | 任务记忆与上下文选择 | BM-03、04 | core/tasks、context、人工 CLI | 当前批次；任务状态/重开/CAS、taskId 隔离、Manifest 来源重验、人工交接及经验草稿；Pi Session 注入另按 BM-06 |
 | BM-06 | Pi 工具与两个 Skills | BM-03～05 | extensions、skills、cli | CLI／RPC 都能使用；工具校验／取消／截断；模型不能直接批准经验 |
 | BM-07 | 桌面适配与最小 UI | BM-06 | main/bios、IPC、preload、renderer | 人工确认／审核；任务选择；来源展示；模型断网仍可管理知识 |
 | BM-08 | 真实试点与回归 | BM-07 | fixtures、测试、试点记录 | 完成第 2 节场景；记录成功／缺口，不能只用合成 fixture 宣称厂商支持 |
@@ -356,7 +386,7 @@ git diff --check
 
 ## 13. 第一项任务给开发 AI 的提示词
 
-以下保留第一轮的原始任务依据，不再作为下一轮指令。继续开发请使用 [BM-02AR 收尾说明第 6 节](bm02a_remediation_plan.md#6-可复制给开发-ai-的提示词) 的最新提示词。
+以下保留第一轮原始任务依据，不再作为下一轮指令。当前执行 [记忆底座加速批次](memory_foundation_development_plan.md)及 §6 提示词；旧 D3 §11.6 和历史整改提示词不重跑。
 
 ```text
 请根据 docs/bios-agent/mvp_development_plan.md 开始 BIOS 专业能力 MVP 开发。

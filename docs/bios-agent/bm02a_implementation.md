@@ -2,8 +2,8 @@
 
 日期：2026-10-01
 
-> 后续独立验收：G1 关闭，89 用例中 88 通过、1 权限 skip；但故障注入及异常数据补查发现 S1～S5。以下是实施方自测/设计记录，当前验收结论以 [第四轮报告](round4_acceptance.md) 为准；下一轮按 [BM-02AR 收尾任务](bm02a_remediation_plan.md) 执行。
-范围：`round3_acceptance.md` 的 G1 小修，加 `bm02a_development_plan.md` 定义的 BM-02A。
+> 历史实施记录：当时 G1 关闭、89 用例中 88 通过/1 skip，第四轮曾发现 S1～S5，现已收口（见[历史摘要](acceptance_history.md)）。最新结论见[第六轮验收](round6_acceptance.md)，当前执行 [next_development.md](next_development.md)，不再重做 BM-02AR。
+范围：第三轮 G1 小修，加 `bm02a_development_plan.md` 定义的 BM-02A。
 不包含 BM-02B/C/D（写事务、锁、journal、迁移、管理 CLI），也不含桌面 UI、厂商识别、经验系统。
 
 **交付性质**（与验收方口径一致）：以下都是**本地实施 + 本机自测**结果。
