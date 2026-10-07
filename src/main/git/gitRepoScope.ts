@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { GitRepoInfo } from "../../shared/types";
+import type { GitRepoInfo } from "../../shared/types/git";
 
 /** 扫描嵌套仓库时跳过的构建/依赖目录，避免把依赖里的 .git 当成用户仓库。 */
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "dist", "out", "build", ".next", "target", "vendor", "__pycache__", ".venv", "venv", "coverage"]);

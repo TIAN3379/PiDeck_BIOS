@@ -30,7 +30,7 @@ function write(relativePath, content) {
 
 before(() => {
 	// 只编译服务与共享类型，免完整 Electron 构建即可跑真实实现。
-	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/GitService.ts", "src/shared/types.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
+	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/GitService.ts", "src/shared/types/git.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
 	// GitService 依赖 ../fs/trash（懒加载 electron.shell.trashItem），纯 Node 测试
 	// 环境没有 electron，注入 stub 使 require 链可解析（本测试不触达 discard 路径）。
 	const stubElectronDir = join(buildDir, "node_modules", "electron");

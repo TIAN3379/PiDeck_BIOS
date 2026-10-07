@@ -7,9 +7,9 @@ import { trashPath } from "../fs/trash";
 import { REF_BASE } from "../rewind/checkpointConstants";
 import { runGit as spawnGit, type RunGitOptions } from "./gitProcess";
 import { currentGitExecutable } from "./gitExecutable";
-import type { GitBranchInfo, CommitDetail, CommitEntry, GitRef, BranchDiffResult, GitChangedFile, GitFileStatus, GitCommitFileDiff, GitResourceGroupType, GitWorkspaceFileDiff, GitAheadBehind } from "../../shared/types";
-import { GitStatus } from "../../shared/types";
-import type { GitResource, GitResourceGroups } from "../../shared/types";
+import type { GitBranchInfo, CommitDetail, CommitEntry, GitRef, BranchDiffResult, GitChangedFile, GitFileStatus, GitCommitFileDiff, GitResourceGroupType, GitWorkspaceFileDiff, GitAheadBehind } from "../../shared/types/git";
+import { GitStatus } from "../../shared/types/git";
+import type { GitResource, GitResourceGroups } from "../../shared/types/git";
 
 const execFileAsync = promisify(execFile);
 const GIT_MUTATION_TIMEOUT_MS = 30_000;

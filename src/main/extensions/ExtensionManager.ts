@@ -8,7 +8,7 @@ import type { AppSettings, DisabledExtensionEntry, PiCliUpdateResult, PiExtensio
 import type { PiLocator } from "../pi/PiLocator";
 import { toWslLinuxPath, toWindowsHostPath, type WslEnvironment } from "../wsl/WslPaths";
 import type { MainProcessTranslationKey } from "../../shared/i18n/mainProcessCopy";
-import { BUILT_IN_EXTENSIONS, INTERNAL_BUILT_IN_EXTENSIONS, readEffectiveBuiltInExtensionsVersion, resolveBuiltInExtensionPath, type BuiltInExtensionPathRoots } from "./builtInExtensions";
+import { BIOS_AGENT_PACKAGE_SOURCE, BUILT_IN_EXTENSIONS, INTERNAL_BUILT_IN_EXTENSIONS, effectiveRemovedBuiltInExtensions, isBuiltInExtensionName, readBiosAgentPackageInfo, readEffectiveBuiltInExtensionsVersion, resolveBuiltInExtensionPath, type BuiltInExtensionPathRoots } from "./builtInExtensions";
 import { MIN_PI_MINOR_VERSION_FOR_EXTENSION_WHITELIST, parsePiMinorVersion } from "./extensionVersionGate";
 // 版本比较与应用更新检查共用同一实现（含预发布语义：beta < 同号正式版）。
 import { compareVersions } from "../utils/versionCompare";
@@ -169,9 +169,29 @@ export class ExtensionManager {
 			}
 		}
 
+		// R36-3：**专业 Package（bios-agent）**也进同一份列表——用户要能看到它的来源、实际目录、
+		// 启用状态、版本与 Skills 数量，并通过同一套 removedBuiltInExtensions 禁用/恢复。
+		// 它是**目录**而不是单文件：界面不能用"打开用户扩展目录/删除文件"的方式处理。
+		const packageEntry = BIOS_AGENT_PACKAGE_SOURCE;
+		if (!existingSources.has(packageEntry)) {
+			const info = this.builtInRoots ? readBiosAgentPackageInfo(this.builtInRoots) : null;
+			if (info !== null) {
+				merged.push({
+					id: `local:${packageEntry}`,
+					source: packageEntry,
+					path: info.dir,
+					scope: "user",
+					builtIn: true,
+					packageDirectory: true,
+					skillCount: info.skillCount,
+					...(info.version === null ? {} : { currentVersion: info.version }),
+				});
+			}
+		}
+
 		// 通过 PiDeck 桌面设置标记启用状态（与 pi disabledExtensions 分离）。
 		// 必须在冲突检测前初始化：后续逻辑会写回 removedBuiltInExtensions 并删磁盘文件。
-		const removedBuiltIn = new Set(this.getPiDeckSettings().removedBuiltInExtensions ?? []);
+		const removedBuiltIn = new Set(effectiveRemovedBuiltInExtensions(this.getPiDeckSettings().removedBuiltInExtensions ?? [], this.getPiDeckSettings().disabledExtensions ?? []));
 		// 用户禁用的非内置扩展：按 scope+source 匹配（同名可在 user/project 两级独立开关）。
 		const disabledExtKeys = new Set((this.getPiDeckSettings().disabledExtensions ?? []).map((entry) => `${entry.scope}:${entry.source}`));
 		// 内置扩展版本：包级版本号（extensions-manifest.json，不跟 PiDeck 应用版本走），
@@ -181,7 +201,8 @@ export class ExtensionManager {
 		for (const ext of merged) {
 			if (ext.builtIn) {
 				ext.enabled = !removedBuiltIn.has(ext.source);
-				if (builtInVersion) ext.currentVersion = builtInVersion;
+				// 整包有独立版本，不能被普通 TS 扩展的热更新清单覆盖。
+				if (builtInVersion && ext.source !== BIOS_AGENT_PACKAGE_SOURCE) ext.currentVersion = builtInVersion;
 			} else {
 				ext.enabled = !disabledExtKeys.has(`${ext.scope}:${ext.source}`);
 			}
@@ -334,7 +355,9 @@ export class ExtensionManager {
 	 */
 	async disableBuiltIn(source: string): Promise<void> {
 		const normalized = source.trim();
-		if (!normalized.startsWith("pi-deck-")) {
+		// R36-3：专业 Package 也走这条禁用链（写入 removedBuiltInExtensions ⇒ 下次启动不再 -e 注入）。
+		const isPackage = normalized === BIOS_AGENT_PACKAGE_SOURCE;
+		if (!isBuiltInExtensionName(normalized)) {
 			throw new Error("只能操作内置扩展");
 		}
 		if ((INTERNAL_BUILT_IN_EXTENSIONS as readonly string[]).includes(normalized)) {
@@ -345,16 +368,13 @@ export class ExtensionManager {
 			await this.saveRemovedBuiltIn([...current, normalized]);
 		}
 		// 幂等清理旧部署；新路径不再依赖用户目录文件。
-		await this.removeBuiltInFile(normalized).catch(() => undefined);
+		// 专业 Package 从不部署到用户扩展目录，**也不得删除任何东西**（尤其不能碰知识库）。
+		if (!isPackage) await this.removeBuiltInFile(normalized).catch(() => undefined);
 		this.invalidateListCache();
 	}
 
 	async removeBuiltIn(source: string): Promise<void> {
-		const normalized = source.trim();
-		if (!normalized.startsWith("pi-deck-")) {
-			throw new Error("只能操作内置扩展");
-		}
-		await this.disableBuiltIn(normalized);
+		await this.disableBuiltIn(source);
 	}
 
 	/**
@@ -363,20 +383,26 @@ export class ExtensionManager {
 	 */
 	async restoreBuiltIn(source: string): Promise<void> {
 		const normalized = source.trim();
+		if (!isBuiltInExtensionName(normalized)) throw new Error("只能操作内置扩展");
 		const current = this.getPiDeckSettings().removedBuiltInExtensions ?? [];
 		const next = current.filter((s) => s !== normalized);
-		if (next.length === current.length) return;
-		await this.saveRemovedBuiltIn(next);
+		// R37：旧 UI 曾把专业包误记为普通禁用项。恢复必须一次清除两种标记，
+		// 否则列表已恢复但白名单模式仍不加载。只清该内置源，不碰其它扩展。
+		const disabled = this.getPiDeckSettings().disabledExtensions ?? [];
+		const enabled = disabled.filter((entry) => entry.source !== normalized);
+		if (next.length === current.length && enabled.length === disabled.length) return;
+		await this.patchPiDeckSettings({ removedBuiltInExtensions: next, disabledExtensions: enabled });
 		// 若用户目录仍有旧副本，一并删掉，避免与 -e 双加载。
-		await this.removeBuiltInFile(normalized).catch(() => undefined);
+		if (normalized !== BIOS_AGENT_PACKAGE_SOURCE) await this.removeBuiltInFile(normalized).catch(() => undefined);
 		this.invalidateListCache();
 	}
 
 	async uninstall(source: string, scope: PiExtensionSummary["scope"] = "user"): Promise<void> {
 		const normalized = source.trim();
 		if (!normalized) throw new Error(this.translate("mainExtension.sourceRequired"));
-		// 阻止卸载 PiDeck 内置扩展（如 pi-deck-file-capture）
-		if (normalized.startsWith("pi-deck-")) {
+		// 阻止卸载 PiDeck 内置扩展（如 pi-deck-file-capture）与专业 Package：
+		// 前者由应用资源注入，后者是整包目录 —— 都只能禁用/恢复，不能卸载。
+		if (normalized.startsWith("pi-deck-") || normalized === BIOS_AGENT_PACKAGE_SOURCE) {
 			throw new Error(this.translate("mainExtension.builtInCannotUninstall"));
 		}
 		// 本地 .ts/目录扩展不在 pi package 列表里，pi remove 会报 No matching package；

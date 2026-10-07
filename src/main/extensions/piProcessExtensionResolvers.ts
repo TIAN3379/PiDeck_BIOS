@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { basename } from "node:path";
 import type { AppSettings } from "../../shared/types";
-import { INTERNAL_BUILT_IN_EXTENSIONS, listActiveBuiltInExtensionPaths, resolveBuiltInExtensionsOverlayDir, type BuiltInExtensionPathRoots } from "./builtInExtensions";
+import { INTERNAL_BUILT_IN_EXTENSIONS, effectiveRemovedBuiltInExtensions, listActiveBuiltInExtensionPaths, resolveBuiltInExtensionsOverlayDir, type BuiltInExtensionPathRoots } from "./builtInExtensions";
 import { resolveEnabledExtensionPaths } from "./enabledExtensionResolver";
 import { readProjectResourceOverrides } from "../projects/projectResourceOverrides";
 
@@ -31,7 +31,7 @@ export function createPiProcessExtensionResolvers(
 	return {
 		resolveBuiltInExtensionPaths: (processSettings, includeProjectResources = true) => {
 			const disabledForProject = new Set(includeProjectResources ? readProjectResourceOverrides(cwd).disabledGlobalExtensions : []);
-			return listActiveBuiltInExtensionPaths(builtInRoots, processSettings?.removedBuiltInExtensions ?? settings.removedBuiltInExtensions ?? []).filter((path) => {
+			return listActiveBuiltInExtensionPaths(builtInRoots, effectiveRemovedBuiltInExtensions(processSettings?.removedBuiltInExtensions ?? settings.removedBuiltInExtensions ?? [], processSettings?.disabledExtensions ?? settings.disabledExtensions ?? [])).filter((path) => {
 				const name = basename(path);
 				return (INTERNAL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name) || !disabledForProject.has(name);
 			});

@@ -238,11 +238,14 @@ test("aborts a hung WSL scan before the renderer watchdog and allows a clean ret
 		const scanner = new SessionScanner();
 		scanner.wslConfig = { distro: "Ubuntu", user: "dev", home: "/home/dev" };
 		scanner.scanTimeoutMs = 10;
+		// 不执行真实 WSL 自定义目录探测；本用例只测 collect 阶段的取消与重试。
+		scanner.resolveScanRoots = async () => ["/home/dev/.pi/agent/sessions"];
 		let attempts = 0;
 		scanner.collectWslJsonl = async (_sessionsDir, signal) => {
 			attempts += 1;
 			if (attempts > 1) return [];
 			return new Promise((_resolve, reject) => {
+				if (signal.aborted) return reject(signal.reason);
 				signal.addEventListener("abort", () => reject(signal.reason), { once: true });
 			});
 		};

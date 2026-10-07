@@ -4,6 +4,7 @@
  */
 
 import type { ChatMessage, Project } from "../../shared/types";
+import { biosWorkflowResultState, biosWorkflowTaskReceipt } from "../../shared/biosWorkflowReceipt";
 import { looksLikePiSessionFileStem } from "../../shared/sessionIdentity";
 import { looksLikeExpandedRefBlockTitle, textForSessionTitle } from "../../shared/expandedRefBlocks";
 import { isRoleMessageRole } from "./sessionEntryIds";
@@ -185,6 +186,9 @@ export function stripToolResultForDelivery(messages: ChatMessage[]): ChatMessage
 		}
 		stripped = true;
 		const meta = { ...message.meta };
+		// CW 工作台需要真实保存状态，不需要重复的商业正文。
+		if (typeof meta.toolName === "string" && meta.toolName.startsWith("bios_")) meta.biosWorkflowState = biosWorkflowResultState(meta.result);
+		if (meta.toolName === "bios_manage_task" && meta.isError !== true) meta.biosWorkflowTask = biosWorkflowTaskReceipt(meta.result);
 		delete meta.result;
 		return { ...message, meta };
 	});

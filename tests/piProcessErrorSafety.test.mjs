@@ -64,6 +64,8 @@ function loadPiProcess(spawnImpl) {
 			// vm 沙箱不会自动解析相对模块，新增拆分模块必须在这里登记。
 			if (id === "./piSpawnFailure") return require("../src/main/pi/piSpawnFailure.ts");
 			if (id === "../wsl/WslPaths") return paths;
+			// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。
+			if (id === "../bios/biosProcessEnv") return require("../src/main/bios/biosProcessEnv.ts");
 			if (id === "./piExtensionFilter") return extensionFilter;
 			// 25fd516 起 PiProcess 引入内置扩展参数拼接；本测试只关心 spawn 错误转发，
 			// mock 为原样透传，避免 vm sandbox 的 require 按 tests/ 相对路径误解析。
@@ -167,3 +169,5 @@ test("macOS search dirs include Homebrew prefixes for Dock-launched PATH gaps", 
 	assert.match(source, /\/usr\/local\/bin/);
 	assert.match(source, /platform === "darwin"/);
 });
+
+// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。

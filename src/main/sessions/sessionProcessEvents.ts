@@ -46,7 +46,10 @@ function kindFromType(type: string, customType?: string): SessionProcessEventKin
 	if (type === "model_change") return "modelChange";
 	if (type === "thinking_level_change") return "thinkingChange";
 	if (type === "compaction") return "compaction";
-	if (type === "custom") return "custom";
+	// R35-2：Pi 0.87.1 的 `SessionManager.appendCustomMessageEntry` 写的是
+	// `type: "custom_message"`（带 customType/内容/details），不是 `"custom"`；
+	// 只认 `"custom"` 会让真实回执一条都读不到。
+	if (type === "custom" || type === "custom_message") return "custom";
 	if (type.endsWith("_import") || customType?.endsWith(".child-session")) return "import";
 	return undefined;
 }
@@ -96,6 +99,9 @@ export function parseSessionProcessEventLine(rawLine: string, index: number): Se
 	const tokensBefore = asNumber(entry.tokensBefore);
 	const summaryText = asString(entry.summary);
 	const customContent = asString(entry.content) ?? stringifyUnknown(entry.data) ?? stringifyUnknown(entry.customData);
+	// R34-3：自定义消息的结构化 details 也要带出来（回执核对需要 ok/action/selection）。
+	const customDetailsSource = entry.details ?? entry.customData ?? entry.data;
+	const customDetails = kind === "custom" && customDetailsSource !== null && typeof customDetailsSource === "object" && !Array.isArray(customDetailsSource) ? (customDetailsSource as Record<string, unknown>) : undefined;
 
 	let summary = type;
 	if (kind === "session") summary = cwd ? `cwd ${cwd}` : "session";
@@ -118,6 +124,7 @@ export function parseSessionProcessEventLine(rawLine: string, index: number): Se
 		modelId,
 		thinkingLevel,
 		customType,
+		...(customDetails === undefined ? {} : { customDetails }),
 		tokensBefore,
 	};
 }

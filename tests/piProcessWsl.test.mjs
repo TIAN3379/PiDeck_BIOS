@@ -69,6 +69,8 @@ function loadPiProcess(spawnCalls) {
 			if (id === "./PiRpcClient") return { PiRpcClient: FakeRpcClient };
 			if (id === "./PiLocator") return { PiLocator: FakePiLocator };
 			if (id === "../wsl/WslPaths") return paths;
+			// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。
+			if (id === "../bios/biosProcessEnv") return require("../src/main/bios/biosProcessEnv.ts");
 			if (id === "./piExtensionFilter") return extensionFilter;
 			// PiProcess 的 spawn 失败归因模块：vm 沙箱按 tests/ 相对路径解析，需显式登记。
 			if (id === "./piSpawnFailure") return require("../src/main/pi/piSpawnFailure.ts");
@@ -146,3 +148,5 @@ test("rejects a project UNC from another distro before spawning pi", async () =>
 	await assert.rejects(process.start(), (error) => error.code === "WSL_DISTRO_MISMATCH");
 	assert.equal(spawnCalls.length, 0);
 });
+
+// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。

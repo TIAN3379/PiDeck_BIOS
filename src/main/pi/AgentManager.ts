@@ -32,6 +32,7 @@ import type {
 	SessionTodoSnapshot,
 } from "../../shared/types";
 import { ipcChannels } from "../../shared/ipc";
+import { modelEndpointOriginOf } from "./modelEndpoint";
 import { sanitizeBridgeUpdate, stripBridgeAnsi } from "../../shared/bridgeText";
 import { collectSessionFileChanges } from "../../shared/fileChanges";
 import { COMPACT_CANCELLED_BY_OWNER, COMPACT_CANCELLED_BY_USER_ABORT, COMPACT_HOOK_REJECT_MAX_MS, COMPACT_OBSERVATION_MAX_AGE_MS, COMPACT_ROUTED_TO_OWNER, COMPACT_USER_ABORT_WINDOW_MS } from "../../shared/compactFeedback";
@@ -405,6 +406,22 @@ export class AgentManager {
 	private readonly modelRefreshingAgents = new Set<string>();
 	/** 用户主动停止的 agent，用于退出处理器中跳过自动重连 */
 	private readonly userInitiatedStop = new Set<string>();
+	/**
+	 * B-01：被**撤销授权**的 runtime（key = agentId，value = 被撤权的代次）。
+	 *
+	 * 配置收窄 / 知识根变化后，主进程侧必须立即阻断该旧 runtime 的新业务发送，
+	 * 不能等「停止命令返回」——已发送出去的内容撤回不了，但后续发送必须挡住。
+	 * 只有代次变化（重开）才清除条目，避免带旧许可悄悄复活。
+	 */
+	private readonly revokedRuntimes = new Map<string, number>();
+	/**
+	 * B-01：撤权后停止**未能确认退出**的旧进程句柄。
+	 *
+	 * 关键：`stop()` 会从 `agents` 删除 runtime，若此时把仍活着的进程句柄一起丢掉，
+	 * 就再也没法诊断/重试/退出兜底（也会让 UI 误以为「已停止」）。故这里单独保留句柄。
+	 */
+	private readonly residualStops = new Map<string, { readonly agentId: string; readonly generation: number; readonly process: PiProcess; reason: string }>();
+	private readonly pendingStopConfirmations = new Map<string, Promise<{ readonly stopped: boolean; readonly error: string | null; readonly replaced?: boolean }>>();
 	/** 已尝试过自动重连的 agent（防止无限循环），重连成功后清除 */
 	private readonly autoRestartAttempted = new Set<string>();
 	/**
@@ -1732,6 +1749,17 @@ export class AgentManager {
 
 	async sendPrompt(input: SendPromptInput): Promise<SendPromptResult> {
 		const runtime = this.requireRuntime(input.agentId);
+		// B-01：该 runtime 的授权已被撤（配置收窄/换根）⇒ 立即阻断新业务发送，
+		// 不能等到「旧进程确实退出」；已发出的内容撤回不了，但后续 prompt 必须挡住。
+		// 注意：这里只挡**业务 prompt**；安全清理用的 stop/abort/context off 走别的入口，不受影响。
+		if (this.isRuntimeRevoked(input.agentId, runtime.tab.runtimeGeneration)) {
+			const errorMessage = "该会话的授权已撤销（BIOS 配置收窄）：旧 runtime 不得继续发送；请重开会话（重开会重新注入新配置）";
+			void this.appLogger?.warn("agent", "Prompt rejected: runtime authority revoked", {
+				agentId: input.agentId,
+				runtimeGeneration: runtime.tab.runtimeGeneration,
+			});
+			return { accepted: false, error: errorMessage };
+		}
 		const trimmed = input.message.trim();
 		const hasImages = input.images && input.images.length > 0;
 		const agentMessage = input.agentMessage?.trim() || trimmed || "Describe this image.";
@@ -2506,6 +2534,7 @@ export class AgentManager {
 			modelName: normalizedRuntimeName(model?.name) ?? normalizedRuntimeName(model?.id),
 			provider: normalizedRuntimeName(model?.provider),
 			modelId: normalizedRuntimeName(model?.id),
+			modelEndpointOrigin: modelEndpointOriginOf(model),
 			thinkingLevel: state?.thinkingLevel,
 			isStreaming: state?.isStreaming || this.streamingAgents.has(agentId),
 			...(this.agentTurnActiveById.has(agentId) ? { isTurnActive: this.agentTurnActiveById.get(agentId) } : {}),
@@ -3793,9 +3822,42 @@ export class AgentManager {
 		return true;
 	}
 
-	async stop(agentId: string) {
+	/**
+	 * B-01：把某个 runtime 标记为**授权已撤**（配置收窄/换根时由 BIOS 服务调用）。
+	 *
+	 * 立即生效于 `sendPrompt`：该代次的新业务发送被拒绝，直到重开（换代次）。
+	 * 这是「标记撤权立刻阻断发送入口」的落点，不是只在读取侧挡。
+	 */
+	revokeRuntimeAuthority(agentId: string, generation: number): void {
+		this.revokedRuntimes.set(agentId, generation);
+	}
+
+	/** 该 runtime 是否已被撤权；代次已变（重开过）就顺带清掉记录，按新配置继续。 */
+	private isRuntimeRevoked(agentId: string, generation: number | undefined): boolean {
+		const revoked = this.revokedRuntimes.get(agentId);
+		if (revoked === undefined) return false;
+		// 取不到代次时按"仍是旧 runtime"保守处理：宁可挡住发送，也不放过旧许可。
+		if (typeof generation === "number" && revoked !== generation) {
+			this.revokedRuntimes.delete(agentId);
+			return false;
+		}
+		return true;
+	}
+
+	/** 当前仍有**未能确认退出**的残留旧进程（诊断/UI 用；不含已确认退出的）。 */
+	listResidualStops(): readonly { readonly agentId: string; readonly generation: number; readonly reason: string }[] {
+		return [...this.residualStops.values()].map((entry) => ({ agentId: entry.agentId, generation: entry.generation, reason: entry.reason }));
+	}
+
+	/**
+	 * B-01：运行态清理（不含进程停止动作）。
+	 *
+	 * 抽出成单一实现，让 `stop()`（同步发信号）与 `stopAndConfirm()`（确认退出）
+	 * 共用同一套状态清理，避免「只删 Map 但句柄语义不同」两份实现漂移。
+	 */
+	private teardownRuntime(agentId: string): PiProcess | null {
 		const runtime = this.agents.get(agentId);
-		if (!runtime) return;
+		if (!runtime) return null;
 		void this.appLogger?.info("agent", "Agent stopped (user initiated)", {
 			agentId,
 			projectId: runtime.tab.projectId,
@@ -3822,8 +3884,68 @@ export class AgentManager {
 		this.displayWindowComputedLengthByAgent.delete(agentId);
 		this.sessionFileVersionByAgent.delete(agentId);
 		this.clearAgentState(agentId);
+		return process;
+	}
+
+	async stop(agentId: string) {
+		const process = this.teardownRuntime(agentId);
+		if (process === null) return;
 		process.stop();
 		this.emitState();
+	}
+
+	/**
+	 * B-01：停止某个会话并**确认旧进程真的退出**（撤权专用入口）。
+	 *
+	 * - `stopped: true` 只在收到真实 `exit` 确认后返回；`stop()` 返回 / 列表消失都不算；
+	 * - 确认不了退出时保留句柄（`residualStops`）并如实返回失败原因，调用方不得显示「安全已生效」；
+	 * - 可对同一 agentId 幂等重试（重试会先清理残留句柄）；
+	 * - 旧代次已被重开的新 runtime 取代时（agentId 已不持有该代次）不误停新进程。
+	 */
+	async stopAndConfirm(agentId: string, options: { timeoutMs?: number } = {}): Promise<{ readonly stopped: boolean; readonly error: string | null; readonly replaced?: boolean }> {
+		const pending = this.pendingStopConfirmations.get(agentId);
+		if (pending) return pending;
+		const confirmation = this.confirmOwnedRuntimeStop(agentId, options);
+		this.pendingStopConfirmations.set(agentId, confirmation);
+		try {
+			return await confirmation;
+		} finally {
+			if (this.pendingStopConfirmations.get(agentId) === confirmation) this.pendingStopConfirmations.delete(agentId);
+		}
+	}
+
+	private async confirmOwnedRuntimeStop(agentId: string, options: { timeoutMs?: number }): Promise<{ readonly stopped: boolean; readonly error: string | null }> {
+		// 先清理上次确认失败的残留句柄（幂等重试）；句柄与 agentId 一一对应，不会误伤新代次
+		// （restart 会换新 agentId）。
+		const residual = this.residualStops.get(agentId);
+		if (residual !== undefined) {
+			const retry = await residual.process.stopAndConfirm({ ...options });
+			if (retry.exited) {
+				this.residualStops.delete(agentId);
+				this.emitState();
+				return { stopped: true, error: null };
+			}
+			this.residualStops.set(agentId, { ...residual, reason: retry.reason ?? residual.reason });
+			return { stopped: false, error: retry.reason ?? residual.reason };
+		}
+		const runtime = this.agents.get(agentId);
+		if (runtime === undefined) return { stopped: true, error: null };
+		// 代次与 session port 的取值口径一致（缺省按 0）；撤权只用于阻断发送，口径统一即可。
+		const generation = runtime.tab.runtimeGeneration ?? 0;
+		// 双保险：停止前先撤权，即使后续确认失败，该代次也不能再发送业务消息。
+		this.revokeRuntimeAuthority(agentId, generation);
+		const process = this.teardownRuntime(agentId);
+		if (process === null) return { stopped: true, error: null };
+		// 在 await 前登记，覆盖确认等待期间的并发重试和应用退出兜底。
+		this.residualStops.set(agentId, { agentId, generation, process, reason: "正在等待旧进程退出确认" });
+		const outcome = await process.stopAndConfirm({ ...options });
+		this.emitState();
+		if (outcome.exited) {
+			this.residualStops.delete(agentId);
+			return { stopped: true, error: null };
+		}
+		this.residualStops.set(agentId, { agentId, generation, process, reason: outcome.reason ?? "未能确认旧进程退出" });
+		return { stopped: false, error: outcome.reason ?? "未能确认旧进程退出" };
 	}
 
 	/** 注册本地事件监听器（供 FeishuBridge 等主进程内部模块使用） */
@@ -3908,6 +4030,16 @@ export class AgentManager {
 			this.unregisterBridgeSession(runtime.tab.id);
 			runtime.process.stop();
 		}
+		// B-01：撤权时确认失败、仍活着的残留旧进程也要在退出路径兜底停止，
+		// 否则它会带着旧工具许可继续跑（应用退出后无人再清理）。
+		for (const residual of this.residualStops.values()) {
+			try {
+				residual.process.stop();
+			} catch {
+				/* 已退出或句柄失效 */
+			}
+		}
+		this.residualStops.clear();
 		this.agents.clear();
 		this.messages.clear();
 		this.stoppedMessageIdentities.clear();

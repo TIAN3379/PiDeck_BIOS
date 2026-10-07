@@ -76,6 +76,13 @@ export type DisabledExtensionEntry = {
 };
 
 export type AppSettings = {
+	/**
+	 * BIOS Agent 可信配置（BM-07A C1）：知识根、授权项目/需求/客户、目录与端点授权。
+	 * 未配置即拒绝读取；只由桌面设置/主进程写入，renderer 传入的参数不能改这里的值。
+	 */
+	biosHost?: import("./bios").BiosHostSettings;
+	/** 按会话保存的 BIOS 选择（只存 ID 与非敏感开关；重启后保守关闭）。 */
+	biosSelections?: import("./bios").BiosSelectionMap;
 	useNativeTitleBar: boolean;
 	showNativeMenu: boolean;
 	sendShortcut: SendShortcutMode;

@@ -110,6 +110,8 @@ function loadPiProcess(versionResult = { output: "0.82.1\n" }, options = { parke
 				};
 			}
 			if (id === "../wsl/WslPaths") return wslPaths;
+			// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。
+			if (id === "../bios/biosProcessEnv") return require("../src/main/bios/biosProcessEnv.ts");
 			// PiProcess 的 spawn 失败归因模块：vm 沙箱按 tests/ 相对路径解析，需显式登记。
 			if (id === "./piSpawnFailure") return require("../src/main/pi/piSpawnFailure.ts");
 			// killProcessTree（stop() 在 Windows 上的整树强杀）：PiProcess 一直直接 import
@@ -472,3 +474,5 @@ test("拒绝 trust 时旧版 pi 会阻止 spawn", async () => {
 	await assert.rejects(proc.start(undefined, "no-approve", true), /Cannot start an untrusted project safely/);
 	assert.equal(getCaptured(), null);
 });
+
+// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。

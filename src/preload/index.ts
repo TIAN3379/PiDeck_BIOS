@@ -1207,6 +1207,67 @@ const api = {
 		openFile: () => ipcRenderer.invoke(ipcChannels.quickMessagesOpenFile) as Promise<void>,
 	},
 
+	// ── BIOS 知识/任务面板（BM-07A C1：只读管理 + 人工选择）──
+	bios: {
+		scanHistory: (request: import("../shared/types/biosHistory").BiosHistoryRequest) => ipcRenderer.invoke(ipcChannels.biosScanHistory, request) as Promise<import("../shared/types/biosHistory").BiosHistoryPreview>,
+		historyEvidence: (request: { token: string; sha: string }) => ipcRenderer.invoke(ipcChannels.biosHistoryEvidence, request) as Promise<import("../shared/types/biosHistory").BiosHistoryEvidence>,
+		prepareOnboarding: (request: { desktopProjectId: string; serviceRef?: import("../shared/types/biosOnboarding").BiosServiceRef }) => ipcRenderer.invoke(ipcChannels.biosPrepareOnboarding, request) as Promise<import("../shared/types/biosOnboarding").BiosOnboardingPreview>,
+		completeOnboarding: (request: import("../shared/types/biosOnboarding").BiosOnboardingConfirm) => ipcRenderer.invoke(ipcChannels.biosCompleteOnboarding, request) as Promise<import("../shared/types/biosOnboarding").BiosOnboardingResult>,
+		connections: () => ipcRenderer.invoke(ipcChannels.biosConnections) as Promise<import("../shared/types/biosOnboarding").BiosConnectionList>,
+		disconnectProject: (request: import("../shared/types/biosOnboarding").BiosDisconnectRequest) => ipcRenderer.invoke(ipcChannels.biosDisconnectProject, request) as Promise<import("../shared/types/biosOnboarding").BiosDisconnectResult>,
+		readiness: () => ipcRenderer.invoke(ipcChannels.biosReadiness) as Promise<import("../shared/types/bios").BiosReadiness>,
+		getSettings: () => ipcRenderer.invoke(ipcChannels.biosGetSettings) as Promise<import("../shared/types/bios").BiosHostSettings>,
+		updateSettings: (patch: Partial<import("../shared/types/bios").BiosHostSettings>) => ipcRenderer.invoke(ipcChannels.biosUpdateSettings, patch) as Promise<import("../shared/types/bios").BiosSettingsUpdateResult>,
+		pickKnowledgeRoot: () => ipcRenderer.invoke(ipcChannels.biosPickKnowledgeRoot) as Promise<import("../shared/types/bios").BiosKnowledgeRootPickResult>,
+		runtimeState: () => ipcRenderer.invoke(ipcChannels.biosRuntimeState) as Promise<import("../shared/types/bios").BiosRuntimeState>,
+		// 列表/预览都要带**会话身份 + 代次**：主进程据此解析 cwd 并拒绝假身份/迟到请求。
+		listProjects: (request: import("../shared/types/bios").BiosListProjectsRequest) => ipcRenderer.invoke(ipcChannels.biosListProjects, request) as Promise<import("../shared/types/bios").BiosListResult<import("../shared/types/bios").BiosProjectSummary>>,
+		listTasks: (request: import("../shared/types/bios").BiosListTasksRequest) => ipcRenderer.invoke(ipcChannels.biosListTasks, request) as Promise<import("../shared/types/bios").BiosListResult<import("../shared/types/bios").BiosTaskSummary>>,
+		preview: (request: import("../shared/types/bios").BiosPreviewRequest) => ipcRenderer.invoke(ipcChannels.biosPreview, request) as Promise<import("../shared/types/bios").BiosPreviewResult>,
+		applySelection: (request: import("../shared/types/bios").BiosSelectionRequest) => ipcRenderer.invoke(ipcChannels.biosApplySelection, request) as Promise<import("../shared/types/bios").BiosSelectionResult>,
+		// ── BM-07B B-02/B-03：人工业务读写（renderer 只提交业务 ID/正文/revision）──
+		storeStatus: () => ipcRenderer.invoke(ipcChannels.biosStoreStatus) as Promise<import("../shared/types/bios").BiosStoreStatus>,
+		automationStatus: (request: { readonly desktopProjectId: string }) => ipcRenderer.invoke(ipcChannels.biosAutomationStatus, request) as Promise<import("../shared/types/bios").BiosAutomationStatus>,
+		initializeStore: (request: import("../shared/types/biosBusiness").BiosInitializeRequest) => ipcRenderer.invoke(ipcChannels.biosInitializeStore, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").InitializeKnowledgeStoreResult>>,
+		bindProject: (request: import("../shared/types/biosBusiness").BiosBindRequest) => ipcRenderer.invoke(ipcChannels.biosBindProject, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").BindProjectResult>>,
+		detectProject: (request: import("../shared/types/biosBusiness").BiosDetectRequest) => ipcRenderer.invoke(ipcChannels.biosDetectProject, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").DetectProjectResult>>,
+		confirmProfile: (request: import("../shared/types/biosBusiness").BiosConfirmRequest) => ipcRenderer.invoke(ipcChannels.biosConfirmProfile, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ConfirmProfileResult>>,
+		readProjectView: (request: import("../shared/types/biosBusiness").BiosProjectViewRequest) => ipcRenderer.invoke(ipcChannels.biosReadProjectView, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ProjectDecisionView>>,
+		readTaskDetail: (request: import("../shared/types/biosBusiness").BiosTaskDetailRequest) => ipcRenderer.invoke(ipcChannels.biosReadTaskDetail, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskDetailResult>>,
+		createTask: (request: import("../shared/types/biosBusiness").BiosTaskCreateRequest) => ipcRenderer.invoke(ipcChannels.biosCreateTask, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskWriteResult>>,
+		updateTask: (request: import("../shared/types/biosBusiness").BiosTaskUpdateRequest) => ipcRenderer.invoke(ipcChannels.biosUpdateTask, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskWriteResult>>,
+		changeTaskStatus: (request: import("../shared/types/biosBusiness").BiosTaskStatusRequest) => ipcRenderer.invoke(ipcChannels.biosChangeTaskStatus, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskStatusResult>>,
+		createFeature: (request: import("../shared/types/biosBusiness").BiosFeatureCreateRequest) => ipcRenderer.invoke(ipcChannels.biosCreateFeature, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").FeatureWriteResult>>,
+		updateFeature: (request: import("../shared/types/biosBusiness").BiosFeatureUpdateRequest) => ipcRenderer.invoke(ipcChannels.biosUpdateFeature, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").FeatureWriteResult>>,
+		readFeatureDetail: (request: import("../shared/types/biosBusiness").BiosFeatureDetailRequest) => ipcRenderer.invoke(ipcChannels.biosReadFeatureDetail, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").FeatureDetailResult>>,
+		createExperience: (request: import("../shared/types/biosBusiness").BiosExperienceCreateRequest) => ipcRenderer.invoke(ipcChannels.biosCreateExperience, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ExperienceWriteResult>>,
+		updateExperience: (request: import("../shared/types/biosBusiness").BiosExperienceUpdateRequest) => ipcRenderer.invoke(ipcChannels.biosUpdateExperience, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ExperienceWriteResult>>,
+		readExperienceDetail: (request: import("../shared/types/biosBusiness").BiosExperienceDetailRequest) => ipcRenderer.invoke(ipcChannels.biosReadExperienceDetail, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ExperienceDetailResult>>,
+		reviewExperience: (request: import("../shared/types/biosBusiness").BiosExperienceReviewRequest) => ipcRenderer.invoke(ipcChannels.biosReviewExperience, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ExperienceReviewResult>>,
+		searchKnowledge: (request: import("../shared/types/biosBusiness").BiosSearchRequest) => ipcRenderer.invoke(ipcChannels.biosSearchKnowledge, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").SearchResult>>,
+		libraryList: (request: import("../shared/types/biosLibrary").BiosLibraryListRequest) => ipcRenderer.invoke(ipcChannels.biosLibraryList, request) as Promise<import("../shared/types/biosLibrary").BiosLibraryPage>,
+		libraryDetail: (request: import("../shared/types/biosLibrary").BiosLibraryRef) => ipcRenderer.invoke(ipcChannels.biosLibraryDetail, request) as Promise<import("../shared/types/biosLibrary").BiosLibraryDetail>,
+		libraryUpdate: (request: import("../shared/types/biosLibrary").BiosLibraryUpdate) => ipcRenderer.invoke(ipcChannels.biosLibraryUpdate, request) as Promise<import("../shared/types/biosLibrary").BiosLibraryReceipt>,
+		libraryReview: (request: import("../shared/types/biosLibrary").BiosLibraryReview) => ipcRenderer.invoke(ipcChannels.biosLibraryReview, request) as Promise<import("../shared/types/biosLibrary").BiosLibraryReceipt>,
+		readExperienceReference: (request: import("../shared/types/biosBusiness").BiosReferenceRequest) => ipcRenderer.invoke(ipcChannels.biosReadExperienceReference, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ReferenceView>>,
+		prepareDraft: (request: import("../shared/types/biosBusiness").BiosDraftPrefillRequest) => ipcRenderer.invoke(ipcChannels.biosPrepareDraft, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskExperiencePrefillResult>>,
+		saveDraft: (request: import("../shared/types/biosBusiness").BiosDraftSaveRequest) => ipcRenderer.invoke(ipcChannels.biosSaveDraft, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").TaskDraftSaveResult>>,
+		saveManifest: (request: import("../shared/types/biosBusiness").BiosManifestSaveRequest) => ipcRenderer.invoke(ipcChannels.biosSaveManifest, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").SaveManifestResult>>,
+		verifyManifest: (request: import("../shared/types/biosBusiness").BiosManifestVerifyRequest) => ipcRenderer.invoke(ipcChannels.biosVerifyManifest, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").VerifyManifestResult>>,
+		// ── BM-07B B-07：离线备份/恢复（薄入口；只提交父目录 + 单段名字 + 操作者确认）──
+		pickBackupDir: (request: { purpose: import("../shared/types/biosBusiness").BiosBackupPickPurpose; title?: string }) => ipcRenderer.invoke(ipcChannels.biosBackupPickDir, request) as Promise<import("../shared/types/biosBusiness").BiosBackupPickResult>,
+		exportBackup: (request: import("../shared/types/biosBusiness").BiosExportBackupRequest) => ipcRenderer.invoke(ipcChannels.biosExportBackup, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").ExportKnowledgeBackupResult>>,
+		restoreBackup: (request: import("../shared/types/biosBusiness").BiosRestoreBackupRequest) => ipcRenderer.invoke(ipcChannels.biosRestoreBackup, request) as Promise<import("../shared/types/biosBusiness").BiosBusinessEnvelope<import("../shared/types/biosBusiness").RestoreKnowledgeBackupResult>>,
+		onChanged: (listener: (event?: import("../shared/types/bios").BiosChangedEvent) => void) => {
+			const handler = (_event: Electron.IpcRendererEvent, event?: import("../shared/types/bios").BiosChangedEvent) => listener(event);
+			ipcRenderer.on(ipcChannels.biosChanged, handler);
+			// 订阅必须返回 unsubscribe（且返回 void，别把 ipcRenderer 的链式返回值漏出去）。
+			return () => {
+				ipcRenderer.off(ipcChannels.biosChanged, handler);
+			};
+		},
+	},
+
 	// ── 定时任务与自动化 ──
 	automation: {
 		getSnapshot: () => ipcRenderer.invoke(ipcChannels.automationGetSnapshot) as Promise<AutomationSnapshot>,

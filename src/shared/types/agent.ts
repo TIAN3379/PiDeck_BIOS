@@ -56,6 +56,8 @@ export type AgentRuntimeState = {
 	modelName?: string;
 	provider?: string;
 	modelId?: string;
+	/** Pi 当前模型 baseUrl 的 HTTP(S) origin；不含凭据、路径、参数，不代表网络重定向审计。 */
+	modelEndpointOrigin?: string;
 	thinkingLevel?: string;
 	isStreaming?: boolean;
 	/**

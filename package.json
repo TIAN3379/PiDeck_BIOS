@@ -157,6 +157,17 @@
     ],
     "extraResources": [
       {
+        "from": "packages/bios-agent",
+        "to": "bios-agent",
+        "filter": [
+          "package.json",
+          "extensions/**/*.ts",
+          "core/**/*.ts",
+          "skills/**/*",
+          "cli/**/*.mjs"
+        ]
+      },
+      {
         "from": "resources/extensions",
         "to": "extensions",
         "filter": [

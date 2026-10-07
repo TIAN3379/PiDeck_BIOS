@@ -98,7 +98,7 @@ const QuestionSchema = Type.Object({
 		Type.Boolean({ description: "Accepted for compatibility but ignored: select questions always show a custom text input" }),
 	),
 	placeholder: Type.Optional(Type.String({ description: "Placeholder for input/editor type questions" })),
-	prefill: Type.Optional(Type.String({ description: "Prefill for input/editor type questions" })),
+	prefill: Type.Optional(Type.String({ description: "Editable evidence-backed draft for input/editor questions; not a confirmed answer. Put known candidate values here, not in placeholder. Leave unknown facts unresolved." })),
 });
 
 const AskQuestionParams = Type.Object({
@@ -128,7 +128,7 @@ const AskQuestionParams = Type.Object({
 		Type.Boolean({ description: "Accepted for compatibility but ignored: select questions always show a custom text input" }),
 	),
 	placeholder: Type.Optional(Type.String({ description: "Placeholder (single input/editor mode)" })),
-	prefill: Type.Optional(Type.String({ description: "Prefill (single input/editor mode)" })),
+	prefill: Type.Optional(Type.String({ description: "Editable evidence-backed draft (single input/editor mode), not a confirmed answer; placeholder is only a format hint." })),
 });
 
 /** 把任意 options 输入归一化为 {label, value, description} 结构，兼容字符串简写 */
@@ -294,6 +294,7 @@ export default function (pi: ExtensionAPI) {
 				"Use type:multi_select with options when the user should pick MULTIPLE choices — checkboxes are rendered and the answer is an array of selected values.",
 				"Use type:confirm when you need a yes/no decision before proceeding (e.g. destructive operations, irreversible changes).",
 				"Use type:input for short free-text responses, and type:editor for multi-line content like code or long explanations.",
+				"When confirming known candidate information, provide an editable evidence-backed draft in prefill so the user can correct it instead of retyping. placeholder is a format hint only, never a suggested answer. Leave unknown customer/identity fields blank or explicitly pending; do not invent facts. Prefill requires user submission and never grants permissions or approval.",
 				"select questions always include a custom free-text input for the user; do not pass allowOther.",
 				"Set review:true to force a Submit/review tab so the user confirms all answers before submitting.",
 			],

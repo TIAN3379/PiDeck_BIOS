@@ -10,6 +10,9 @@ import { parkBlockedExtensionsInDir, unparkBlockedExtensions, type ParkedExtensi
 import type { AppSettings } from "../../shared/types";
 import type { SessionProxyMode } from "../../shared/types/session";
 import { toWindowsHostPath, toWslLinuxPath } from "../wsl/WslPaths";
+// 只 import **纯函数**模块：它没有运行时依赖（类型都是 `import type`），
+// 否则既有 VM 沙箱测试加载 PiProcess 时会因为解析不到 packages/bios-agent 的 .ts 依赖而整批失败。
+import { applyBiosEnv, currentBiosBootId, normalizeBiosHostSettings, resolveSessionSelection } from "../bios/biosProcessEnv";
 import { appendBuiltInExtensionArgs } from "../extensions/builtInExtensions";
 import { MIN_PI_MINOR_VERSION_FOR_EXTENSION_WHITELIST, MIN_PI_MINOR_VERSION_FOR_PROMPT_WHITELIST, MIN_PI_MINOR_VERSION_FOR_SKILL_WHITELIST } from "../extensions/extensionVersionGate";
 import { getAppLogger } from "../logging/sharedLogger";
@@ -18,7 +21,24 @@ import { killProcessTree } from "../git/gitProcess";
 
 type PiProcessSettings = Pick<
 	AppSettings,
-	"piProxyEnabled" | "piProxyUrl" | "piProxyBypass" | "customPiPath" | "wslEnabled" | "wslDistro" | "wslUser" | "piRpcOffline" | "piRpcNoExtensions" | "piRpcNoSkills" | "removedBuiltInExtensions" | "disabledExtensions" | "disabledSkills" | "disabledPrompts" | "disableExtensionWhitelist" | "autoSessionTitle"
+	| "piProxyEnabled"
+	| "piProxyUrl"
+	| "piProxyBypass"
+	| "customPiPath"
+	| "wslEnabled"
+	| "wslDistro"
+	| "wslUser"
+	| "piRpcOffline"
+	| "piRpcNoExtensions"
+	| "piRpcNoSkills"
+	| "removedBuiltInExtensions"
+	| "disabledExtensions"
+	| "disabledSkills"
+	| "disabledPrompts"
+	| "disableExtensionWhitelist"
+	| "autoSessionTitle"
+	| "biosHost"
+	| "biosSelections"
 >;
 
 type PiProcessLocator = Pick<PiLocator, "resolveCommand" | "createInvocation" | "createProcessEnv" | "resolveArgCharBudget"> & Partial<Pick<PiLocator, "warmWslCommand">>;
@@ -156,6 +176,33 @@ function readCwdState(cwd: string): { exists: boolean; isDirectory: boolean } {
 }
 
 type VersionCacheEntry = { status: "pending"; promise: Promise<boolean> } | { status: "done"; ok: boolean; minorVersion: number | null };
+
+/** 停止确认的默认上限（毫秒）：超过即如实报「未确认退出」，不再假装已停止。 */
+const DEFAULT_STOP_CONFIRM_TIMEOUT_MS = 5_000;
+/** 首次超时后，对**本应用拥有的准确子进程**做一次强制终止再确认的等待上限。 */
+const FORCED_KILL_CONFIRM_TIMEOUT_MS = 2_000;
+
+/** `stopAndConfirm` 的结果：`exited=false` 时调用方必须按「旧进程可能仍活着」处理。 */
+export type PiStopConfirmation = {
+	readonly exited: boolean;
+	readonly reason: string | null;
+};
+
+/** 在给定上限内等待一个 promise；超时返回 false（不取消底层等待）。 */
+async function waitsWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise.then(() => true),
+			new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), timeoutMs);
+				timer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
 
 export class PiProcess extends EventEmitter {
 	private proc?: ChildProcessWithoutNullStreams;
@@ -660,6 +707,15 @@ export class PiProcess extends EventEmitter {
 				});
 			}
 			const env = this.locator.createProcessEnv(effectiveSettings, invocation.pathPrefix, invocation.wsl);
+			// BM-07A C3 / R33-3：**权威构造** BIOS 配置——先清除本包列举的配置键，再写当前可信值
+			// （空授权/无选择/默认关闭都显式覆盖）。宿主 process.env 里的旧知识根、旧授权或
+			// BIOS_ALLOW_INTERNAL_GENERAL=1 不会被继承。未配置时只留下 endpoint=unknown 与关闭状态，
+			// 扩展保持惰性（不自动注入），行为回到普通 pi。
+			// 选择按**本会话**的稳定 sessionId 取（不同会话互不沿用），重启后保守关闭。
+			{
+				const selection = resolveSessionSelection(effectiveSettings?.biosSelections, currentBiosBootId(), this.options.securitySessionId ?? null);
+				applyBiosEnv(env, normalizeBiosHostSettings(effectiveSettings?.biosHost), selection);
+			}
 			if (this.options.securitySnapshotPath) {
 				env.PIDECK_SECURITY_CONFIG = command.startsWith("wsl://") ? toWslLinuxPath(this.options.securitySnapshotPath, { distro: this.settings?.wslDistro ?? "" }) : this.options.securitySnapshotPath;
 			}
@@ -854,14 +910,23 @@ export class PiProcess extends EventEmitter {
 			return;
 		}
 		const pid = this.proc.pid;
-		if (pid !== undefined && process.platform === "win32") {
-			// Windows：先整树强杀、再杀根。pi-subagents / acp_delegate 的子代理是 pi
-			// 自行 spawn 的独立进程，只 kill 根进程会把它们留在孤儿态继续运行（父会话
-			// 已停、子代理还在烧 token）。taskkill /T 需要根进程存活才能枚举整棵树，
-			// 顺序反过来会漏杀；/F 与原 proc.kill()（TerminateProcess）强度一致。
-			killProcessTree(pid);
+		// kill 抛错不能让「停止」本身崩掉调用方：真正的结论由 stopAndConfirm 用 exit 确认给出，
+		// 这里尽力发信号，失败也继续走后面的兜底路径/如实上报。
+		try {
+			if (pid !== undefined && process.platform === "win32") {
+				// Windows：先整树强杀、再杀根。pi-subagents / acp_delegate 的子代理是 pi
+				// 自行 spawn 的独立进程，只 kill 根进程会把它们留在孤儿态继续运行（父会话
+				// 已停、子代理还在烧 token）。taskkill /T 需要根进程存活才能枚举整棵树，
+				// 顺序反过来会漏杀；/F 与原 proc.kill()（TerminateProcess）强度一致。
+				killProcessTree(pid);
+			}
+			this.proc.kill();
+		} catch (error) {
+			void getAppLogger()?.warn("pi-process", "Stop signal failed", {
+				pid: pid ?? null,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
-		this.proc.kill();
 		if (pid !== undefined && process.platform !== "win32") {
 			// Unix：先 SIGTERM 优雅停 pi（保持原语义），延迟对整个进程组 SIGKILL 兜底
 			// ——spawn 已 detached（pi 是组长），兜底只清理 pi 退出后残留的子代理；
@@ -877,6 +942,86 @@ export class PiProcess extends EventEmitter {
 			reaper.unref?.();
 		}
 		// 真正还原在 exit 回调里做；此处不提前 unpark，避免与仍在退出的 pi 竞态。
+	}
+
+	/**
+	 * 停止并**确认子进程真的退出**（B-01：撤权不能靠「stop 方法返回」来断定）。
+	 *
+	 * 与 `stop()` 的区别：
+	 * 1. `stop()` 是同步发信号，调用方返回后进程可能仍在退出中；
+	 * 2. 本方法等待 `exit` 事件（真实 OS 确认），有时间上限；
+	 * 3. 超时后对本应用拥有的准确子进程做一次强制终止（Windows 树杀 / Unix 进程组 SIGKILL），
+	 *    再确认一次；**绝不按进程名杀 node/Electron**；
+	 * 4. 仍确认不了时**保留 `this.proc` 句柄**（不置空），供调用方重试/诊断/退出兜底，
+	 *    并返回 `exited: false` + 原因——调用方不得据此宣称「已停止」。
+	 */
+	async stopAndConfirm(options: { timeoutMs?: number } = {}): Promise<PiStopConfirmation> {
+		const child = this.proc;
+		if (child === undefined) {
+			// 进程已不在：仍可能残留停放态（start 中途失败路径），顺手还原。
+			this.restoreParkedExtensions();
+			return { exited: true, reason: null };
+		}
+		const pid = child.pid;
+		const timeoutMs = options.timeoutMs ?? DEFAULT_STOP_CONFIRM_TIMEOUT_MS;
+		// 先挂 exit 监听再发信号：避免「信号发出后、监听挂上前」已经退出的窗口。
+		let resolveExit: () => void = () => {};
+		const onExit = () => resolveExit();
+		const exited = new Promise<void>((resolve) => {
+			resolveExit = resolve;
+			if (this.proc !== child) {
+				resolve();
+				return;
+			}
+			child.once("exit", onExit);
+		});
+		try {
+			this.stop();
+			if (await waitsWithin(exited, timeoutMs)) return { exited: true, reason: null };
+
+			// 超时：对本应用拥有的准确 pid 做一次强制终止退路，再给一段确认窗口。
+			this.forceKillOwnedProcess(child, pid);
+			if (await waitsWithin(exited, Math.min(timeoutMs, FORCED_KILL_CONFIRM_TIMEOUT_MS))) return { exited: true, reason: null };
+
+			// 仍未确认退出：保留句柄，如实返回失败（不做「已尽力关闭」的模糊结论）。
+			const reason = pid === undefined ? `等待 pi 子进程退出超时（${timeoutMs}ms），且未取得进程 pid：无法确认旧进程已退出` : `等待 pi 子进程退出超时（${timeoutMs}ms）：进程 ${pid} 可能仍在运行（旧工具许可可能未撤销）`;
+			void getAppLogger()?.error("pi-process", "Stop could not be confirmed: process may still be alive", {
+				pid: pid ?? null,
+				timeoutMs,
+			});
+			return { exited: false, reason };
+		} finally {
+			// 超时与异常也必须清理临时监听；保留进程句柄不等于保留每次重试的监听。
+			child.off("exit", onExit);
+		}
+	}
+
+	/**
+	 * 对本应用 spawn 的**准确子进程**做强制终止（仅按 pid/进程组，绝不按进程名匹配）。
+	 *
+	 * Windows：`taskkill /T /F` 整树 + 根进程 TerminateProcess；
+	 * Unix：对 detached 进程组 SIGKILL（组内残留子代理一并清理）。
+	 */
+	private forceKillOwnedProcess(child: ChildProcessWithoutNullStreams, pid: number | undefined): void {
+		if (pid !== undefined && process.platform === "win32") {
+			try {
+				killProcessTree(pid);
+			} catch {
+				/* 进程可能刚好已退出 */
+			}
+		}
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			/* 进程可能刚好已退出 */
+		}
+		if (pid !== undefined && process.platform !== "win32") {
+			try {
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				/* 组已不存在 */
+			}
+		}
 	}
 
 	/** 后台执行 pi --version：更新诊断缓存，但不阻塞 start()/spawn。 */

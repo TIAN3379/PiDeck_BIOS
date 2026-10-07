@@ -1,6 +1,55 @@
 import type { SessionProcessEvent } from "../../shared/types/trajectory";
-import { scanJsonlLines } from "./jsonlLineStream";
-import { MAX_EVENTS, parseSessionProcessEventLine } from "./sessionProcessEvents";
+// 显式 `.ts` 扩展名：Node 的 type-stripping 直跑测试时才能解析（与 bios-agent 侧同一约定）。
+import { scanJsonlLines } from "./jsonlLineStream.ts";
+import { MAX_EVENTS, parseSessionProcessEventLine } from "./sessionProcessEvents.ts";
+
+/** 单次增量读取最多返回多少条事件（只针对**本次新增**区间，长会话不受历史条数影响）。 */
+export const MAX_INCREMENTAL_EVENTS = 256;
+
+/**
+ * R35-2：**增量读**会话文件里自 `offset` 起新增的过程事件。
+ *
+ * 为什么不能复用"从头读到 MAX_EVENTS"：那是账本展示用的有界读取，长会话（>240 条事件）里
+ * 新回执根本不在返回集合内，拿它当实时 ACK 查询会永远超时。
+ * 这里只读**追加区间**：调用方先取当前文件长度当游标，之后每次只读游标之后的内容，
+ * 因此读取量与"这段时间新增了多少"成正比，不读客户历史。
+ *
+ * 返回的 `nextOffset` 只推进到**最后一个完整行**之后：文件末尾可能有一条 pi 正在写的残行，
+ * 下次轮询会从残行开头重新读到它。
+ */
+export async function readSessionProcessEventsSince(filePath: string, offset: number): Promise<{ readonly events: SessionProcessEvent[]; readonly nextOffset: number }> {
+	const events: SessionProcessEvent[] = [];
+	const start = Math.max(0, Math.floor(offset));
+	let scanned = 0;
+	let trailing = 0;
+	try {
+		const summary = await scanJsonlLines(
+			filePath,
+			(line, context) => {
+				// 残行（还没写完）不消费：游标不会越过它，下一次轮询重新读。
+				if (!context.complete) return;
+				const event = parseSessionProcessEventLine(line, context.index);
+				if (event === undefined) return;
+				events.push(event);
+				if (events.length >= MAX_INCREMENTAL_EVENTS) return "stop";
+			},
+			{ start },
+		);
+		scanned = summary.bytesScanned;
+		trailing = summary.trailingBytes;
+	} catch (error) {
+		// 读失败但已读到部分新增事件：保留已读结果（调用方按"没看到目标回执"处理）。
+		if (events.length === 0) throw error;
+	}
+	return { events, nextOffset: start + Math.max(0, scanned - trailing) };
+}
+
+/** 当前文件长度（增量游标的起点）。 */
+export async function sessionFileSize(filePath: string): Promise<number> {
+	const { stat } = await import("node:fs/promises");
+	const info = await stat(filePath);
+	return info.size;
+}
 
 /**
  * 直接从会话文件流式抽过程事件（历史会话的轨迹账本入口）。

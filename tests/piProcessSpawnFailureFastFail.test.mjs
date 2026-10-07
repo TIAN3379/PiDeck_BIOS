@@ -74,6 +74,8 @@ function loadPiProcess(child) {
 			if (id === "./PiLocator") return { PiLocator: class {} };
 			if (id === "./piSpawnFailure") return require("../src/main/pi/piSpawnFailure.ts");
 			if (id === "../wsl/WslPaths") return wslPathsSandbox.exports;
+			// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。
+			if (id === "../bios/biosProcessEnv") return require("../src/main/bios/biosProcessEnv.ts");
 			if (id === "./piExtensionFilter") {
 				return {
 					parkBlockedExtensionsInDir: () => [{ name: "codeisland", from: "a", to: "b" }],
@@ -302,3 +304,5 @@ test("AgentManager 把 spawn 失败判据和启动握手超时接进启动链路
 	assert.match(piProcessSource, /versionCheckProbed/);
 	assert.match(piProcessSource, /launch: invocation\.windowsLaunch/);
 });
+
+// BM-07A C3 / R33-3：PiProcess 的 BIOS 权威环境构造（纯模块，无 packages 依赖）。

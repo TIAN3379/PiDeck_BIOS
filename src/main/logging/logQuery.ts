@@ -1,4 +1,4 @@
-import type { AppLogEntry, AppLogPage, AppLogQuery } from "../../shared/types";
+import type { AppLogEntry, AppLogPage, AppLogQuery } from "../../shared/types/app";
 
 /**
  * 日志查询纯函数：不依赖 electron/fs，AppLogger 只负责文件 IO，

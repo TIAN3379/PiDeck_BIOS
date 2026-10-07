@@ -109,6 +109,21 @@ test("批量 item 缺 type 且无 options：推断为 input", async () => {
 	assert.equal(envelope().questions[0].type, "input");
 });
 
+test("UX-01: 模型收到预填指引，批量与单题均保留显式候选，placeholder 不被升级", async () => {
+	const tool = registerTool();
+	assert.match(tool.promptGuidelines.join(" "), /prefill/);
+	assert.match(tool.promptGuidelines.join(" "), /do not invent facts/);
+	for (const params of [{ questions: [{ id: "q1", type: "input", question: "确认", prefill: "项目=Sample；客户=待确认", placeholder: "仅格式提示" }] }, { type: "input", question: "确认", prefill: "项目=Sample；客户=待确认", placeholder: "仅格式提示" }]) {
+		const { promise, envelope } = runBatch(tool, params);
+		await promise;
+		assert.equal(envelope().questions[0].prefill, "项目=Sample；客户=待确认");
+		assert.equal(envelope().questions[0].placeholder, "仅格式提示");
+	}
+	const { promise, envelope } = runBatch(tool, { question: "客户", placeholder: "例如：Example Customer" });
+	await promise;
+	assert.equal(envelope().questions[0].prefill, undefined);
+});
+
 test("显式 type 不被推断覆盖：confirm / multi_select / editor 原样生效", async () => {
 	const tool = registerTool();
 	const { promise, envelope } = runBatch(tool, {

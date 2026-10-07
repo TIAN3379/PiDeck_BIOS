@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray, Notification } from "electron";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolveBiosService } from "./bios/biosServiceIdentity";
 import { basename, join } from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -286,6 +287,21 @@ import { UsageStatsService } from "./usageStats/UsageStatsService";
 import { constrainWindowBoundsToWorkArea, type LastWindowBounds, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, readLastWindowBounds, saveLastWindowBounds } from "./windowState";
 import { createRendererCrashRecoveryGuard } from "./window/rendererCrashRecovery";
 import { registerBackgroundImageProtocol, registerBackgroundsIpc } from "./ipc/backgroundsIpc";
+import { createBiosKnowledgeService, normalizeBiosHostSettings } from "./bios/BiosKnowledgeService";
+import { createBiosSessionPortFromAgentManager } from "./bios/BiosSessionPort";
+import { readSessionProcessEventsSince, sessionFileSize } from "./sessions/sessionProcessEventsFile";
+import { registerBiosIpc } from "./ipc/biosIpc";
+import { createBiosBusinessService } from "./bios/BiosBusinessService";
+import { registerBiosBusinessIpc } from "./ipc/biosBusinessIpc";
+import { BiosLibraryService } from "./bios/BiosLibraryService";
+import { BiosStoreWriteGate } from "./bios/BiosStoreWriteGate";
+import { registerBiosLibraryIpc } from "./ipc/biosLibraryIpc";
+
+import { BiosAutomationStatusService } from "./bios/BiosAutomationStatusService";
+import { BiosOnboardingService } from "./bios/BiosOnboardingService";
+import { registerBiosOnboardingIpc } from "./ipc/biosOnboardingIpc";
+import { registerBiosHistoryIpc } from "./ipc/biosHistoryIpc";
+import { BiosHistoryService } from "./bios/BiosHistoryService";
 import { registerGitIpc } from "./ipc/gitIpc";
 import { registerStoreIpc } from "./ipc/storeIpc";
 import { registerTerminalIpc } from "./ipc/terminalIpc";
@@ -2286,6 +2302,114 @@ function registerIpc() {
 	// 换肤背景图：协议服务 userData/backgrounds/，IPC 负责选图复制与删除
 	registerBackgroundImageProtocol();
 	registerBackgroundsIpc();
+	// BM-07A C1：BIOS 知识/任务面板（只读管理 + 人工选择）。可信配置存在桌面设置里，
+	// 由 PiProcess 注入 BIOS_* 环境变量；renderer 只经 bios:* IPC 访问，不 import Node/Pi SDK。
+	// R33-2：会话身份/代次由主进程从真实会话表解析（renderer 只能提交 SessionRef，不能给目录）。
+	{
+		// 只读服务与人工业务服务共用同一个会话端口：撤权（revoke）+ 确认式停止（stopAndConfirm）
+		// 必须在两边是同一件事，否则会出现"业务侧以为已撤权、会话侧仍能发送"。
+		const biosSessionPort = createBiosSessionPortFromAgentManager(
+			{
+				list: () => agentManager.list(),
+				sendPrompt: (input) => agentManager.sendPrompt({ ...input, requestId: randomUUID() }),
+				stop: (agentId) => agentManager.stop(agentId),
+				// B-01：撤权要核对**真正退出**，不能靠 stop() 返回就报已停止。
+				stopAndConfirm: (agentId) => agentManager.stopAndConfirm(agentId),
+				revokeRuntimeAuthority: (agentId, generation) => agentManager.revokeRuntimeAuthority(agentId, generation),
+			},
+			{
+				/** R35-2：增量读会话文件（长会话也能拿到新回执，不整读客户历史）。 */
+				fileSize: (filePath) => sessionFileSize(filePath),
+				readSince: (filePath, offset) => readSessionProcessEventsSince(filePath, offset),
+			},
+		);
+		const biosKnowledgeService = createBiosKnowledgeService({
+			readSettings: () => settingsStore.get().biosHost ?? null,
+			readSelections: () => settingsStore.get().biosSelections ?? null,
+			writeSelections: async (next) => {
+				await settingsStore.update({ biosSelections: next });
+			},
+			// R35-1：用**生产装配工厂**接全能力（listSessions / pushContextOff / stopRuntime 一个不少）。
+			session: biosSessionPort,
+		});
+		// C5：自动记忆状态的宿主投影（只读附属记录；目录由桌面项目表解析）。
+		const biosAutomationStatusService = new BiosAutomationStatusService({
+			readSettings: () => settingsStore.get().biosHost ?? null,
+			resolveProject: (desktopProjectId) => projectStore.get(desktopProjectId) ?? null,
+		});
+		registerBiosIpc({
+			biosService: biosKnowledgeService,
+			readAutomationStatus: (desktopProjectId) => biosAutomationStatusService.read(desktopProjectId),
+			readBiosSettings: () => settingsStore.get().biosHost ?? null,
+			updateBiosSettings: async (patch) => {
+				await settingsStore.update({ biosHost: normalizeBiosHostSettings(patch) });
+			},
+			readBiosSelections: () => settingsStore.get().biosSelections ?? null,
+			updateBiosSelections: async (next) => {
+				await settingsStore.update({ biosSelections: next });
+			},
+			appLogger,
+			onChanged: (event) => {
+				for (const window of BrowserWindow.getAllWindows()) window.webContents.send(ipcChannels.biosChanged, event);
+			},
+		});
+		// BM-07B B-02：人工业务读写。renderer 只提交业务 ID/正文/revision；
+		// cwd 由会话解析、工作区路径由**真实桌面项目表**解析，均不采信请求。
+		const biosStoreWriteGate = new BiosStoreWriteGate();
+		registerBiosLibraryIpc(new BiosLibraryService({ readSettings: () => settingsStore.get().biosHost ?? null, readConfigurationVersion: () => biosKnowledgeService.currentConfigurationVersion(), writeGate: biosStoreWriteGate }));
+		const biosBusinessService = createBiosBusinessService({
+			writeGate: biosStoreWriteGate,
+			readSettings: () => settingsStore.get().biosHost ?? null,
+			session: biosSessionPort,
+			resolveDesktopProjectPath: (desktopProjectId) => {
+				const project = projectStore.get(desktopProjectId);
+				return project?.kind === "chat" || desktopProjectId === "builtin-chat" ? null : (project?.path ?? null);
+			},
+			readConfigurationVersion: () => biosKnowledgeService.currentConfigurationVersion(),
+		});
+		registerBiosBusinessIpc({ business: biosBusinessService, appLogger });
+		registerBiosHistoryIpc(
+			new BiosHistoryService({
+				readSettings: () => settingsStore.get().biosHost ?? null,
+				readConfigurationVersion: () => biosKnowledgeService.currentConfigurationVersion(),
+				resolveProject: (id) => projectStore.get(id) ?? null,
+			}),
+		);
+		registerBiosOnboardingIpc({
+			onboarding: new BiosOnboardingService({
+				readSettings: () => settingsStore.get().biosHost ?? null,
+				readConfigurationVersion: () => biosKnowledgeService.currentConfigurationVersion(),
+				resolveProject: (id) => projectStore.get(id) ?? null,
+				saveAuthorization: async (patch) => {
+					const result = await biosKnowledgeService.updateSettings(patch);
+					await settingsStore.update({ biosHost: result.settings });
+					return result;
+				},
+				bindProject: (request) => biosBusinessService.bindProject(request),
+				// D4：具名端点许可的**真实身份**只能由主进程读运行态得到——
+				// renderer 只提交"哪一栏会话"，这里核对 agentId/sessionId/generation 后
+				// 取 Pi 报告的模型（provider/id/baseUrl 的源），核对不过一律返回 null（不授权）。
+				resolveService: (ref) => resolveBiosService({ list: () => agentManager.list(), getRuntimeState: (id) => agentManager.getRuntimeState(id) }, ref),
+				// AW-01：未配置知识根时提议主进程 userData 下的默认库（不用临时目录、不写客户源码树）。
+				resolveDefaultKnowledgeRoot: () => join(app.getPath("userData"), "bios-knowledge"),
+				// AW-01：一次确认里初始化默认库；已存在时 `initializeKnowledgeStore` 返回 existing（幂等）。
+				initializeStore: async ({ knowledgeRoot }) => {
+					try {
+						const envelope = await biosBusinessService.initialize({ knowledgeRoot });
+						// `existing` 是幂等成功；`committed` 表示本次确实创建了库。
+						const ok = envelope.result.status === "existing" || envelope.committed;
+						return { ok, problem: ok ? null : (envelope.guard.staleReason ?? "默认知识库创建未完成") };
+					} catch (error) {
+						return { ok: false, problem: error instanceof Error ? error.message : String(error) };
+					}
+				},
+			}),
+			appLogger,
+			onChanged: () => {
+				for (const window of BrowserWindow.getAllWindows()) window.webContents.send(ipcChannels.biosChanged, { kind: "settings" });
+			},
+		});
+	}
 	registerProjectsIpc({
 		projectStore,
 		settingsStore,

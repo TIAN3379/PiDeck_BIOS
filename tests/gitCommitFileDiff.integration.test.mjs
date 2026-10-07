@@ -24,9 +24,8 @@ function write(relativePath, content) {
 }
 
 before(() => {
-	// Compile only the service and its shared types so the integration test exercises
-	// the real implementation without requiring a complete Electron build first.
-	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/GitService.ts", "src/shared/types.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
+	// Compile the Git domain only; the shared barrel also exports native .ts BIOS modules.
+	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/GitService.ts", "src/shared/types/git.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
 	// GitService 依赖 ../fs/trash（懒加载 electron.shell.trashItem）。
 	// 纯 Node 集成测试环境没有 electron，注入 stub：模拟回收站 = 删除源文件，
 	// 使 discard untracked 的真实删除语义在测试中成立。

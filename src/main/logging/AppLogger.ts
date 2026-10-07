@@ -1,7 +1,7 @@
 import { app, shell } from "electron";
 import { appendFile, mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AppLogEntry, AppLogLevel, AppLogPage, AppLogQuery } from "../../shared/types";
+import type { AppLogEntry, AppLogLevel, AppLogPage, AppLogQuery } from "../../shared/types/app";
 import { DEFAULT_PAGE_SIZE, LOG_FILE_PATTERN, MAX_FILE_LINES, filterLogFiles, queryLogLines, toAppLogPage } from "./logQuery";
 import { LogLineCache } from "./logLineCache";
 

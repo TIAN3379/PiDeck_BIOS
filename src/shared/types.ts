@@ -2,6 +2,9 @@
 // Phase 1.1: 按域拆分为子文件，此处统一 re-export
 
 export * from "./types/project";
+export * from "./types/bios";
+export * from "./types/biosOnboarding";
+export * from "./types/biosHistory";
 export * from "./sessionTabWidth";
 export * from "./types/focus";
 export * from "./types/agent";

@@ -14,6 +14,7 @@ import type { ExtensionManager } from "../extensions/ExtensionManager";
 import type { ProjectResourceManager } from "../projects/ProjectResourceManager";
 import type { ConfigManager } from "../config/ConfigManager";
 import { getPiPackageCatalog } from "../extensions/piPackageCatalog";
+import { isBuiltInExtensionName } from "../extensions/builtInExtensions";
 
 export type StoreIpcDeps = {
 	promptManager: PromptManager;
@@ -587,8 +588,11 @@ export function registerStoreIpc({ promptManager, skillManager, xuePromptManager
 		return result;
 	});
 	ipcMain.handle(ipcChannels.extensionsToggle, async (_event, source: string, enabled: boolean, scope?: "user" | "project" | "unknown") => {
+		source = requireText(source, "extension source").trim();
+		if (typeof enabled !== "boolean") throw new Error("Invalid extension enabled flag.");
+		if (scope !== undefined && scope !== "user" && scope !== "project" && scope !== "unknown") throw new Error("Invalid extension scope.");
 		// 内置扩展走 removedBuiltInExtensions + RPC -e，不再写用户扩展目录 / pi disabledExtensions。
-		if (source.startsWith("pi-deck-") && source.endsWith(".ts")) {
+		if (isBuiltInExtensionName(source)) {
 			if (enabled) await extensionManager.restoreBuiltIn(source);
 			else await extensionManager.disableBuiltIn(source);
 		} else {

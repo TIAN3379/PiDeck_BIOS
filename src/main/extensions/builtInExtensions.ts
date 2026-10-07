@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BUILT_IN_EXTENSIONS_OVERLAY_DIR_NAME, readVerifiedArtifact, type BuiltInExtensionsManifest } from "./builtInExtensionsManifest";
 
@@ -45,6 +45,15 @@ export const BUILT_IN_EXTENSIONS = [
 
 /** Internal adapter loaded after user-facing tool policies; not listed in settings UI. */
 export const INTERNAL_BUILT_IN_EXTENSIONS = ["pi-deck-shell-proxy.ts"] as const;
+
+/**
+ * BM-07A C3：**BIOS 专业 Package** 的源标识（禁用链/设置里的 source 名）。
+ *
+ * 与普通内置扩展不同：它是**一个目录**（含 `extensions/` + `core/` + `skills/` 的整包），
+ * 以 `-e <包目录>` 注入——pi 会用包内的 `pi.skills` 清单一起加载 Skills。
+ * 只复制入口 TS 会让 `../core/**` 的相对 import 解析失败，所以**整包**随应用分发。
+ */
+export const BIOS_AGENT_PACKAGE_SOURCE = "bios-agent";
 const ALL_BUILT_IN_EXTENSIONS = [...BUILT_IN_EXTENSIONS, ...INTERNAL_BUILT_IN_EXTENSIONS] as const;
 
 export type BuiltInExtensionName = (typeof BUILT_IN_EXTENSIONS | typeof INTERNAL_BUILT_IN_EXTENSIONS)[number];
@@ -63,10 +72,64 @@ export type BuiltInExtensionPathRoots = {
 	overlayDir?: string;
 };
 
-/** 校验 source 是否为允许的内置扩展 basename（防路径穿越）。 */
-export function isBuiltInExtensionName(source: string): source is BuiltInExtensionName {
+/** 校验 source 是否为允许的内置扩展 basename（防路径穿越；含专业 Package 目录名）。 */
+export function isBuiltInExtensionName(source: string): source is BuiltInExtensionName | typeof BIOS_AGENT_PACKAGE_SOURCE {
 	const name = basename(source.trim());
-	return (ALL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name) && name === source.trim();
+	if (name !== source.trim()) return false;
+	if (name === BIOS_AGENT_PACKAGE_SOURCE) return true;
+	return (ALL_BUILT_IN_EXTENSIONS as readonly string[]).includes(name);
+}
+
+/** 兼容旧 BIOS toggle 的误写：在用户恢复前，两种启动模式都尊重其禁用意图。 */
+export function effectiveRemovedBuiltInExtensions(removed: readonly string[], disabled: readonly { scope: string; source: string }[]): string[] {
+	return [...new Set([...removed, ...disabled.filter((entry) => entry.scope === "user" && entry.source.trim() === BIOS_AGENT_PACKAGE_SOURCE).map(() => BIOS_AGENT_PACKAGE_SOURCE)])];
+}
+
+/**
+ * 专业 Package 目录：开发态 = 仓库 `packages/bios-agent`；打包态 = `resources/bios-agent`
+ * （见根 `package.json` 的 `extraResources`）。
+ */
+export function resolveBiosAgentPackageDir(roots: BuiltInExtensionPathRoots): string {
+	return roots.isDev ? join(roots.appPath, "packages", "bios-agent") : join(roots.resourcesPath, BIOS_AGENT_PACKAGE_SOURCE);
+}
+
+/** 专业 Package 的扩展入口（存在才算这个包可用；注入的路径是**包目录**而不是入口文件）。 */
+export function resolveBiosAgentPackageEntry(roots: BuiltInExtensionPathRoots): string {
+	return join(resolveBiosAgentPackageDir(roots), "extensions", "index.ts");
+}
+
+/** 专业 Package 的可显示信息（版本 / Skills 数量 / 是否可用）。 */
+export type BiosAgentPackageInfo = {
+	readonly dir: string;
+	readonly entry: string;
+	readonly version: string | null;
+	/** `skills/` 下的技能目录数（`pi.skills` 清单指向它）。 */
+	readonly skillCount: number;
+};
+
+/**
+ * R36-3：读专业包的**实际磁盘信息**，供扩展管理界面显示来源/目录/版本/Skills。
+ *
+ * 只读 `package.json` 与 `skills/` 目录清单，不做任何写入；包不可用时返回 null（界面按"缺失"显示）。
+ */
+export function readBiosAgentPackageInfo(roots: BuiltInExtensionPathRoots): BiosAgentPackageInfo | null {
+	const dir = resolveBiosAgentPackageDir(roots);
+	const entry = resolveBiosAgentPackageEntry(roots);
+	if (!existsSync(entry)) return null;
+	let version: string | null = null;
+	let skillCount = 0;
+	try {
+		const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: unknown };
+		version = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : null;
+	} catch {
+		version = null;
+	}
+	try {
+		skillCount = readdirSync(join(dir, "skills"), { withFileTypes: true }).filter((item) => item.isDirectory()).length;
+	} catch {
+		skillCount = 0;
+	}
+	return { dir, entry, version, skillCount };
 }
 
 /**
@@ -139,6 +202,8 @@ export function resolveBuiltInExtensionPath(extensionName: string, roots: BuiltI
 	if (!isBuiltInExtensionName(name)) {
 		throw new Error(`非法内置扩展名: ${extensionName}`);
 	}
+	// 专业 Package 是**目录**：不做覆盖层比对（它不参与热更新覆盖），直接给包目录。
+	if (name === BIOS_AGENT_PACKAGE_SOURCE) return resolveBiosAgentPackageDir(roots);
 	// 覆盖层优先：热更新写入的版本必须真正参与 -e 注入，否则「更新成功」只是自欺。
 	// 但要整份校验通过才认——半截覆盖层（缺文件/被外部改动）会让 pi 解析不到相对 import。
 	if (roots.overlayDir && overlayArtifact(roots.overlayDir)) {
@@ -164,6 +229,12 @@ export function listActiveBuiltInExtensionPaths(roots: BuiltInExtensionPathRoots
 		const fullPath = resolveBuiltInExtensionPath(name, roots);
 		if (!existsSync(fullPath)) continue;
 		paths.push(fullPath);
+	}
+	// BM-07A C3：**专业 Package** 以整包目录参与同一条白名单/禁用链。
+	// - 入口存在（`extensions/index.ts`）才注入整包：只复制入口 TS 的分发会让相对 import 解析失败；
+	// - 用户在设置里移除 `bios-agent` ⇒ 不注入 ⇒ 回到普通 Pi（知识库与配置都不删除）。
+	if (!removed.has(BIOS_AGENT_PACKAGE_SOURCE) && existsSync(resolveBiosAgentPackageEntry(roots))) {
+		paths.push(resolveBiosAgentPackageDir(roots));
 	}
 	return paths;
 }

@@ -22,7 +22,7 @@ function git(cwd, ...args) {
 }
 
 before(() => {
-	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/gitRepoScope.ts", "src/shared/types.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
+	execFileSync(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "src/main/git/gitRepoScope.ts", "src/shared/types/git.ts", "--module", "commonjs", "--target", "es2022", "--moduleResolution", "node", "--esModuleInterop", "--skipLibCheck", "--outDir", buildDir], { cwd: resolve("."), stdio: "pipe" });
 	({ listGitRepos, resolveGitCwd, isPathInsideProject } = require(join(buildDir, "main/git/gitRepoScope.js")));
 });
 

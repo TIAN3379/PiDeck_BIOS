@@ -718,6 +718,10 @@ export class SessionRuntimeCoordinator {
 					modelName: appliedModel.modelName,
 					thinkingLevel: effectiveThinkingLevel,
 				});
+				// BIOS consent reads actual runtime identity, not the selected preference label.
+				this.requireBoundTarget(target);
+				await this.agents.publishRuntimeState(agentId).catch(() => undefined);
+				this.requireBoundTarget(target);
 				return result;
 			}),
 		);
