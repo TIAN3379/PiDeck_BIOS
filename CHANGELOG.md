@@ -1,3 +1,36 @@
+## v0.9.3 - 2026-10-07
+
+### 🚀 New Features
+- **Conversational BIOS workflow** — After project authorization, prepare background, retrieve working leads, record actual progress and draft experience, with task continuation, Git evidence, customer requirement confirmation and memory maintenance. Pi remains the execution core.
+- **Local knowledge library** — Browse, filter, inspect evidence and edit experiences/requirements offline, with revision conflicts, reviewed-to-draft confirmation and unsaved-change protection.
+
+### ✨ Improvements
+- **Minimal BIOS sidebar** — Show essential project/knowledge status only; unified dialogs handle onboarding and key permissions, while detailed management opens on demand.
+- **Documentation and delivery cleanup** — Remove obsolete round plans, acceptance reports, handoffs and diagnostic backups; retain current guides, architecture, layered-memory design and validation/release checklists. First public release is a Windows x64 preview.
+
+### 🐛 Fixes
+- **Consistent project lifecycle** — Plain chat is not onboarded, connected projects are not duplicated, disconnected archives are filtered on refresh, and legacy bindings are repaired with confirmation while retaining the original IDs.
+- **Runtime and data permission guards** — Model changes, revocation and session generations invalidate stale grants/previews; bounded context and CAS remain enforced. No automatic approval, flashing or Git push.
+
+## v0.9.2 - 2026-10-06
+
+- **Local knowledge browsing and editing (October 7 revision)** — View knowledge library lists and filters saved experiences and customer requirements, shows full records/evidence, and supports local editing without an AI runtime or expanded model access. Unsaved changes, revision conflicts and reviewed-experience transitions remain guarded.
+- **Legacy project onboarding fix** — Path-authorized records without a desktop association now show the confirmation dialog. Confirmation repairs the association using the original project/workspace IDs without duplicate registration or lost knowledge.
+- **Minimal BIOS sidebar (October 7 revision)** — The default view shows project, knowledge-store and automatic-memory status plus one Manage entry. Task and knowledge forms move to a management dialog; everyday work stays in chat.
+- **One human-confirmation entry** — Project onboarding and model consent share a single root dialog; connected projects no longer show a second onboarding form. Critical BIOS AI requests use confirmation dialogs, and cancellation never grants permission. Closing management preserves prepared history analysis for sending in chat and returning to its candidate; revocation still invalidates the analysis.
+- **Default autonomous BIOS workflow**: after one merge authorization in the BIOS workbench, opening an authorized project prepares its background, searches this project's working leads before your first investigation of an engineering question, and saves real execution facts, progress and draft experience to the local knowledge store - no need to ask it to "check memory" or "remember this". It never auto-approves or reuses experience, never grants extra source-edit rights and never allows model outbound.
+- **One merge authorization instead of several**: when no knowledge store is configured yet, the single "Authorize and connect" confirmation now also creates the default store under the app data directory. An existing store (including your own `D:\BIOS_Knowledge`) is reused as is, never moved or duplicated.
+- **Persistent switch and session pause**: the BIOS settings page gains a default autonomous workflow toggle; `/bios-workflow off` pauses it for the current session only. Unauthorized projects, denied/unknown endpoints and revoked directories are still refused, and the automation records live under an isolated `automation/` folder that never joins the reviewed experience schema.
+- **Strict automation limits**: at most one reflection stage, two provider requests and two write tool calls per original request; a checkpoint file per run is idempotent, revocable and excluded from review. Corrupted or future-versioned state files are refused without rewriting the original bytes.
+- **Skills and methods**: the two BIOS Skills are updated to the automatic behaviour and two new ones are added - generic UEFI/EDK II source navigation (`common-uefi`) and BIOS investigation method (`bios-investigation`).
+
+## v0.9.1 - 2026-10-06
+
+- Conversational BIOS tasks, read-only Git evidence, draft experience deduplication, task backlinks and fresh-session continuation.
+- AI-prepared customer requirements require actual human confirmation and existing host authorization.
+- Bounded memory maintenance proposes duplicate/conflict/baseline reviews; confirmed retirement/restoration preserves audits and explicit replacement revisions. No automatic approval or deletion.
+- Simplified BIOS overview with advanced manual controls. A bounded in-process incremental candidate index accelerates retrieval; authoritative local JSON hits are re-read. No whole-store upload or vector service.
+
 ## v0.9.0 - 2026-10-01
 
 ### 🚀 New Features

@@ -1,6 +1,6 @@
 {
   "name": "bios-agent-desktop",
-  "version": "0.9.0",
+  "version": "0.9.3",
   "packageManager": "npm@11.6.2",
   "engines": {
     "npm": "^11.6.2"

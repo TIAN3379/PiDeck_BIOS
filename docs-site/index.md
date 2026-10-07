@@ -6,23 +6,23 @@ title: PiDeck - pi desktop 桌面工作台 | 多项目 pi Agent 客户端
 description: PiDeck 是开源的 pi desktop 桌面工作台（pi 桌面客户端），在统一窗口管理多个 pi AI 编码助手会话、Git、终端与模型配置，支持导入 Codex/Claude 会话，覆盖 Windows、macOS、Linux。
 
 hero:
-  name: PiDeck
+  name: BIOS Agent
   text: 多项目 pi Agent 桌面工作台
   tagline: 在统一的桌面工作区中管理本地 pi 编码助手会话、配置、Git 和终端，支持 Windows、macOS、Linux，让本地 AI 编码工作流更稳定高效。
   actions:
     - theme: brand
       text: 下载最新版本
-      link: https://github.com/ayuayue/PiDeck/releases
+      link: https://github.com/TIAN3379/PiDeck_BIOS/releases
     - theme: alt
       text: 快速开始
-      link: /guide/getting-started
+      link: /guide/bios-agent
     - theme: alt
       text: 源码仓库
       items:
         - text: GitHub 仓库（海外）
-          link: https://github.com/ayuayue/PiDeck
-        - text: AtomGit 仓库（国内镜像）
-          link: https://atomgit.com/ayuayue/PiDeck
+          link: https://github.com/TIAN3379/PiDeck_BIOS
+        - text: BIOS_Agent 开发分支
+          link: https://github.com/TIAN3379/PiDeck_BIOS/tree/BIOS_Agent
 
 features:
   - title: 多项目工作区
@@ -49,6 +49,10 @@ features:
   <img src="/images/overview.png" alt="PiDeck 工作区与对话界面截图">
   <figcaption>工作区、会话、文件抽屉、Git 分支和工具调用集中在同一个桌面窗口中。</figcaption>
 </figure>
+
+## BIOS 专业功能
+
+当前 Windows x64 预览版支持工程接入、对话任务、Git 经验沉淀和本地知识库查看编辑。参阅 [BIOS 使用指南](/guide/bios-agent)。底层桌面能力继承 PiDeck，旧通用指南仅用于对应功能，不代表 DSH 仍可用或所有平台已验证。
 
 ## 面向本地开发的桌面控制台
 

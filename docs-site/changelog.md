@@ -10,6 +10,17 @@ description: PiDeck 每个版本的发布记录：新功能、问题修复与体
 - [中文 CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
 - [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
 
+## v0.9.3
+
+发布时间：2026-10-07
+
+- 🚀 **BIOS 对话驱动工作流**
+- 🚀 **本地知识库可视化管理**
+- ✨ **最小 BIOS 右栏**
+- ✨ **文档和交付清理**
+- ✨ **接入与取消状态一致**
+- ✨ **运行态和资料权限收口**
+
 ## v0.9.0
 
 发布时间：2026-10-01

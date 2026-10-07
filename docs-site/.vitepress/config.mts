@@ -32,6 +32,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "首页", link: "/" },
+          { text: "BIOS 使用指南", link: "/guide/bios-agent" },
           { text: "全景指南", link: "/guide/ultimate-guide" },
           { text: "原理解析", link: "/guide/architecture-deep-dive" },
           { text: "使用指南", link: "/guide/usage-guide" },
@@ -40,12 +41,12 @@ export default defineConfig({
           { text: "问题排查", link: "/guide/troubleshooting" },
           { text: "产品对比", link: "/guide/comparison" },
           { text: "更新日志", link: "/changelog" },
-          { text: "下载", link: "https://github.com/ayuayue/PiDeck/releases" },
+          { text: "下载", link: "https://github.com/TIAN3379/PiDeck_BIOS/releases" },
           {
             text: "源码",
             items: [
-              { text: "GitHub 仓库（海外）", link: "https://github.com/ayuayue/PiDeck" },
-              { text: "AtomGit 仓库（国内镜像）", link: "https://atomgit.com/ayuayue/PiDeck" },
+              { text: "GitHub 仓库（海外）", link: "https://github.com/TIAN3379/PiDeck_BIOS" },
+              { text: "BIOS_Agent 开发分支", link: "https://github.com/TIAN3379/PiDeck_BIOS/tree/BIOS_Agent" },
             ],
           },
         ],
@@ -77,7 +78,7 @@ export default defineConfig({
           formatOptions: { dateStyle: "medium", timeStyle: "short" },
         },
         editLink: {
-          pattern: "https://github.com/ayuayue/PiDeck/edit/main/docs-site/:path",
+          pattern: "https://github.com/TIAN3379/PiDeck_BIOS/edit/BIOS_Agent/docs-site/:path",
           text: "在 GitHub 上编辑此页",
         },
         footer: {
@@ -96,6 +97,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "Home", link: "/en/" },
+          { text: "BIOS Guide (中文)", link: "/guide/bios-agent" },
           { text: "Ultimate Guide", link: "/guide/ultimate-guide" },
           { text: "Deep Dive", link: "/guide/architecture-deep-dive" },
           { text: "Guide", link: "/en/guide/usage-guide" },
@@ -104,12 +106,12 @@ export default defineConfig({
           { text: "Troubleshooting", link: "/en/guide/troubleshooting" },
           { text: "Comparison", link: "/en/guide/comparison" },
           { text: "Changelog", link: "/en/changelog" },
-          { text: "Download", link: "https://github.com/ayuayue/PiDeck/releases" },
+          { text: "Download", link: "https://github.com/TIAN3379/PiDeck_BIOS/releases" },
           {
             text: "Source",
             items: [
-              { text: "GitHub (Global)", link: "https://github.com/ayuayue/PiDeck" },
-              { text: "AtomGit (China mirror)", link: "https://atomgit.com/ayuayue/PiDeck" },
+              { text: "GitHub (Global)", link: "https://github.com/TIAN3379/PiDeck_BIOS" },
+              { text: "BIOS_Agent branch", link: "https://github.com/TIAN3379/PiDeck_BIOS/tree/BIOS_Agent" },
             ],
           },
         ],
@@ -141,7 +143,7 @@ export default defineConfig({
           formatOptions: { dateStyle: "medium", timeStyle: "short" },
         },
         editLink: {
-          pattern: "https://github.com/ayuayue/PiDeck/edit/main/docs-site/:path",
+          pattern: "https://github.com/TIAN3379/PiDeck_BIOS/edit/BIOS_Agent/docs-site/:path",
           text: "Edit this page on GitHub",
         },
         footer: {
@@ -159,7 +161,7 @@ export default defineConfig({
     // 只保留内置图标（github）；AtomGit 无内置图标，作为「源码」下拉项出现在导航中，
     // 避免 socialLinks 里出现 no-icon 空白图标位。
     socialLinks: [
-      { icon: "github", link: "https://github.com/ayuayue/PiDeck", ariaLabel: "GitHub 仓库" },
+      { icon: "github", link: "https://github.com/TIAN3379/PiDeck_BIOS", ariaLabel: "GitHub 仓库" },
     ],
     search: {
       provider: "local",
@@ -237,11 +239,11 @@ export default defineConfig({
         "operatingSystem": "Windows, macOS, Linux",
         "description": "Open-source desktop workbench for managing multiple pi AI coding agents across local project folders.",
         "url": siteOrigin,
-        "downloadUrl": "https://github.com/ayuayue/PiDeck/releases",
-        "sourceCodeRepository": "https://github.com/ayuayue/PiDeck",
+        "downloadUrl": "https://github.com/TIAN3379/PiDeck_BIOS/releases",
+        "sourceCodeRepository": "https://github.com/TIAN3379/PiDeck_BIOS",
         "sameAs": [
-          "https://github.com/ayuayue/PiDeck",
-          "https://atomgit.com/ayuayue/PiDeck"
+          "https://github.com/TIAN3379/PiDeck_BIOS",
+          "https://github.com/TIAN3379/PiDeck_BIOS/tree/BIOS_Agent"
         ],
         "license": "https://opensource.org/licenses/MIT",
         "author": {

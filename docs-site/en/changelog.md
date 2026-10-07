@@ -7,12 +7,12 @@ description: "Release notes for every PiDeck version: new features, fixes, and i
 
 The full changelog is maintained in the project repository:
 
-- [English CHANGELOG](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.md)
-- [中文更新日志](https://github.com/ayuayue/PiDeck/blob/main/CHANGELOG.zh-CN.md)
+- [English CHANGELOG](https://github.com/TIAN3379/PiDeck_BIOS/blob/BIOS_Agent/CHANGELOG.md)
+- [中文更新日志](https://github.com/TIAN3379/PiDeck_BIOS/blob/BIOS_Agent/CHANGELOG.zh-CN.md)
 
 ## Latest Release
 
-See the [GitHub Releases](https://github.com/ayuayue/PiDeck/releases) page for the latest version and download links.
+See [BIOS Agent Releases](https://github.com/TIAN3379/PiDeck_BIOS/releases). Version 0.9.3 is a Windows x64 preview with conversational BIOS workflows, a minimal sidebar, consistent onboarding/revocation and an offline editable knowledge library. Clean-machine installation, real model services and firmware/hardware validation remain outside this release's automated verification.
 
 ## v0.6.7 (highlights)
 

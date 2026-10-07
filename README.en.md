@@ -1,5 +1,7 @@
 # BIOS Agent
 
+BIOS workflows and setup: [User guide (Chinese)](docs/bios-agent/user_guide.md) · [Architecture and limitations](docs/bios-agent/tech_design.md) · [Releases](https://github.com/TIAN3379/PiDeck_BIOS/releases). This release provides a Windows x64 preview installer; macOS/Linux are not verified.
+
 [中文文档](README.md) · [English](README.en.md) · [LinuxDO 友链](https://linux.do)
 
 **A personal desktop workbench for local coding agents, packaged for normal icon-based desktop launching.**
@@ -11,7 +13,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-38-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
-![Version](https://img.shields.io/badge/version-0.9.0-blue)
+![Version](https://img.shields.io/badge/version-0.9.3-blue)
 
 <!-- star-history:start -->
 <picture>
@@ -82,13 +84,15 @@
 
 ## 📋 Changelog
 
-> **Latest: v0.9.0** (2026-10-01)
+> **Latest: v0.9.3** (2026-10-07)
 
-### v0.9.0 Release Highlights
-- 🚀 **App converged on a Pi + ImageGen two-backend architecture**
-- 🚀 **The DSH backend has been removed entirely**
-- 🚀 **DSH removed from the update and packaging chain**
-- 🚀 **Copy and tests trimmed with the crop**
+### v0.9.3 Release Highlights
+- 🚀 **Conversational BIOS workflow**
+- 🚀 **Local knowledge library**
+- ✨ **Minimal BIOS sidebar**
+- ✨ **Documentation and delivery cleanup**
+- ✨ **Consistent project lifecycle**
+- ✨ **Runtime and data permission guards**
 
 [View Full Changelog →](CHANGELOG.md)
 

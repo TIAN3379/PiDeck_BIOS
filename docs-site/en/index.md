@@ -6,13 +6,13 @@ title: PiDeck - The pi Desktop Workbench | Desktop Client for pi Coding Agents
 description: PiDeck is the open-source pi desktop workbench — manage multiple pi AI coding agent sessions, Git, terminal, and model configs in one desktop window, with Codex/Claude session import. Available for Windows, macOS, and Linux.
 
 hero:
-  name: PiDeck
+  name: BIOS Agent
   text: Desktop Workbench for pi AI Coding Agents
   tagline: Manage local pi coding assistant sessions, configs, Git, and terminal in a unified desktop workspace for Windows, macOS, and Linux.
   actions:
     - theme: brand
       text: Download Latest
-      link: https://github.com/ayuayue/PiDeck/releases
+      link: https://github.com/TIAN3379/PiDeck_BIOS/releases
     - theme: alt
       text: Get Started
       link: /en/guide/getting-started
@@ -20,9 +20,9 @@ hero:
       text: Source Code
       items:
         - text: GitHub (Global)
-          link: https://github.com/ayuayue/PiDeck
+          link: https://github.com/TIAN3379/PiDeck_BIOS
         - text: AtomGit (China mirror)
-          link: https://atomgit.com/ayuayue/PiDeck
+          link: https://github.com/TIAN3379/PiDeck_BIOS/tree/BIOS_Agent
 
 features:
   - title: Multi-Project Workspace
