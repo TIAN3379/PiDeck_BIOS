@@ -33,6 +33,9 @@ test("主进程 catalog loader 不再从 node_modules 探测 pi-ai 数据", () =
 	assert.match(verifier, /pi-ai-catalog\.json/);
 	assert.match(verifier, /pi-ai-catalog\.manifest\.json/);
 	assert.match(verifier, /catalog 来源 pi-ai/);
+	const required = verifier.match(/const MUST_KEEP = (\[[\s\S]*?\]);/);
+	assert.ok(required, "运行时核对必须明确列出依赖");
+	assert.deepEqual(new Set(JSON.parse(required[1])), new Set(Object.keys(JSON.parse(readFileSync("package.json", "utf8")).dependencies)), "运行时核对要匹配当前桌面依赖，不能沿用已裁剪的 DSH SDK");
 
 	const analyzer = readFileSync("scripts/analyze-asar-waste.js", "utf8");
 	assert.doesNotMatch(analyzer, /"@earendil-works\/pi-ai",/);
@@ -40,4 +43,5 @@ test("主进程 catalog loader 不再从 node_modules 探测 pi-ai 数据", () =
 
 	const fastPack = readFileSync("scripts/dist-fast.js", "utf8");
 	assert.match(fastPack, /npm run build:fast/);
+	assert.doesNotMatch(fastPack, /build:packages|sync-dsh-declared-version|pack-dsh-runtime/, "快速打包不能再调用已经移除的 DSH 脚本");
 });

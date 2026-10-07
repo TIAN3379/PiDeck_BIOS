@@ -6,10 +6,8 @@ out/
 dist/
 # electron-vite 构建时生成的临时配置（时间戳后缀，非源码）
 electron.vite.config.*.mjs
-# DSH runtime 产物（.gitkeep 是占位，必须保留：extraResources 的源目录不能缺失）
-# 注意用 ** 匹配二级目录（dsh-runtime/manifest.json），单层 * 会漏。
-dist-runtime/**/*.tgz
-dist-runtime/**/*.json
+# 旧 runtime 构建残留（不再分发，仍忽略本机生成物）
+dist-runtime/
 # 打包/构建产物目录：通用规则，release- 后缀的验证/开发/快速构建目录
 # （release-dev、release-verify、release-fresh-* 等）一律忽略，防止再误提交
 # win-unpacked 二进制（历史教训见 d8d5711b）。仓库无以 release 开头的源码目录，
@@ -82,6 +80,8 @@ nul
 
 *.tsbuildinfo
 test-results/
+test-results-history/
+test-results-cw*/
 playwright-report/
 .tmp/
 .beui-inspect
