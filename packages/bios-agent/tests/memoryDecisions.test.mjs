@@ -348,6 +348,34 @@ test("R28-3：分叉上的环与撤回来源都保留矛盾，且与输入排列
 	assert.equal(many.status, "incomplete", "关系图触顶必须如实报不完整");
 });
 
+test("R29-4：明确不适用的跨板关系建图前被过滤，不制造假环；隐藏来源的未知范围不牵动可见事实", () => {
+	// 旧红：a/b 的相互替代边都明确只作用于 BOARD-OTHER，当前目标是 BOARD-TARGET，
+	// 仍被当成 needs-review/relation-ambiguous 的假环（拓扑判环先纳入全部边、后查 scope）。
+	const a = currentCandidate({ recordId: "false-a", scope: emptyScope({ projectId: PROJECT_A, boardName: "BoardTARGET" }) });
+	const b = currentCandidate({ recordId: "false-b", scope: emptyScope({ projectId: PROJECT_A, boardName: "BoardTARGET" }) });
+	const edges = [relation({ source: expRef("false-b"), target: expRef("false-a"), scope: emptyScope({ boardName: "BoardOTHER" }) }), relation({ source: expRef("false-a"), target: expRef("false-b"), scope: emptyScope({ boardName: "BoardOTHER" }) })];
+	const result = decideMemory(query({ target: target({ scope: emptyScope({ projectId: PROJECT_A, boardName: "BoardTARGET" }) }), candidates: [a, b], relations: edges }));
+	assert.equal(pick(result, "false-a").class, "current", "明确不适用的关系不能把可见事实变成假环");
+	assert.equal(pick(result, "false-b").class, "current");
+	assert.equal(result.status, "ok");
+	assert.ok(!pick(result, "false-a").reasons.includes("relation-ambiguous"));
+
+	// 旧红：未授权 hidden 来源的边声明一个目标尚未知的 boardName，hidden 被隐藏，
+	// 但可见 a 仍被降级为 unresolved-relation（unknownScope 早于 unauthorized 生效）。
+	const visible = currentCandidate({ recordId: "visible-a" });
+	const hidden = candidate({ recordId: "hidden-src", scope: emptyScope({ projectId: PROJECT_B }) });
+	const hiddenEdge = relation({ source: expRef("hidden-src"), target: expRef("visible-a"), scope: emptyScope({ boardName: "BoardUnknown" }) });
+	const hiddenResult = decideMemory(query({ target: target({ scope: emptyScope({ projectId: PROJECT_A }) }), candidates: [visible, hidden], relations: [hiddenEdge] }));
+	assert.equal(pick(hiddenResult, "hidden-src"), undefined, "未授权声明方必须完全不可见");
+	assert.equal(pick(hiddenResult, "visible-a").class, "current", "隐藏来源不能借未知范围把可见事实降级");
+	assert.equal(hiddenResult.status, "ok");
+	assert.doesNotMatch(JSON.stringify(hiddenResult), /hidden-src/);
+
+	// 低节点预算对照：被过滤的边不占节点预算，因此不应因隐藏来源而触顶报不完整。
+	const budget = decideMemory(query({ target: target({ scope: emptyScope({ projectId: PROJECT_A, boardName: "BoardTARGET" }) }), candidates: [a, b], relations: edges, limits: { maxRelationNodes: 1 } }));
+	assert.equal(budget.status, "ok", "被过滤的边不占节点预算");
+});
+
 test("R27-2/R28-3：链长与关系数量有界，且只作用于声明范围内的目标", () => {
 	// 链长上限：超过 maxRelationChain 必须停手并如实标记，同时整体不完整。
 	//

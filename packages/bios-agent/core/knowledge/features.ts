@@ -208,7 +208,10 @@ export async function updateFeature(
 		if (change === undefined) continue;
 		const value = toProjectField(change, name === "customer" ? "客户" : "产品线", limits, now);
 		const before = current[name];
-		if (value.value !== before.value || value.status !== before.status) {
+		// 证据变更也算变更（R29-2）：同值同确认程度但带了**新的**证据时，不能报 unchanged。
+		const newEvidence = value.evidence[0];
+		const evidenceAlreadyPresent = newEvidence !== undefined && before.evidence.some((ref) => ref.relativePath === newEvidence.relativePath && ref.contentHash === newEvidence.contentHash);
+		if (value.value !== before.value || value.status !== before.status || (newEvidence !== undefined && !evidenceAlreadyPresent)) {
 			// 修订字段时**保留**已有证据并追加本次证据（不静默丢掉可复核出处）。
 			next[name] = { ...value, evidence: [...before.evidence, ...value.evidence] };
 			changedFields.push(name);
@@ -246,13 +249,39 @@ export async function updateFeature(
 
 /* ------------------------------------------------------------------ 详情 */
 
-/** 可见范围：由**调用方显式给出**（v1 Feature 没有项目归属，不能替它猜一个）。 */
+/**
+ * 可见范围：由**调用方显式给出**（v1 Feature 没有项目归属，不能替它猜一个）。
+ *
+ * **缺省拒绝**（R29-1）：`visibility` 省略或两个集合都为空时，公开入口不返回任何需求内容
+ * （也不枚举 ID/计数）。需求可见只有两条**显式**路径：
+ * - 明确授权的需求 ID（`allowedFeatureIds`）；
+ * - 明确批准的客户范围（`approvedCustomers`，命中该需求**已确认**的客户；
+ *   未知客户不等于公开）。
+ */
 export type FeatureVisibility = {
 	/** 允许读取的需求记录 ID；给出时不在其中的记录一律拒绝。 */
 	readonly allowedFeatureIds?: readonly string[];
 	/** 被授权读取源项目的经验卡（用于关联核对）。 */
 	readonly authorizedProjectIds?: readonly string[];
+	/** 明确批准的客户范围（需求没有项目归属，客户是它显式声明的范围维度）。 */
+	readonly approvedCustomers?: readonly string[];
 };
+
+/** 需求是否在本次显式授权范围内（纯判定；未知客户不推导公开）。 */
+export function isFeatureVisible(feature: FeatureRecord, visibility: FeatureVisibility | undefined): boolean {
+	if (visibility === undefined) return false;
+	if (visibility.allowedFeatureIds?.includes(feature.id) === true) return true;
+	const approved = visibility.approvedCustomers;
+	if (approved === undefined || approved.length === 0) return false;
+	return feature.customer.status === "confirmed" && feature.customer.value !== null && approved.includes(feature.customer.value);
+}
+
+/** 在读取前判定"是否可能可见"：只有明确授权的 ID 或明确的客户范围才允许继续读取。 */
+function mayBeVisible(featureId: string, visibility: FeatureVisibility | undefined): boolean {
+	if (visibility === undefined) return false;
+	if (visibility.allowedFeatureIds?.includes(featureId) === true) return true;
+	return (visibility.approvedCustomers?.length ?? 0) > 0;
+}
 
 export type FeatureLinkResult = {
 	readonly experienceId: string;
@@ -290,10 +319,10 @@ export async function readFeatureDetail(input: {
 	const limits = resolveKnowledgeLimits(input.limits);
 	const problems: string[] = [];
 
-	// 授权先于读取内容：不在允许集合里的记录连"存在与否"都不透露。
-	const allowed = input.visibility?.allowedFeatureIds;
-	if (allowed !== undefined && !allowed.includes(featureId)) {
-		return { status: "not-authorized", featureId, revision: null, feature: null, links: [], usableAsReference: false, referenceReasons: ["该需求不在本次授权可见范围内"], problems: ["不在授权范围：未读取任何需求内容"] };
+	// 授权先于读取内容：缺省（未给 visibility / 两个集合都空）与不在授权 ID 集合里都拒绝，
+	// 且**不读取**记录（不透露存在性、状态、正文与路径）。
+	if (!mayBeVisible(featureId, input.visibility)) {
+		return { status: "not-authorized", featureId, revision: null, feature: null, links: [], usableAsReference: false, referenceReasons: ["缺少显式授权范围：公开入口缺省拒绝需求内容"], problems: ["不在授权范围：未读取任何需求内容"] };
 	}
 
 	let feature: FeatureRecord;
@@ -307,6 +336,11 @@ export async function readFeatureDetail(input: {
 			return { status: "not-found", featureId, revision: null, feature: null, links: [], usableAsReference: false, referenceReasons: [], problems: [`需求 ${featureId} 不存在或不可读`] };
 		}
 		throw mapWriteError(error, "读取需求失败");
+	}
+
+	// 读后复验：按**客户范围**授权时，只有"已确认客户命中批准范围"才可见（未知客户不推导公开）。
+	if (!isFeatureVisible(feature, input.visibility)) {
+		return { status: "not-authorized", featureId, revision: null, feature: null, links: [], usableAsReference: false, referenceReasons: ["该需求不在本次显式授权范围内（ID 未授权且客户范围未批准）"], problems: ["不在授权范围：不返回需求内容"] };
 	}
 
 	// 关联核对：逐条按记录族 + ID 读取；缺失/不可读显式显示，不编造来源。
@@ -346,13 +380,52 @@ export async function readFeatureDetail(input: {
 	};
 }
 
-/** 需求清单（有界扫描；不做未授权的枚举）。 */
-export async function listFeatureIds(input: { readonly root: string; readonly visibility?: FeatureVisibility; readonly storageLimits?: Partial<StorageLimits>; readonly signal?: AbortSignal }): Promise<{ readonly ids: readonly string[]; readonly truncated: boolean }> {
+/** 需求清单（有界扫描；**缺省拒绝**，只枚举显式授权范围内的需求）。 */
+export async function listFeatureIds(input: {
+	readonly root: string;
+	readonly visibility?: FeatureVisibility;
+	readonly limits?: Partial<KnowledgeServiceLimits>;
+	readonly storageLimits?: Partial<StorageLimits>;
+	readonly signal?: AbortSignal;
+	readonly ioHooks?: StorageIoHooks;
+}): Promise<{ readonly ids: readonly string[]; readonly truncated: boolean }> {
 	const root = assertRoot(input.root);
+	const visibility = input.visibility;
+	const allowed = visibility?.allowedFeatureIds;
+	const approved = visibility?.approvedCustomers;
+	// 缺省拒绝：没有任何显式授权时不枚举（连 ID 与计数都不形成）。
+	if ((allowed === undefined || allowed.length === 0) && (approved === undefined || approved.length === 0)) return { ids: [], truncated: false };
+
+	const limits = resolveKnowledgeLimits(input.limits);
 	const listing = await listRecords({ root, kind: "feature-record", limits: input.storageLimits, signal: input.signal });
-	const allowed = input.visibility?.allowedFeatureIds;
-	const ids = listing.entries.map((entry) => entry.id).filter((id) => allowed === undefined || allowed.includes(id));
-	return { ids, truncated: listing.truncated };
+	const ids: string[] = [];
+	// 只有显式授权 ID：不需要读取记录内容。
+	if (approved === undefined || approved.length === 0) {
+		for (const entry of listing.entries) if (allowed?.includes(entry.id) === true) ids.push(entry.id);
+		return { ids, truncated: listing.truncated };
+	}
+	// 客户范围授权：需要读取记录（有界）后按"已确认客户是否命中批准范围"判定。
+	let reads = 0;
+	let budgetLimited = false;
+	for (const entry of listing.entries) {
+		if (allowed?.includes(entry.id) === true) {
+			ids.push(entry.id);
+			continue;
+		}
+		if (reads >= limits.maxDetailLinks) {
+			budgetLimited = true;
+			break;
+		}
+		reads += 1;
+		try {
+			const read = await readRecord({ root, kind: "feature-record", id: entry.id, limits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
+			if (isFeatureVisible(read.record, visibility)) ids.push(read.record.id);
+		} catch (error) {
+			// 取消必须穿透（单条不可读不改变整体授权语义）。
+			if (isStorageError(error) && error.code === "cancelled") throw new ProjectServiceError("cancelled", "列举需求已取消", { detail: "cancelled", cause: error });
+		}
+	}
+	return { ids, truncated: listing.truncated || budgetLimited };
 }
 
 export { optionalBoundedText };

@@ -253,16 +253,38 @@ function compareRelations(left: MemoryRelation, right: MemoryRelation): number {
 export function evaluateRelationStates(input: EvaluateRelationsInput): RelationEvaluation {
 	const truncatedBy: Array<"nodes" | "chain"> = [];
 
-	// ---- 1) 建图 ----
+	// ---- 0) 关系声明方状态（授权先于一切）----
+	// 必须在建图之前算出来：隐藏来源（unauthorized）的边要**整条丢弃**，
+	// 不能进入图、节点预算或拓扑依赖——否则一条未授权来源的边会让可见记录
+	// 变成"环里的一员"或"未知范围"（R29-4 的实际观察）。
+	const declarationState = new Map<string, DeclarerState>();
+	const declarerStateOf = (key: string): DeclarerState => {
+		const cached = declarationState.get(key);
+		if (cached !== undefined) return cached;
+		const parsed = parseRefKey(key);
+		const state = parsed === null ? "absent" : input.declarerStateOf(parsed);
+		declarationState.set(key, state);
+		return state;
+	};
+
+	// ---- 1) 建图（只纳入"有权且可能相关"的边）----
+	// 两道前置过滤都发生在建图之前：
+	// - **授权**：声明方不在可见集合里 ⇒ 整条边忽略（不泄漏、不改变可见事实，也不占节点预算）；
+	// - **明确不适用**：关系声明的范围与当前目标**明确冲突** ⇒ 该关系根本不作用于本次上下文，
+	//   不能先纳入拓扑再判环（那会把跨板的双向边当成假环）。
+	// 只有"声明方有权 + 范围未知"才保留为不确定（见下方 unknownScope）。
 	const edgesByTarget = new Map<string, MemoryRelation[]>();
 	const nodeKeys = new Set<string>();
 	for (const relation of [...input.relations].sort(compareRelations)) {
+		const sourceKey = recordRefKey(relation.source);
+		if (declarerStateOf(sourceKey) === "unauthorized") continue;
+		if (relationScopeFit(relation, input.targetContext) === "not-applicable") continue;
 		const targetKey = recordRefKey(relation.target);
 		const bucket = edgesByTarget.get(targetKey);
 		if (bucket === undefined) edgesByTarget.set(targetKey, [relation]);
 		else bucket.push(relation);
 		nodeKeys.add(targetKey);
-		nodeKeys.add(recordRefKey(relation.source));
+		nodeKeys.add(sourceKey);
 	}
 
 	// 节点预算：确定性地取前 maxNodes 个（排序后），其余标记为触顶。
@@ -274,16 +296,6 @@ export function evaluateRelationStates(input: EvaluateRelationsInput): RelationE
 	// ---- 2) 依赖排序（Kahn）：只把"可能被递归求解"的边算作依赖 ----
 	// 明确未授权 / 输入里没有 / 读不到内容的声明方不会参与递归，因此不构成依赖关系，
 	// 否则一条隐藏来源的边会凭空把可见记录变成"环里的一员"。
-	const declarationState = new Map<string, DeclarerState>();
-	const declarerStateOf = (key: string): DeclarerState => {
-		const cached = declarationState.get(key);
-		if (cached !== undefined) return cached;
-		const parsed = parseRefKey(key);
-		const state = parsed === null ? "absent" : input.declarerStateOf(parsed);
-		declarationState.set(key, state);
-		return state;
-	};
-
 	const declaredBy = new Map<string, Set<string>>();
 	for (const key of activeNodes) declaredBy.set(key, new Set());
 	for (const [targetKey, edges] of edgesByTarget) {

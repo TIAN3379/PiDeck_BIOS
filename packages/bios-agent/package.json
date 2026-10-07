@@ -1,6 +1,6 @@
 {
 	"name": "bios-agent",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"private": true,
 	"type": "module",
 	"description": "BIOS 专业开发知识 Pi Package：项目档案、任务、经验与证据的契约、只读工具与 Skills。",
@@ -28,6 +28,8 @@
 		"scenario:project": "node cli/project-scenario.mjs",
 		"business": "node cli/business.mjs",
 		"scenario:experience": "node cli/experience-scenario.mjs",
+		"task": "node cli/task.mjs",
+		"scenario:task": "node cli/task-scenario.mjs",
 		"check:format": "biome format .",
 		"format": "biome format --write ."
 	}

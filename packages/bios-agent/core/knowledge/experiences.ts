@@ -12,12 +12,13 @@
  * 4. **验证级别只按实际声明报告**：`compile` 不会被说成板卡启动/压力验证；
  * 5. **来源与授权显式**：`reuseScope.level = internal-general` 必须带显式授权说明。
  */
-import type { EvidenceRef } from "../contracts/common.ts";
+import type { EvidenceRef, EvidenceSourceType } from "../contracts/common.ts";
 import type { ValidationKind, ValidationResult } from "../contracts/common.ts";
 import type { AuditAction } from "../contracts/audit.ts";
 import type { ExperienceCard } from "../contracts/records.ts";
 import { createRecord, isStorageError, readRecord, recordReviewDecision, updateRecord, type ReviewDecisionResult, type StorageIoHooks, type StorageLimits } from "../storage/index.ts";
 import { collectWriteNotes } from "../projects/writeNotes.ts";
+import { assertWorkspaceBelongsToProject, requireExplicitProjectAuthorization, requireSourceProject } from "./access.ts";
 import { invalidArgument, ProjectServiceError, requireBody, requireKnowledgeId, requireRelativePath, requireShortItem, requireShortItems, resolveKnowledgeLimits, type KnowledgeServiceLimits } from "./contract.ts";
 
 export type ExperienceValidationInput = {
@@ -26,7 +27,27 @@ export type ExperienceValidationInput = {
 	readonly result: ValidationResult;
 	readonly performedAt: number;
 	readonly performedBy: string;
-	readonly evidence?: readonly { readonly relativePath: string; readonly contentHash: string; readonly workspaceId?: string }[];
+	/** v1 合法的验证证据（与顶层证据同形；给出时保留范围/commit，不静默落成空数组）。 */
+	readonly evidence?: readonly ExperienceEvidenceInput[];
+};
+
+/**
+ * 经验**顶层**证据引用（R29-2）。
+ *
+ * 之前草稿写入直接把 `evidence` 写死成 `[]`，于是"源项目 ID + 根因/方案"成了唯一来源，
+ * 无法构成完整的来源证据闭环。这里把顶层证据做成一等输入：
+ * - `source-file` 必须有相对路径 + 小写 64 位 SHA-256；
+ * - `commit` 必须有提交号；
+ * - 其它类型（document / session / human-note）至少给一个可定位提示。
+ * 未知键一律拒绝（拼错的字段名不能静默落成空证据）。
+ */
+export type ExperienceEvidenceInput = {
+	readonly type: EvidenceSourceType;
+	readonly workspaceId?: string | null;
+	readonly relativePath?: string | null;
+	readonly location?: string | null;
+	readonly commit?: string | null;
+	readonly contentHash?: string | null;
 };
 
 export type ExperienceDraft = {
@@ -41,6 +62,8 @@ export type ExperienceDraft = {
 	readonly sourceProjectId: string;
 	readonly featureId?: string;
 	readonly validations?: readonly ExperienceValidationInput[];
+	/** 顶层来源证据（可选；给出时按类型校验，不静默丢弃）。 */
+	readonly evidence?: readonly ExperienceEvidenceInput[];
 	readonly reuse?: {
 		readonly level: "current-project" | "customer" | "internal-general";
 		readonly customers?: readonly string[];
@@ -50,6 +73,8 @@ export type ExperienceDraft = {
 
 export type ExperienceWriteOptions = {
 	readonly root: string;
+	/** 被授权读取/引用来源项目的显式声明（给出时核对 `sourceProjectId` 是否在内）。 */
+	readonly authorizedProjectIds?: readonly string[];
 	readonly limits?: Partial<KnowledgeServiceLimits>;
 	readonly storageLimits?: Partial<StorageLimits>;
 	readonly signal?: AbortSignal;
@@ -74,22 +99,54 @@ export type ExperienceWriteResult = {
 /** 托管字段：只允许审核入口写。任何普通写入里出现它们都直接拒绝。 */
 const MANAGED_FIELDS = ["status", "reviewer"] as const;
 
+const DRAFT_KEYS = ["experienceId", "problem", "symptom", "rootCause", "solution", "appliesWhen", "doesNotApplyWhen", "sourceProjectId", "featureId", "validations", "evidence", "reuse"] as const;
+const DRAFT_UPDATE_KEYS = ["problem", "symptom", "rootCause", "solution", "appliesWhen", "doesNotApplyWhen", "featureId", "validations", "evidence", "reuse"] as const;
+
 function assertNoManagedFields(source: object, label: string): void {
 	for (const field of MANAGED_FIELDS) {
 		if (Object.hasOwn(source, field)) throw invalidArgument(`${label} 不接受 ${field}：审核状态与审核人只能由审核入口修改（不能绕过审核）`);
 	}
 }
 
-function validationEvidence(entries: ExperienceValidationInput["evidence"], label: string): EvidenceRef[] {
-	if (entries === undefined) return [];
-	const refs: EvidenceRef[] = [];
-	for (const entry of entries) {
-		if (typeof entry !== "object" || entry === null) throw invalidArgument(`${label} 的证据项必须是对象`);
-		const relativePath = requireRelativePath(entry.relativePath, `${label} 的证据路径`);
-		if (typeof entry.contentHash !== "string" || !/^[0-9a-f]{64}$/.test(entry.contentHash)) throw invalidArgument(`${label} 的证据必须带小写 64 位 SHA-256`);
-		refs.push({ type: "source-file", ...(typeof entry.workspaceId === "string" ? { workspaceId: entry.workspaceId } : {}), relativePath, contentHash: entry.contentHash, capturedAt: 0, validity: "active" });
+/** 未知键拒绝：拼错字段名不能静默落成"没有这个字段"（否则一条证据/条件会被悄悄丢掉）。 */
+function assertKnownKeys(source: object, allowed: readonly string[], label: string): void {
+	for (const key of Object.keys(source)) {
+		if (!allowed.includes(key)) throw invalidArgument(`${label} 不接受未知字段：${key}`);
 	}
-	return refs;
+}
+
+const EVIDENCE_TYPES: readonly EvidenceSourceType[] = ["source-file", "commit", "document", "session", "human-note"];
+const EVIDENCE_KEYS = ["type", "workspaceId", "relativePath", "location", "commit", "contentHash"] as const;
+
+/** 顶层证据输入 → v1 `EvidenceRef`（只存引用，不复制正文；每条按类型校验必填项）。 */
+function normalizeEvidence(input: readonly ExperienceEvidenceInput[] | undefined, limits: KnowledgeServiceLimits, now: number): EvidenceRef[] {
+	if (input === undefined) return [];
+	if (!Array.isArray(input)) throw invalidArgument("evidence 必须是数组");
+	if (input.length > limits.maxEvidenceRefs) throw invalidArgument(`evidence 超过 ${limits.maxEvidenceRefs} 条上限`);
+	return input.map((entry) => {
+		if (typeof entry !== "object" || entry === null) throw invalidArgument("evidence 的每一项必须是对象");
+		assertKnownKeys(entry, EVIDENCE_KEYS, "evidence");
+		if (!EVIDENCE_TYPES.includes(entry.type)) throw invalidArgument("evidence.type 必须是受控来源类型之一");
+		const relativePath = entry.relativePath === undefined || entry.relativePath === null ? undefined : requireRelativePath(entry.relativePath, "证据路径");
+		const location = entry.location === undefined || entry.location === null ? undefined : requireShortItem(entry.location, "证据位置", limits.maxShortItemChars);
+		const commit = entry.commit === undefined || entry.commit === null ? undefined : requireShortItem(entry.commit, "证据提交号", 128);
+		const contentHash = entry.contentHash === undefined || entry.contentHash === null ? undefined : entry.contentHash;
+		if (contentHash !== undefined && (typeof contentHash !== "string" || !/^[0-9a-f]{64}$/.test(contentHash))) throw invalidArgument("证据的 contentHash 必须是小写 64 位 SHA-256");
+		if (entry.type === "source-file" && (relativePath === undefined || contentHash === undefined)) throw invalidArgument("source-file 证据必须同时给出相对路径与小写 64 位 SHA-256");
+		if (entry.type === "commit" && commit === undefined) throw invalidArgument("commit 证据必须给出提交号");
+		if (entry.type !== "source-file" && entry.type !== "commit" && location === undefined && commit === undefined) throw invalidArgument(`${entry.type} 证据至少要有位置或引用说明`);
+		const workspaceId = entry.workspaceId === undefined || entry.workspaceId === null ? undefined : requireShortItem(entry.workspaceId, "证据工作区 ID", 128);
+		return {
+			type: entry.type,
+			...(workspaceId === undefined ? {} : { workspaceId }),
+			...(relativePath === undefined ? {} : { relativePath }),
+			...(location === undefined ? {} : { location }),
+			...(commit === undefined ? {} : { commit }),
+			...(contentHash === undefined ? {} : { contentHash }),
+			capturedAt: now,
+			validity: "active" as const,
+		};
+	});
 }
 
 const VALIDATION_KINDS: readonly ValidationKind[] = ["code-review", "compile", "board-boot", "stress-loop", "customer-acceptance"];
@@ -110,7 +167,7 @@ function normalizeValidations(input: readonly ExperienceValidationInput[] | unde
 			result: entry.result,
 			performedAt: entry.performedAt,
 			performedBy: requireShortItem(entry.performedBy, "验证执行者标签", limits.maxReviewTextChars),
-			evidence: validationEvidence(entry.evidence, "验证").map((ref) => ({ ...ref, capturedAt: now })),
+			evidence: normalizeEvidence(entry.evidence, limits, now),
 		};
 	});
 }
@@ -131,6 +188,7 @@ function normalizeReuse(input: ExperienceDraft["reuse"], limits: KnowledgeServic
 function normalizeDraft(card: ExperienceDraft, limits: KnowledgeServiceLimits, now: number): { readonly id: string; readonly body: Omit<ExperienceCard, "schemaVersion" | "revision" | "createdAt" | "updatedAt" | "status" | "reviewer" | "id"> } {
 	if (typeof card !== "object" || card === null) throw invalidArgument("experience 必须是对象");
 	assertNoManagedFields(card, "经验草稿");
+	assertKnownKeys(card, DRAFT_KEYS, "经验草稿");
 	const experienceId = requireKnowledgeId(card.experienceId, "经验卡 ID");
 	const sourceProjectId = requireKnowledgeId(card.sourceProjectId, "来源项目 ID");
 	const featureId = card.featureId === undefined ? undefined : requireKnowledgeId(card.featureId, "关联需求 ID");
@@ -145,11 +203,16 @@ function normalizeDraft(card: ExperienceDraft, limits: KnowledgeServiceLimits, n
 			appliesWhen: requireShortItems(card.appliesWhen, "适用条件", limits),
 			doesNotApplyWhen: requireShortItems(card.doesNotApplyWhen, "不适用条件", limits),
 			sourceProjectId,
-			evidence: [],
+			evidence: normalizeEvidence(card.evidence, limits, now),
 			validations: normalizeValidations(card.validations, limits, now),
 			reuseScope: normalizeReuse(card.reuse, limits),
 		},
 	};
+}
+
+/** 顶层/验证证据里的工作区引用必须真实属于来源项目（否则相对路径无法归属到检出）。 */
+function assertEvidenceWorkspaces(project: Awaited<ReturnType<typeof requireSourceProject>>, evidence: readonly EvidenceRef[], label: string): void {
+	for (const ref of evidence) assertWorkspaceBelongsToProject(project, ref.workspaceId, label);
 }
 
 function mapWriteError(error: unknown, context: string): ProjectServiceError {
@@ -177,6 +240,12 @@ export async function createExperienceDraft(input: ExperienceWriteOptions & { re
 	const limits = resolveKnowledgeLimits(input.limits);
 	const now = input.now ?? Date.now();
 	const draft = normalizeDraft(input.experience, limits, now);
+	// 来源核对必须在**任何写入之前**（R29-1）：项目不存在/未授权时直接拒绝，不留卡片。
+	// R30-1：授权不再"可选放行"——省略/空集合一律拒绝。
+	requireExplicitProjectAuthorization(input.authorizedProjectIds, draft.body.sourceProjectId, "来源项目");
+	const project = await requireSourceProject({ root: input.root, sourceProjectId: draft.body.sourceProjectId, authorizedProjectIds: input.authorizedProjectIds, storageLimits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
+	assertEvidenceWorkspaces(project, draft.body.evidence, "经验证据");
+	for (const validation of draft.body.validations) assertEvidenceWorkspaces(project, validation.evidence, "验证证据");
 	try {
 		const written = await createRecord({
 			kind: "experience-card",
@@ -223,6 +292,8 @@ export async function updateExperienceDraft(
 	const now = input.now ?? Date.now();
 	const read = await readRecord({ root: input.root, kind: "experience-card", id: experienceId, limits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
 	const current = read.record;
+	// 授权在**返回冲突/状态/revision 之前**生效（R30-1）：未授权不得通过 revision-conflict 泄漏状态。
+	requireExplicitProjectAuthorization(input.authorizedProjectIds, current.sourceProjectId, "来源项目");
 	if (current.revision !== expected) {
 		return { status: "revision-conflict", experienceId, revision: current.revision, actualRevision: current.revision, status_after: current.status, changedFields: [], warnings: [], needsReview: [], problems: [`期望 revision=${expected}，实际 revision=${current.revision}；未写入任何内容。`] };
 	}
@@ -232,40 +303,47 @@ export async function updateExperienceDraft(
 
 	const changes = input.changes ?? {};
 	assertNoManagedFields(changes, "草稿更新");
+	assertKnownKeys(changes, DRAFT_UPDATE_KEYS, "草稿更新");
 	const changedFields: string[] = [];
 	const next = { ...current };
-	if (changes.problem !== undefined) {
-		next.problem = requireBody(changes.problem, "问题/现象", limits.maxBodyChars);
-		changedFields.push("problem");
-	}
-	if (changes.symptom !== undefined) next.symptom = requireBody(changes.symptom, "症状", limits.maxBodyChars);
-	if (changes.rootCause !== undefined) {
-		next.rootCause = requireBody(changes.rootCause, "根因", limits.maxBodyChars);
-		changedFields.push("rootCause");
-	}
-	if (changes.solution !== undefined) {
-		next.solution = requireBody(changes.solution, "解决办法", limits.maxBodyChars);
-		changedFields.push("solution");
-	}
-	if (changes.appliesWhen !== undefined) {
-		next.appliesWhen = requireShortItems(changes.appliesWhen, "适用条件", limits);
-		changedFields.push("appliesWhen");
-	}
-	if (changes.doesNotApplyWhen !== undefined) {
-		next.doesNotApplyWhen = requireShortItems(changes.doesNotApplyWhen, "不适用条件", limits);
-		changedFields.push("doesNotApplyWhen");
-	}
-	if (changes.validations !== undefined) {
-		next.validations = normalizeValidations(changes.validations, limits, now);
-		changedFields.push("validations");
-	}
-	if (changes.reuse !== undefined) {
-		next.reuseScope = normalizeReuse(changes.reuse, limits);
-		changedFields.push("reuseScope");
-	}
+	/** 只有**实际变化**才计入 changedFields：同值更新不制造无意义的 revision（也不谎报"已更新"）。 */
+	const assignText = (field: "problem" | "symptom" | "rootCause" | "solution", label: string): void => {
+		const value = changes[field];
+		if (value === undefined) return;
+		const parsed = requireBody(value, label, limits.maxBodyChars);
+		if (parsed !== next[field]) {
+			next[field] = parsed;
+			changedFields.push(field);
+		}
+	};
+	assignText("problem", "问题/现象");
+	assignText("symptom", "症状");
+	assignText("rootCause", "根因");
+	assignText("solution", "解决办法");
+
+	/** 数组/对象字段：按规范化后的值比较，同值不计变更。 */
+	const assignStructural = (field: "appliesWhen" | "doesNotApplyWhen" | "validations" | "evidence" | "reuseScope", parsed: unknown): void => {
+		if (JSON.stringify(parsed) === JSON.stringify(next[field])) return;
+		(next as Record<string, unknown>)[field] = parsed;
+		changedFields.push(field);
+	};
+	if (changes.appliesWhen !== undefined) assignStructural("appliesWhen", requireShortItems(changes.appliesWhen, "适用条件", limits));
+	if (changes.doesNotApplyWhen !== undefined) assignStructural("doesNotApplyWhen", requireShortItems(changes.doesNotApplyWhen, "不适用条件", limits));
+	if (changes.validations !== undefined) assignStructural("validations", normalizeValidations(changes.validations, limits, now));
+	if (changes.evidence !== undefined) assignStructural("evidence", normalizeEvidence(changes.evidence, limits, now));
+	if (changes.reuse !== undefined) assignStructural("reuseScope", normalizeReuse(changes.reuse, limits));
 	if (changes.featureId !== undefined) {
-		next.featureId = requireKnowledgeId(changes.featureId, "关联需求 ID");
-		changedFields.push("featureId");
+		const value = requireKnowledgeId(changes.featureId, "关联需求 ID");
+		if (value !== next.featureId) {
+			next.featureId = value;
+			changedFields.push("featureId");
+		}
+	}
+	// 顶层证据/验证证据的工作区归属在写入前核对（与创建同一口径）。
+	if (changedFields.includes("evidence") || changedFields.includes("validations")) {
+		const project = await requireSourceProject({ root: input.root, sourceProjectId: current.sourceProjectId, authorizedProjectIds: input.authorizedProjectIds, storageLimits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
+		assertEvidenceWorkspaces(project, next.evidence, "经验证据");
+		for (const validation of next.validations) assertEvidenceWorkspaces(project, validation.evidence, "验证证据");
 	}
 	if (changedFields.length === 0) {
 		return { status: "unchanged", experienceId, revision: current.revision, actualRevision: current.revision, status_after: current.status, changedFields: [], warnings: [], needsReview: [], problems: [] };
@@ -339,6 +417,10 @@ export async function reviewExperience(input: {
 	readonly action: AuditAction;
 	readonly operatorLabel: string;
 	readonly reason: string;
+	/** 审核关联证据：受控人工入口构造，只存 ID/revision 引用。 */
+	readonly evidence?: readonly import("../contracts/audit.ts").AuditEvidenceRef[];
+	/** 被授权读取/审核的来源项目（**必填**；缺省即拒绝）。 */
+	readonly authorizedProjectIds: readonly string[];
 	readonly limits?: Partial<KnowledgeServiceLimits>;
 	readonly storageLimits?: Partial<StorageLimits>;
 	readonly signal?: AbortSignal;
@@ -354,6 +436,10 @@ export async function reviewExperience(input: {
 	const limits = resolveKnowledgeLimits(input.limits);
 	const operatorLabel = requireShortItem(input.operatorLabel, "执行者标签", limits.maxReviewTextChars);
 	const reason = requireBody(input.reason, "审核理由", limits.maxReviewTextChars);
+	// 审核是写动作（R30-1）：先读当前卡确认来源项目在授权范围内，再走既有审核入口。
+	// 未授权在返回任何状态/审计事实之前拒绝。
+	const preRead = await readRecord({ root: input.root, kind: "experience-card", id: experienceId, limits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
+	requireExplicitProjectAuthorization(input.authorizedProjectIds, preRead.record.sourceProjectId, "来源项目");
 
 	let result: ReviewDecisionResult;
 	try {
@@ -364,6 +450,7 @@ export async function reviewExperience(input: {
 			action: input.action,
 			operatorLabel,
 			reason,
+			evidence: input.evidence,
 			limits: input.storageLimits,
 			signal: input.signal,
 			ioHooks: input.ioHooks,
@@ -392,19 +479,35 @@ export async function reviewExperience(input: {
 	};
 }
 
-/** 经验卡详情（含"声明的验证级别"与复用范围；不做推荐判定，推荐在 search 里）。 */
+/**
+ * 经验卡详情（含"声明的验证级别"、顶层证据与复用范围；不做推荐判定，推荐在 search 里）。
+ *
+ * **公开入口缺省拒绝**（R29-1）：必须显式给出被授权读取的来源项目；
+ * 省略或空集合时连"记录是否存在"都不读取（不泄漏存在性、状态、正文与路径）。
+ * 授权集合非空时才读取记录，并核对 `sourceProjectId` 是否在内。
+ */
 export async function readExperienceDetail(input: {
 	readonly root: string;
 	readonly experienceId: string;
+	/** 被授权读取的来源项目（公开入口缺省拒绝：不给等于没有授权）。 */
+	readonly authorizedProjectIds?: readonly string[];
 	readonly storageLimits?: Partial<StorageLimits>;
 	readonly signal?: AbortSignal;
-}): Promise<{ readonly status: "ok" | "not-found"; readonly experienceId: string; readonly revision: number | null; readonly card: ExperienceCard | null }> {
+	readonly ioHooks?: StorageIoHooks;
+}): Promise<{ readonly status: "ok" | "not-found" | "not-authorized"; readonly experienceId: string; readonly revision: number | null; readonly card: ExperienceCard | null; readonly problems: readonly string[] }> {
 	const experienceId = requireKnowledgeId(input.experienceId, "经验卡 ID");
+	const authorized = input.authorizedProjectIds;
+	if (authorized === undefined || authorized.length === 0) {
+		return { status: "not-authorized", experienceId, revision: null, card: null, problems: ["未提供来源项目授权：公开入口缺省拒绝读取经验内容"] };
+	}
 	try {
-		const read = await readRecord({ root: input.root, kind: "experience-card", id: experienceId, limits: input.storageLimits, signal: input.signal });
-		return { status: "ok", experienceId, revision: read.record.revision, card: read.record };
+		const read = await readRecord({ root: input.root, kind: "experience-card", id: experienceId, limits: input.storageLimits, signal: input.signal, ioHooks: input.ioHooks });
+		if (!authorized.includes(read.record.sourceProjectId)) {
+			return { status: "not-authorized", experienceId, revision: null, card: null, problems: ["来源项目不在本次授权范围内：不展示经验内容"] };
+		}
+		return { status: "ok", experienceId, revision: read.record.revision, card: read.record, problems: [] };
 	} catch (error) {
-		if (isStorageError(error) && (error.code === "not-found" || error.code === "invalid-root")) return { status: "not-found", experienceId, revision: null, card: null };
+		if (isStorageError(error) && (error.code === "not-found" || error.code === "invalid-root")) return { status: "not-found", experienceId, revision: null, card: null, problems: [] };
 		throw mapWriteError(error, "读取经验卡失败");
 	}
 }

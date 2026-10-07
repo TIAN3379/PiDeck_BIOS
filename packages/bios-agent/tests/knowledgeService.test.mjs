@@ -119,7 +119,7 @@ test("B1：非法输入与未确认身份都不进【可直接复用】结论", 
 
 		// 未确认客户 ⇒ 只能作候选参考。
 		await createFeature({ root: sandbox.root, feature: featureDraft({ featureId: "feat-unknown", customer: { value: "customer-alpha", status: "candidate" }, productLine: { value: "line-x", status: "candidate" } }), now: NOW });
-		const detail = await readFeatureDetail({ root: sandbox.root, featureId: "feat-unknown" });
+		const detail = await readFeatureDetail({ root: sandbox.root, featureId: "feat-unknown", visibility: { allowedFeatureIds: ["feat-unknown"] } });
 		assert.equal(detail.status, "ok");
 		assert.equal(detail.usableAsReference, false);
 		assert.ok(detail.referenceReasons.some((reason) => /客户身份未确认/.test(reason)));
@@ -132,7 +132,7 @@ test("B1：非法输入与未确认身份都不进【可直接复用】结论", 
 
 		// 关联缺失/不可读显式显示（不补造来源）。
 		await createFeature({ root: sandbox.root, feature: featureDraft({ featureId: "feat-link", relatedExperienceIds: ["exp-missing"] }), now: NOW + 1 });
-		const linked = await readFeatureDetail({ root: sandbox.root, featureId: "feat-link" });
+		const linked = await readFeatureDetail({ root: sandbox.root, featureId: "feat-link", visibility: { allowedFeatureIds: ["feat-link"] } });
 		assert.equal(linked.links.length, 1);
 		assert.equal(linked.links[0].found, false);
 		assert.match(linked.links[0].reason, /不存在/);
@@ -148,23 +148,23 @@ test("B2：草稿写入不接受托管字段，reviewed/verified 只能由审核
 	const sandbox = await knowledgeSandbox();
 	try {
 		const source = sandbox.projectA.projectId;
-		await assert.rejects(createExperienceDraft({ root: sandbox.root, experience: { ...experienceDraft({ sourceProjectId: source }), status: "verified" } }), /审核状态/);
-		await assert.rejects(createExperienceDraft({ root: sandbox.root, experience: { ...experienceDraft({ sourceProjectId: source }), reviewer: "someone" } }), /审核人/);
-		await assert.rejects(createExperienceDraft({ root: sandbox.root, experience: experienceDraft({ sourceProjectId: source, reuse: { level: "internal-general" } }) }), /显式授权/);
+		await assert.rejects(createExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experience: { ...experienceDraft({ sourceProjectId: source }), status: "verified" } }), /审核状态/);
+		await assert.rejects(createExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experience: { ...experienceDraft({ sourceProjectId: source }), reviewer: "someone" } }), /审核人/);
+		await assert.rejects(createExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experience: experienceDraft({ sourceProjectId: source, reuse: { level: "internal-general" } }) }), /显式授权/);
 
-		const created = await createExperienceDraft({ root: sandbox.root, experience: experienceDraft({ sourceProjectId: source, reuse: { level: "customer", customers: ["customer-alpha"] } }), now: NOW });
+		const created = await createExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experience: experienceDraft({ sourceProjectId: source, reuse: { level: "customer", customers: ["customer-alpha"] } }), now: NOW });
 		assert.equal(created.status, "created");
 		assert.equal(created.status_after, "draft", "新建恒为 draft");
 
 		// 草稿可以改；把 status 塞进 changes 仍被拒绝。
-		const updated = await updateExperienceDraft({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: 0, changes: { solution: "关闭 PXE 默认值并记录变更点" }, now: NOW + 1 });
+		const updated = await updateExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: 0, changes: { solution: "关闭 PXE 默认值并记录变更点" }, now: NOW + 1 });
 		assert.equal(updated.status, "updated");
 		assert.equal(updated.status_after, "draft");
-		await assert.rejects(updateExperienceDraft({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: 1, changes: { status: "verified" } }), /审核状态/);
+		await assert.rejects(updateExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: 1, changes: { status: "verified" } }), /审核状态/);
 
 		// 审核动作：submit-review → reviewed，并产生真实审计事件。
-		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe" });
-		const reviewed = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "证据与复现步骤完整", now: NOW + 2 });
+		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe", authorizedProjectIds: [sandbox.projectA.projectId] });
+		const reviewed = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "证据与复现步骤完整", now: NOW + 2 });
 		assert.equal(reviewed.status, "applied");
 		assert.equal(reviewed.stateAfter, "reviewed");
 		assert.equal(reviewed.revision, opened.revision + 1);
@@ -173,33 +173,34 @@ test("B2：草稿写入不接受托管字段，reviewed/verified 只能由审核
 		assert.deepEqual(reviewed.needsReview, []);
 
 		// reviewed 之后普通编辑被拒绝（必须先 request-changes）。
-		const blocked = await updateExperienceDraft({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: reviewed.revision, changes: { solution: "偷偷改掉" }, now: NOW + 3 });
+		const blocked = await updateExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: reviewed.revision, changes: { solution: "偷偷改掉" }, now: NOW + 3 });
 		assert.equal(blocked.status, "not-draft");
 		assert.ok(blocked.problems.some((problem) => /request-changes/.test(problem)));
 
 		// request-changes → 回到 draft；approve → verified；deprecate → deprecated；restore → draft。
-		const back = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: reviewed.revision, action: "request-changes", operatorLabel: "engineer-a", reason: "补充不适用条件", now: NOW + 4 });
+		const back = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: reviewed.revision, action: "request-changes", operatorLabel: "engineer-a", reason: "补充不适用条件", now: NOW + 4 });
 		assert.equal(back.stateAfter, "draft");
-		const approved = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: back.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "已补充", now: NOW + 5 });
+		const approved = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: back.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "已补充", now: NOW + 5 });
 		assert.equal(approved.stateAfter, "reviewed");
-		const deprecateAttempt = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: approved.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "被新平台结论取代", now: NOW + 6 });
+		const deprecateAttempt = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: approved.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "被新平台结论取代", now: NOW + 6 });
 		assert.equal(deprecateAttempt.stateAfter, "deprecated");
-		const restored = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: deprecateAttempt.revision, action: "restore", operatorLabel: "engineer-a", reason: "复核后仍然适用", now: NOW + 7 });
+		const restored = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: deprecateAttempt.revision, action: "restore", operatorLabel: "engineer-a", reason: "复核后仍然适用", now: NOW + 7 });
 		assert.equal(restored.stateAfter, "draft");
 
 		// 用过期 revision 审核 → 冲突且不写。
-		await assert.rejects(reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: 0, action: "approve", operatorLabel: "x", reason: "y", now: NOW + 8 }), (error) => error.code === "revision-conflict");
+		await assert.rejects(reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: 0, action: "approve", operatorLabel: "x", reason: "y", now: NOW + 8 }), (error) => error.code === "revision-conflict");
 
 		// 验证级别只按实际声明报告（不把编译说成板卡启动）。
 		const withCompile = await updateExperienceDraft({
 			root: sandbox.root,
+			authorizedProjectIds: [sandbox.projectA.projectId],
 			experienceId: "exp-pxe",
 			expectedRevision: restored.revision,
 			changes: { validations: [{ kind: "compile", scope: "SamplePlatformA", result: "passed", performedAt: NOW, performedBy: "engineer-a" }] },
 			now: NOW + 9,
 		});
 		assert.equal(withCompile.status, "updated");
-		const detail = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe" });
+		const detail = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe", authorizedProjectIds: [sandbox.projectA.projectId] });
 		assert.deepEqual(
 			detail.card.validations.map((validation) => validation.kind),
 			["compile"],
@@ -226,6 +227,7 @@ function searchInput(sandbox, overrides = {}) {
 async function seedReviewedExperience(sandbox, overrides = {}) {
 	const created = await createExperienceDraft({
 		root: sandbox.root,
+		authorizedProjectIds: [sandbox.projectA.projectId],
 		experience: experienceDraft({
 			sourceProjectId: sandbox.projectA.projectId,
 			reuse: { level: "customer", customers: ["customer-alpha"] },
@@ -250,8 +252,8 @@ test("B3：授权先于标题与计数；draft 不作当前推荐；受控操作
 		assert.ok(draftResult.hits[0].reasons.includes("not-reviewed"));
 
 		// 人工审核（submit-review）后重新检索：状态是 reviewed，可作为参考（v1 无时态/快照 ⇒ reference）。
-		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe" });
-		await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可复用", now: NOW + 1 });
+		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe", authorizedProjectIds: [sandbox.projectA.projectId] });
+		await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可复用", now: NOW + 1 });
 		const reviewed = await searchKnowledge(searchInput(sandbox));
 		assert.equal(reviewed.hits[0].recordedStatus, "reviewed");
 		assert.equal(reviewed.hits[0].recommendation, "reference", "v1 没有生效区间/依赖快照 ⇒ 只作参考");
@@ -283,7 +285,7 @@ test("B3：别名匹配、history 与废弃、源变化立即生效（无陈旧�
 		await createFeature({ root: sandbox.root, feature: featureDraft({ aliases: ["PXE", "快速启动", "alias-marker"] }), now: NOW });
 		const seeded = await seedReviewedExperience(sandbox);
 		assert.equal(seeded.created.status, "created");
-		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe" });
+		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-pxe", authorizedProjectIds: [sandbox.projectA.projectId] });
 
 		// 别名检索命中需求（原文里没有出现这个词）。
 		const byAlias = await searchKnowledge(searchInput(sandbox, { query: "alias-marker", visibility: { authorizedProjectIds: [sandbox.projectA.projectId], allowedFeatureIds: ["feat-pxe"] }, authorization: { endpointAllowed: true, allowInternalGeneral: true, customers: ["customer-alpha"] } }));
@@ -305,11 +307,14 @@ test("B3：别名匹配、history 与废弃、源变化立即生效（无陈旧�
 		assert.equal(andSemantics.hits.length, 0);
 
 		// 非法状态迁移是**受控的业务拒绝**（不是 io-error）：draft 不能直接 deprecate。
-		await assert.rejects(reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: opened.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "先试一下", now: NOW + 2 }), (error) => error.code === "inconsistent" && /deprecate/.test(error.message));
+		await assert.rejects(
+			reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: opened.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "先试一下", now: NOW + 2 }),
+			(error) => error.code === "inconsistent" && /deprecate/.test(error.message),
+		);
 
 		// 先 submit-review 到 reviewed，再废弃：废弃后当前检索不再推荐；history 查询可以解释。
-		const reviewed = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可参考", now: NOW + 2 });
-		const deprecated = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: reviewed.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "新平台已内置修复", now: NOW + 3 });
+		const reviewed = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可参考", now: NOW + 2 });
+		const deprecated = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: reviewed.revision, action: "deprecate", operatorLabel: "engineer-a", reason: "新平台已内置修复", now: NOW + 3 });
 		assert.equal(deprecated.stateAfter, "deprecated");
 		const current = await searchKnowledge(searchInput(sandbox));
 		const currentExperience = current.hits.find((hit) => hit.recordId === "exp-pxe");
@@ -322,8 +327,8 @@ test("B3：别名匹配、history 与废弃、源变化立即生效（无陈旧�
 		assert.equal(historyExperience.recordedStatus, "deprecated");
 
 		// 源变化立即生效：把卡改回 draft（request-changes 后再改内容）⇒ 立刻回到"待复核"。
-		const back = await reviewExperience({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: deprecated.revision, action: "restore", operatorLabel: "engineer-a", reason: "复核", now: NOW + 3 });
-		const rewrite = await updateExperienceDraft({ root: sandbox.root, experienceId: "exp-pxe", expectedRevision: back.revision, changes: { solution: "改成完全不同的做法" }, now: NOW + 4 });
+		const back = await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: deprecated.revision, action: "restore", operatorLabel: "engineer-a", reason: "复核", now: NOW + 3 });
+		const rewrite = await updateExperienceDraft({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-pxe", expectedRevision: back.revision, changes: { solution: "改成完全不同的做法" }, now: NOW + 4 });
 		assert.equal(rewrite.status, "updated");
 		const afterRewrite = await searchKnowledge(searchInput(sandbox));
 		const rewritten = afterRewrite.hits.find((hit) => hit.recordId === "exp-pxe");
@@ -344,10 +349,12 @@ test("B3：别名匹配、history 与废弃、源变化立即生效（无陈旧�
 		// 文件存在但内容坏掉 ⇒ 进入有界诊断并把整体标成不完整（"没看到"不等于"没有"）。
 		await writeFile(join(sandbox.root, "experiences", "exp-pxe.json"), "{ broken");
 		const broken = await searchKnowledge(searchInput(sandbox));
-		assert.ok(
-			broken.problems.some((problem) => /exp-pxe/.test(problem)),
-			`坏条目必须进入有界诊断：${JSON.stringify(broken.problems)}`,
-		);
+		// R30-1：坏文件读不出 sourceProjectId，无法判定授权 ⇒ 诊断**一律不显示经验条目 ID**（也不显示路径）。
+		assert.ok(broken.problems.length > 0, `坏条目必须进入有界诊断：${JSON.stringify(broken.problems)}`);
+		for (const problem of broken.problems) {
+			assert.doesNotMatch(problem, /exp-pxe/, "无法判定来源的经验条目不得回显 ID");
+			assert.doesNotMatch(problem, /[A-Za-z]:\\|knowledge/, "诊断不得回显绝对路径");
+		}
 		assert.equal(broken.status, "incomplete");
 	} finally {
 		await sandbox.cleanup();
@@ -359,7 +366,12 @@ test("B3：预算（扫描/返回/片段/取消）与跨项目参考详情", asy
 	try {
 		// 造 3 条命中的经验，验证返回上限。
 		for (const index of [1, 2, 3]) {
-			await createExperienceDraft({ root: sandbox.root, experience: experienceDraft({ experienceId: `exp-${index}`, sourceProjectId: sandbox.projectA.projectId, reuse: { level: "customer", customers: ["customer-alpha"] }, problem: `PXE 问题 ${index}` }), now: NOW + index });
+			await createExperienceDraft({
+				root: sandbox.root,
+				authorizedProjectIds: [sandbox.projectA.projectId],
+				experience: experienceDraft({ experienceId: `exp-${index}`, sourceProjectId: sandbox.projectA.projectId, reuse: { level: "customer", customers: ["customer-alpha"] }, problem: `PXE 问题 ${index}` }),
+				now: NOW + index,
+			});
 		}
 		const limited = await searchKnowledge(searchInput(sandbox, { limits: { maxSearchResults: 1 } }));
 		assert.equal(limited.hits.length, 1);
@@ -378,11 +390,12 @@ test("B3：预算（扫描/返回/片段/取消）与跨项目参考详情", asy
 		// 跨项目参考详情：来源项目 / 声明的验证级别 / 移植口径都要显式。
 		const seeded = await createExperienceDraft({
 			root: sandbox.root,
+			authorizedProjectIds: [sandbox.projectA.projectId],
 			experience: experienceDraft({ experienceId: "exp-ref", sourceProjectId: sandbox.projectA.projectId, reuse: { level: "customer", customers: ["customer-alpha"] }, validations: [{ kind: "board-boot", scope: "BoardA", result: "passed", performedAt: NOW, performedBy: "engineer-a" }] }),
 			now: NOW + 10,
 		});
-		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-ref" });
-		await reviewExperience({ root: sandbox.root, experienceId: "exp-ref", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可参考", now: NOW + 11 });
+		const opened = await readExperienceDetail({ root: sandbox.root, experienceId: "exp-ref", authorizedProjectIds: [sandbox.projectA.projectId] });
+		await reviewExperience({ root: sandbox.root, authorizedProjectIds: [sandbox.projectA.projectId], experienceId: "exp-ref", expectedRevision: opened.revision, action: "submit-review", operatorLabel: "engineer-a", reason: "可参考", now: NOW + 11 });
 
 		const reference = await readExperienceReference({
 			root: sandbox.root,
@@ -432,10 +445,8 @@ test("B3：不可读记录进入计数与有界诊断（不当作没命中）", 
 		// 放一个坏 JSON：目录里有它，但读不出来（列表阶段就会报问题）。
 		await writeFile(join(sandbox.root, "experiences", "exp-broken.json"), "{ this is not json");
 		const result = await searchKnowledge(searchInput(sandbox));
-		assert.ok(
-			result.problems.some((problem) => /exp-broken/.test(problem)),
-			`坏条目必须进入有界诊断：${JSON.stringify(result.problems)}`,
-		);
+		assert.ok(result.problems.length > 0, `坏条目必须进入有界诊断：${JSON.stringify(result.problems)}`);
+		for (const problem of result.problems) assert.doesNotMatch(problem, /exp-broken/, "无法判定来源的经验条目不得回显 ID");
 		assert.equal(result.status, "incomplete", "有读不出来的记录就不能说检索完整");
 		assert.equal(result.hits.length, 1, "坏条目不能被当成命中，也不能拖走好条目");
 		const registry = await readRegistry({ root: sandbox.root });

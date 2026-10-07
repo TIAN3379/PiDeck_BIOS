@@ -43,8 +43,11 @@ export class AuthorizedTargetError extends Error {
 export function readAuthorizedRootsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
 	const raw = env[BIOS_AUTHORIZED_ROOTS_ENV];
 	if (!raw) return [];
+	// 分隔符 = 平台分隔符 + `,` / `;`：适配层（桌面主进程）与脚本注入时很容易写逗号，
+	// 而 `C:\a,C:\b` 在 Windows 上**形态合法**（以盘符开头），静默当成一个不存在的前缀匹配不上根，
+	// 表现为"明明配置了却不授权"。这里统一按常见分隔符切开，让配置错误不再静默。
 	return raw
-		.split(delimiter)
+		.split(delimiter === ";" ? /[;,\n]+/ : /[:;,\n]+/)
 		.map((value) => value.trim())
 		.filter((value) => value.length > 0);
 }

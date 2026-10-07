@@ -60,11 +60,20 @@ test("BM-04 演示：录入→审核→跨项目参考→废弃→预算，全�
 	assert.equal(draftStep.experienceStatus, "draft");
 	assert.equal(draftStep.draftRecommendation, "needs-review");
 
-	// 跨项目参考口径：移植参考 + 目标项目不同。
-	const referenceStep = byName.get("在 B 按别名找回 A 的经验：展示参考内容与移植口径");
+	// 跨项目参考口径：移植参考 + 目标项目不同 + 来源证据闭环（R29-2）。
+	const referenceStep = byName.get("在 B 按别名找回 A 的经验：展示参考内容、来源证据与移植口径");
 	assert.equal(referenceStep.declaredValidations[0].kind, "compile");
+	assert.equal(referenceStep.evidenceCount, 1, "参考详情必须展示顶层来源证据");
+	assert.equal(referenceStep.sourceCommit, null, "没有带 commit 的合法 EvidenceRef 时必须明确未知");
+	assert.equal(referenceStep.featureRequirement, "客户要求关闭 PXE 以缩短启动时间", "显式授权时展示关联需求原文");
 	assert.ok(referenceStep.portingReasons.some((reason) => /移植参考/.test(reason)));
 	assert.ok(referenceStep.portingReasons.some((reason) => /目标项目不同/.test(reason)));
+
+	// R29-1：公开读取入口缺省拒绝来源授权（不泄漏正文）。
+	const denyStep = byName.get("公开读取入口缺省拒绝来源授权：不给（用法错误）或给错（拒绝）都不返回经验内容");
+	assert.equal(denyStep.withoutAuthExit, 2);
+	assert.equal(denyStep.unauthorizedExit, 3);
+	assert.equal(denyStep.leaksBody, false);
 
 	// 未授权与端点策略。
 	const authStep = byName.get("未授权客户/项目不可见；端点 deny/unknown 明确降级");

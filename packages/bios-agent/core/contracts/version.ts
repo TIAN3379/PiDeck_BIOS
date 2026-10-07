@@ -10,7 +10,7 @@ export const BIOS_CONTRACTS_SCHEMA_VERSION = 1;
 
 /** Package 身份（清单同名字段的单一来源，供自检与工具 details 输出）。 */
 export const BIOS_AGENT_PACKAGE_NAME = "bios-agent";
-export const BIOS_AGENT_PACKAGE_VERSION = "0.1.0";
+export const BIOS_AGENT_PACKAGE_VERSION = "0.1.1";
 
 /**
  * 已实测的 Pi 宿主版本区间。

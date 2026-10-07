@@ -30,7 +30,7 @@
  * 不保证绕过协议的编辑器/其它进程，也不承诺未经验证的网络盘语义。
  */
 import { lstatSync, realpathSync, statSync } from "node:fs";
-import { link, lstat, mkdir, open, opendir, type FileHandle } from "node:fs/promises";
+import { link, lstat, mkdir, open, opendir, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, join, normalize, relative, sep } from "node:path";
 import { requireFullyQualifiedRoot } from "../paths.ts";
 import { type CommitContext, type StorageIoOperation, assertPayloadWithinLimits, attachCleanupFailureNote, buildTempPath, delayWithCancellation, payloadFingerprint, prepareTempFile, removeTempFile, renameWithRetry, serializeJsonPayload } from "./commit.ts";
@@ -183,6 +183,16 @@ export type StorageBoundary = {
 	 */
 	pathExists(absolutePath: string, callSignal?: AbortSignal): Promise<boolean>;
 	listEntries(absolutePath: string, options?: ListEntriesOptions): Promise<DirectoryEntryListing>;
+	/**
+	 * 删除根内**单个普通文件**（不递归、不跟随链接）。
+	 *
+	 * 为什么需要：附属工作记录（检查点）需要有界磁盘管理——被轮换出近期集合的记录必须能清理，
+	 * 但清理不能变成"用 `rm -rf` 绕过边界"。三条约束：
+	 * - 路径必须先经 `resolve()`（词法停在根内）与 `assertNoSymlinks()`；
+	 * - `lstat` 必须是普通文件（目录/链接一律拒绝）；
+	 * - 只 `unlink` 该文件，不动任何目录。
+	 */
+	removeFile(absolutePath: string, callSignal?: AbortSignal): Promise<void>;
 };
 
 /** 单次读取的分块大小：不为"上限+1"一次性分配缓冲（BM-02AR / AR-2）。 */
@@ -485,6 +495,27 @@ export async function createStorageBoundary(options: StorageBoundaryOptions): Pr
 		}
 	};
 
+	const removeFile = async (absolutePath: string, callSignal?: AbortSignal): Promise<void> => {
+		throwIfAnyCancelled([callSignal, signal]);
+		if (!isWithinRoot(canonicalRoot, absolutePath)) {
+			throw new StorageError("path-escape", `路径超出知识根：${absolutePath}`, { path: absolutePath });
+		}
+		// 拒绝根内链接（含最终文件）：删除必须作用在真实普通文件上。
+		assertNoSymlinks(absolutePath);
+		await beforeIo("remove-file", absolutePath);
+		const stats = await lstat(absolutePath).catch((error: unknown) => {
+			if (isNotFoundError(error)) return null;
+			throw mapFsError(error, "permission-denied", `无法检查待删除文件：${absolutePath}`, absolutePath);
+		});
+		if (stats === null) return;
+		if (!stats.isFile()) throw new StorageError("invalid-record", `只允许删除普通文件：${absolutePath}`, { path: absolutePath });
+		await unlink(absolutePath).catch((error: unknown) => {
+			if (isNotFoundError(error)) return;
+			throw mapFsError(error, "permission-denied", `无法删除文件：${absolutePath}`, absolutePath);
+		});
+		throwIfAnyCancelled([callSignal, signal]);
+	};
+
 	const replaceJson = async (absolutePath: string, value: unknown, replaceOptions: { maxBytes?: number; callSignal?: AbortSignal } = {}): Promise<ReplaceJsonResult> => {
 		const callSignal = replaceOptions.callSignal;
 		const maxBytes = replaceOptions.maxBytes ?? limits.maxRecordBytes;
@@ -584,5 +615,5 @@ export async function createStorageBoundary(options: StorageBoundaryOptions): Pr
 		return { names, truncated, scanned };
 	};
 
-	return { root: configuredRoot, canonicalRoot, limits, signal, resolve, assertNoSymlinks, ensureDirectory, readJson, readJsonForCleanup, readRawBytes, publishJson, publishJsonMeasured, replaceJson, beforeIo, pathExists, listEntries };
+	return { root: configuredRoot, canonicalRoot, limits, signal, resolve, assertNoSymlinks, ensureDirectory, readJson, readJsonForCleanup, readRawBytes, publishJson, publishJsonMeasured, replaceJson, beforeIo, pathExists, listEntries, removeFile };
 }

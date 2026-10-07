@@ -86,21 +86,26 @@ export function requireKnowledgeId(value: unknown, label: string): string {
 	}
 }
 
-/** 正文：单行/多行都可以，但必须非空、有上界、不含 NUL 等控制字符。 */
+/**
+ * 正文：单行/多行都可以，但必须非空、有上界、不含 NUL 等控制字符。
+ *
+ * **原文原样保存**（R29-2）：这里不再 `trim()` 或改写 CRLF——"人工写的原文"就是它自己，
+ * 拿来比较是否变化时也不该被隐式改写。检索用的规范化键是 `normalizeForKey` 的**派生**值，
+ * 绝不回写覆盖原文。长度按**原始文本**计量（含首尾空白），只把"去掉空白后为空"判为非法。
+ */
 export function requireBody(value: unknown, label: string, maxChars: number): string {
 	if (typeof value !== "string") throw invalidArgument(`${label} 必须是字符串`);
-	const text = value.replace(/\r\n/g, "\n").trim();
-	if (text === "") throw invalidArgument(`${label} 不能为空`);
-	if (text.length > maxChars) throw invalidArgument(`${label} 超过 ${maxChars} 字符上限`);
-	// NUL 与控制字符（保留换行/制表）会让"原文"变成不可打印的东西：宁可拒绝。
-	if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) throw invalidArgument(`${label} 不能包含控制字符`);
-	return text;
+	if (value.trim() === "") throw invalidArgument(`${label} 不能为空`);
+	if (value.length > maxChars) throw invalidArgument(`${label} 超过 ${maxChars} 字符上限`);
+	// NUL 与控制字符（保留换行/制表/回车）会让"原文"变成不可打印的东西：宁可拒绝。
+	if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) throw invalidArgument(`${label} 不能包含控制字符`);
+	return value;
 }
 
 /** 短条目（别名、条件、验收标准）：单行、非空、有上界。 */
 export function requireShortItem(value: unknown, label: string, maxChars: number): string {
 	const text = requireBody(value, label, maxChars);
-	if (text.includes("\n")) throw invalidArgument(`${label} 必须是单行文本`);
+	if (text.includes("\n") || text.includes("\r")) throw invalidArgument(`${label} 必须是单行文本`);
 	return text;
 }
 

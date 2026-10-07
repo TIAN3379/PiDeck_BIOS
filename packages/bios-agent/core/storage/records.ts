@@ -15,7 +15,7 @@ import { RECORD_SCHEMAS, type RecordKind } from "../contracts/records.ts";
 import { assertKnowledgeId, type KnowledgeIdKind } from "../contracts/ids.ts";
 import { describeIssues, validateRecord } from "../contracts/validate.ts";
 import { createStorageBoundary, type StorageBoundary, type StorageIoHooks } from "./boundary.ts";
-import { StorageError, type StorageErrorCode, throwIfAnyCancelled } from "./errors.ts";
+import { StorageError, type StorageErrorCode, isNotFoundError, throwIfAnyCancelled } from "./errors.ts";
 import type { StorageLimits } from "./limits.ts";
 import { knowledgeLayout } from "./registry.ts";
 
@@ -151,6 +151,14 @@ export type ListRecordsResult = {
 	skippedEntries: number;
 	/** 扫描到的候选条目数（在 `entries`/`bytes` 截断时是"已扫描数"）。 */
 	scanned: number;
+	/**
+	 * 列表期间**实际读取**的正文字节数（BM-05 / R29-3 的真实额度记账）。
+	 *
+	 * 列表为了生成摘要会对每个候选读取完整正文，这份成本必须可被上层记账
+	 * （否则业务侧只统计"第二轮读取"，把预算说成没超）。只累加成功读取的字节；
+	 * 读取失败的条目（进入 problems）不在这里计数。
+	 */
+	bytesRead: number;
 };
 
 export type ListRecordsOptions = {
@@ -272,7 +280,16 @@ async function listCandidates(boundary: StorageBoundary, options: ListRecordsOpt
 	if (PROJECT_SCOPED_KINDS.has(options.kind)) {
 		const projectId = requireProjectId(options.projectId, options.kind);
 		const directory = options.kind === "task-record" ? boundary.resolve("projects", projectId, "tasks") : boundary.resolve("projects", projectId, "context");
-		const listing = await boundary.listEntries(directory, { filesOnly: true, maxEntries: maxScanEntries, signal: options.signal, includeSymlinks: true });
+		let listing;
+		try {
+			listing = await boundary.listEntries(directory, { filesOnly: true, maxEntries: maxScanEntries, signal: options.signal, includeSymlinks: true });
+		} catch (error) {
+			// 子集合按需创建。仅真实 ENOENT + 合法父档案可解释为空；ENOTDIR、
+			// 权限/链接/损坏/不存在的项目不能伪装成正常空任务。读取不补建目录。
+			if (!(error instanceof StorageError) || error.code !== "not-found" || !isNotFoundError(error.cause)) throw error;
+			await readRecordWithBoundary(boundary, { ...options, kind: "project-profile", id: projectId });
+			return { directory, candidates: [], truncated: false, scanned: 0 };
+		}
 		const candidates = listing.names.filter((name) => name.endsWith(".json") && !name.startsWith(".")).map((name) => ({ id: name.slice(0, -".json".length), projectId }));
 		return { directory, candidates, truncated: listing.truncated, scanned: listing.scanned };
 	}
@@ -299,6 +316,7 @@ export async function listRecordsWithBoundary(boundary: StorageBoundary, options
 	const entries: RecordSummary[] = [];
 	const problems: RecordProblem[] = [];
 	let usedBytes = 0;
+	let bytesRead = 0;
 
 	const addTruncation = (reason: ListRecordsResult["truncatedBy"][number]): void => {
 		if (!truncatedBy.includes(reason)) truncatedBy.push(reason);
@@ -391,6 +409,7 @@ export async function listRecordsWithBoundary(boundary: StorageBoundary, options
 		}
 
 		// 与单条读取共用同一条校验链：结构 → 版本 → ID 一致 → **归属一致**（BM-02AR / S2）。
+		bytesRead += read.bytes;
 		const interpreted = interpretRecord(options.kind, read.value, { id: candidate.id, projectId: candidate.projectId });
 		if (!interpreted.ok) {
 			const stop = addProblem({ path: absolute, code: interpreted.problem.code, message: interpreted.problem.message });
@@ -413,5 +432,5 @@ export async function listRecordsWithBoundary(boundary: StorageBoundary, options
 		entries.push(entry);
 	}
 
-	return { kind: options.kind, directory, entries, truncated: truncatedBy.length > 0, truncatedBy, problems, droppedProblems, skippedEntries, scanned };
+	return { kind: options.kind, directory, entries, truncated: truncatedBy.length > 0, truncatedBy, problems, droppedProblems, skippedEntries, scanned, bytesRead };
 }

@@ -39,7 +39,7 @@ const BUSINESS_CLI = join(PACKAGE_ROOT, "cli", "business.mjs");
  *   hits?: Array<{ family: string, recordId: string, revision: number, recordedStatus: string, recommendation: string, reasons: string[], snippet: string | null, sourceProjectId: string | null, declaredValidations: Array<{ kind: string, result: string }> }>,
  *   scanned?: { experiences: number, features: number, recordsRead: number, recordsSkipped: number },
  *   matchedButDropped?: number, unreadable?: number, problems?: string[],
- *   reference?: { sourceProjectId: string, problem: string, rootCause: string, solution: string, appliesWhen: string[], doesNotApplyWhen: string[], declaredValidations: Array<{ kind: string, result: string }>, reuseScope: { level: string } } | null,
+ *   reference?: { sourceProjectId: string, problem: string, rootCause: string, solution: string, appliesWhen: string[], doesNotApplyWhen: string[], declaredValidations: Array<{ kind: string, result: string }>, evidence: Array<{ type: string, relativePath?: string, commit?: string }>, sourceCommit: string | null, feature: { originalRequirement: string, acceptanceCriteria: string[], revision: number } | null, reuseScope: { level: string } } | null,
  *   recommendation?: string | null, reasons?: string[], porting?: { referenceOnly: boolean, needsPortingReview: boolean, reasons: string[] },
  *   profileRevision?: number | null, registryRevision?: number | null, changedFields?: string[], usable?: boolean,
  *   stateAfter?: string | null, action?: string
@@ -200,6 +200,11 @@ try {
 		"在平台 DSC 里关闭 PXE 默认值",
 		"--source-project",
 		projectA,
+		// R29-1：来源项目必须**显式授权**（缺省即拒绝），并在证据里锚定具体工作区文件。
+		"--authorized-project",
+		projectA,
+		"--evidence-file",
+		`Platform/A.dsc:${sha256(dsc("PlatformA"))}:${workspaceAId}`,
 		"--feature-id",
 		"feat-pxe",
 		"--applies-when",
@@ -232,9 +237,9 @@ try {
 	);
 
 	// ---- 3) 新进程读回 + 人工审核（并验证审计事实） ----
-	const reread = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a"]);
+	const reread = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a", "--authorized-project", projectA]);
 	assert(reread.code === 0, `读回经验失败：${reread.stdout}`);
-	const reviewed = runCli(BUSINESS_CLI, ["review", ...businessArgs, "--experience-id", "exp-pxe-a", "--revision", String(reread.json?.revision ?? 0), "--action", "submit-review", "--operator", "engineer-scenario", "--reason", "现象与复现步骤完整", "--write"]);
+	const reviewed = runCli(BUSINESS_CLI, ["review", ...businessArgs, "--experience-id", "exp-pxe-a", "--revision", String(reread.json?.revision ?? 0), "--action", "submit-review", "--operator", "engineer-scenario", "--reason", "现象与复现步骤完整", "--authorized-project", projectA, "--write"]);
 	assert(reviewed.code === 0, `审核失败：${reviewed.stdout}`);
 	record(
 		"新进程读回草稿并经人工审核（写入审计事件）",
@@ -246,15 +251,20 @@ try {
 	const byAlias = runCli(BUSINESS_CLI, ["search", ...businessArgs, "--query", "静默启动", "--authorized-project", projectA, "--allowed-feature-id", "feat-pxe", "--customer-id", "customer-alpha", "--target-project", projectB, "--endpoint", "allowed"]);
 	const aliasHits = byAlias.json?.hits ?? [];
 	const featureHit = aliasHits.find((hit) => hit.family === "feature-record");
-	const reference = runCli(BUSINESS_CLI, ["reference", ...businessArgs, "--experience-id", "exp-pxe-a", "--authorized-project", projectA, "--target-project", projectB, "--customer-id", "customer-alpha", "--endpoint", "allowed"]);
+	const reference = runCli(BUSINESS_CLI, ["reference", ...businessArgs, "--experience-id", "exp-pxe-a", "--authorized-project", projectA, "--allowed-feature-id", "feat-pxe", "--target-project", projectB, "--customer-id", "customer-alpha", "--endpoint", "allowed"]);
 	const referencePayload = reference.json;
+	const referenceEvidence = referencePayload?.reference?.evidence ?? [];
+	const referenceFeature = referencePayload?.reference?.feature ?? null;
 	record(
-		"在 B 按别名找回 A 的经验：展示参考内容与移植口径",
+		"在 B 按别名找回 A 的经验：展示参考内容、来源证据与移植口径",
 		{
 			aliasHitFields: featureHit !== undefined,
 			recommendation: referencePayload?.recommendation ?? null,
 			reasonCount: (referencePayload?.reasons ?? []).length,
 			declaredValidations: referencePayload?.reference?.declaredValidations ?? [],
+			evidenceCount: referenceEvidence.length,
+			sourceCommit: referencePayload?.reference?.sourceCommit ?? null,
+			featureRequirement: referenceFeature?.originalRequirement ?? null,
 			portingReasons: referencePayload?.porting?.reasons ?? [],
 			linkFound: (runCli(BUSINESS_CLI, ["feature-show", ...businessArgs, "--feature-id", "feat-pxe", "--authorized-project", projectA, "--allowed-feature-id", "feat-pxe"]).json?.links ?? []).map((link) => link.found),
 		},
@@ -263,6 +273,10 @@ try {
 			referencePayload?.reference?.rootCause?.includes("默认值") === true &&
 			(referencePayload?.reference?.appliesWhen ?? []).includes("客户要求快速启动") &&
 			(referencePayload?.reference?.declaredValidations ?? []).length === 1 &&
+			referenceEvidence.length === 1 &&
+			referenceEvidence[0]?.relativePath === "Platform/A.dsc" &&
+			referencePayload?.reference?.sourceCommit === null &&
+			referenceFeature?.originalRequirement === "客户要求关闭 PXE 以缩短启动时间" &&
 			(referencePayload?.porting?.reasons ?? []).some((reason) => /移植参考/.test(reason)) &&
 			(referencePayload?.porting?.reasons ?? []).some((reason) => /目标项目不同/.test(reason)),
 	);
@@ -288,8 +302,8 @@ try {
 	);
 
 	// ---- 6) 废弃后当前检索不再推荐；history 可以解释 ----
-	const openedForDeprecate = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a"]);
-	const deprecated = runCli(BUSINESS_CLI, ["review", ...businessArgs, "--experience-id", "exp-pxe-a", "--revision", String(openedForDeprecate.json?.revision ?? 0), "--action", "deprecate", "--operator", "engineer-scenario", "--reason", "新平台已内置修复", "--write"]);
+	const openedForDeprecate = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a", "--authorized-project", projectA]);
+	const deprecated = runCli(BUSINESS_CLI, ["review", ...businessArgs, "--experience-id", "exp-pxe-a", "--revision", String(openedForDeprecate.json?.revision ?? 0), "--action", "deprecate", "--operator", "engineer-scenario", "--reason", "新平台已内置修复", "--authorized-project", projectA, "--write"]);
 	assert(deprecated.code === 0, `废弃失败：${deprecated.stdout}`);
 	const currentAfterDeprecate = runCli(BUSINESS_CLI, ["search", ...businessArgs, "--query", "PXE", "--authorized-project", projectA, "--customer-id", "customer-alpha", "--target-project", projectB, "--endpoint", "allowed"]);
 	const historyAfterDeprecate = runCli(BUSINESS_CLI, ["search", ...businessArgs, "--query", "PXE", "--intent", "history", "--authorized-project", projectA, "--customer-id", "customer-alpha", "--target-project", projectB, "--endpoint", "allowed"]);
@@ -314,6 +328,21 @@ try {
 			confirmedBoard: JSON.parse(profileAAfter).identity.boardName.value,
 		},
 		limited.json?.status === "incomplete" && limited.code === 7 && (limited.json?.matchedButDropped ?? 0) >= 1 && sha256(profileAAfter) === sha256(profileABefore) && JSON.parse(profileAAfter).identity.boardName.value === "BoardA",
+	);
+
+	// ---- 8) R29-1：公开读取入口缺省拒绝（不给来源授权即不读取内容，不泄漏正文） ----
+	const showWithoutAuth = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a"]);
+	const showUnauthorized = runCli(BUSINESS_CLI, ["experience-show", ...businessArgs, "--experience-id", "exp-pxe-a", "--authorized-project", projectB]);
+	record(
+		"公开读取入口缺省拒绝来源授权：不给（用法错误）或给错（拒绝）都不返回经验内容",
+		{
+			withoutAuthExit: showWithoutAuth.code,
+			withoutAuthCode: showWithoutAuth.json?.code ?? null,
+			unauthorizedExit: showUnauthorized.code,
+			unauthorizedCode: showUnauthorized.json?.code ?? null,
+			leaksBody: showWithoutAuth.stdout.includes("平台默认值未关闭 PXE") || showUnauthorized.stdout.includes("平台默认值未关闭 PXE"),
+		},
+		showWithoutAuth.code === 2 && showUnauthorized.code === 3 && !showWithoutAuth.stdout.includes("平台默认值未关闭 PXE") && !showUnauthorized.stdout.includes("平台默认值未关闭 PXE"),
 	);
 
 	const summary = {

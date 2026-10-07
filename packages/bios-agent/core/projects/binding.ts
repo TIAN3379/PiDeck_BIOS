@@ -172,7 +172,36 @@ export async function bindProjectWorkspace(input: BindProjectInput): Promise<Bin
 		if (input.desktopProjectId !== undefined && existing.project.desktopProjectId !== undefined && existing.project.desktopProjectId !== input.desktopProjectId) {
 			throw inconsistent(`该工作区所属项目的桌面项目 ID 与参数不一致（registry：${existing.project.desktopProjectId}）`, "desktop-project-mismatch");
 		}
-		steps.push({ step: "registry", status: "skipped", revision: registry.revision, detail: "already-bound" });
+		// Explicit binding also repairs legacy path-only entries. Preserve the original
+		// project/workspace IDs and all history; never replace a foreign desktop owner.
+		if (input.desktopProjectId !== undefined && existing.project.desktopProjectId === undefined) {
+			const projects = registry.projects.map((entry) => (entry.biosProjectId === projectId ? { ...entry, desktopProjectId: input.desktopProjectId, updatedAt: now } : entry));
+			try {
+				const written = await updateRegistry({ root, projects, expectedRevision: registry.revision, now, signal: input.signal, ioHooks: input.ioHooks, limits: input.storageLimits, lockTimeoutMs: input.lockTimeoutMs, lockPollMs: input.lockPollMs });
+				registry = written.registry;
+				registryRevision = written.revision;
+				registryPublished = true;
+				notes.push(collectWriteNotes(written, "registry 桌面绑定补齐"));
+				steps.push({ step: "registry", status: "published", revision: written.revision });
+			} catch (error) {
+				const mapped = mapStorageError(error, "补齐桌面绑定失败");
+				return {
+					status: "failed",
+					projectId,
+					workspaceId,
+					workspacePath: workspaceDir,
+					registryRevision: null,
+					profileRevision: null,
+					steps: [{ step: "registry", status: "failed", detail: mapped.detail ?? mapped.code }],
+					resume: ["重新预览并确认接入；原有知识保留，不会重复创建项目。"],
+					problems: [mapped.message],
+					warnings: [],
+					needsReview: [],
+				};
+			}
+		} else {
+			steps.push({ step: "registry", status: "skipped", revision: registry.revision, detail: "already-bound" });
+		}
 	} else if (existing.status === "conflict") {
 		throw inconsistent(`无法唯一定位工作区绑定：${existing.reason}（候选：${existing.candidates.join("、") || "无"}）`, existing.reason);
 	} else {

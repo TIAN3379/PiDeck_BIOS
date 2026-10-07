@@ -21,7 +21,7 @@ import { basename, dirname, join } from "node:path";
 import { fsErrorCode, isCancelledError, mapFsError, StorageError, throwIfAnyCancelled } from "./errors.ts";
 
 /** IO 操作类别：用于取消时序与故障注入的可观测性。 */
-export type StorageIoOperation = "mkdir" | "open" | "stat" | "read" | "write-temp" | "sync" | "close-temp" | "link" | "rename" | "unlink-temp" | "opendir" | "lock-mkdir" | "lock-read" | "lock-remove" | "backup-write";
+export type StorageIoOperation = "mkdir" | "open" | "stat" | "read" | "write-temp" | "sync" | "close-temp" | "link" | "rename" | "unlink-temp" | "opendir" | "lock-mkdir" | "lock-read" | "lock-remove" | "backup-write" | "remove-file";
 
 /** 提交原语需要的最小上下文；由 `boundary.ts` 注入（含测试用的故障注入面）。 */
 export type CommitContext = {

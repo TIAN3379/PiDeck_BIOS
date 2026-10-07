@@ -316,6 +316,8 @@ export type MemoryReasonCode =
 	| "retracted"
 	| "needs-confirmation"
 	| "conflict"
+	/** 当前可见的同工作区/同范围整卡正文存在分歧，需人工比较证据。 */
+	| "possible-content-conflict"
 	| "verification-drift"
 	| "evidence-unavailable"
 	| "authority-unreadable"

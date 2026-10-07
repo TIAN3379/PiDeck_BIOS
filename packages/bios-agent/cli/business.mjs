@@ -27,7 +27,7 @@ const USAGE = `用法：node cli/business.mjs <命令> [选项]（命令与选�
   feature-show       需求详情 + 关联核对 + 是否可直接复用
   experience-create  录入经验**草稿**（需要 --write；审核状态只能由 review 改）
   experience-update  更新经验草稿正文（需要 --write，CAS）
-  experience-show    经验卡详情（含声明的验证级别）
+  experience-show    经验卡详情（含声明的验证级别与来源证据；必须 --authorized-project）
   review             人工审核经验卡（submit-review / request-changes / approve / deprecate / restore）
   search             有界关键词/别名检索（授权先于标题与计数）
   reference          单条经验的跨项目参考详情（含移植口径）
@@ -38,11 +38,16 @@ const USAGE = `用法：node cli/business.mjs <命令> [选项]（命令与选�
   --json                       stdout 输出单个 JSON 对象
   --write                      确认执行写入（缺失时拒绝并 exit 3）
 
-授权与范围（读取经验/需求时必填其一）：
+授权与范围（读取经验/需求时必填其一；均**显式**给出，缺省即拒绝）：
   --authorized-project <uuid>  被授权读取的来源项目（可重复；经验卡按来源项目授权）
   --allowed-feature-id <id>    被授权读取的需求记录 ID（可重复；需求没有项目归属，必须显式给）
+  --approved-customer <id>     明确批准的客户范围（需求可见的第二条显式路径；未知客户不推导公开）
   --customer-id <id>           本次目标的客户
   --target-project <uuid>      本次目标项目（跨项目参考与"是否可直接复用"用）
+
+来源证据（经验创建/更新时可选）：
+  --evidence-file <相对路径>:<SHA-256>[:<workspaceId>]   顶层来源文件证据（可重复）
+  --evidence-commit <提交号>                            顶层 commit 证据（可重复）
 
 端点策略：
   --endpoint allowed|denied|unknown   能否发给当前模型（默认 unknown ⇒ 只作参考/待复核）
@@ -116,6 +121,9 @@ const OPTION_SPEC = {
 	status: { value: true, repeatable: true },
 	"authorized-project": { value: true, repeatable: true },
 	"allowed-feature-id": { value: true, repeatable: true },
+	"approved-customer": { value: true, repeatable: true },
+	"evidence-file": { value: true, repeatable: true },
+	"evidence-commit": { value: true, repeatable: true },
 	"customer-id": { value: true, repeatable: false },
 	"target-project": { value: true, repeatable: false },
 	endpoint: { value: true, repeatable: false },
@@ -127,13 +135,34 @@ const COMMAND_OPTIONS = {
 	help: ["help", "json"],
 	"feature-create": ["help", "json", "root", "write", "feature-id", "requirement", "alias", "customer", "customer-status", "product-line", "product-line-status", "acceptance", "related"],
 	"feature-update": ["help", "json", "root", "write", "feature-id", "revision", "requirement", "alias", "acceptance", "related", "customer", "customer-status", "product-line", "product-line-status"],
-	"feature-show": ["help", "json", "root", "feature-id", "authorized-project", "allowed-feature-id", "customer-id"],
-	"experience-create": ["help", "json", "root", "write", "experience-id", "problem", "symptom", "root-cause", "solution", "applies-when", "does-not-apply-when", "source-project", "feature-id", "reuse-level", "reuse-customer", "reuse-authorization", "validation"],
-	"experience-update": ["help", "json", "root", "write", "experience-id", "revision", "problem", "symptom", "root-cause", "solution", "applies-when", "does-not-apply-when", "feature-id", "reuse-level", "reuse-customer", "reuse-authorization", "validation"],
-	"experience-show": ["help", "json", "root", "experience-id"],
-	review: ["help", "json", "root", "write", "experience-id", "revision", "action", "operator", "reason"],
-	search: ["help", "json", "root", "query", "intent", "limit", "family", "status", "authorized-project", "allowed-feature-id", "customer-id", "target-project", "endpoint", "allow-internal-general"],
-	reference: ["help", "json", "root", "experience-id", "authorized-project", "target-project", "customer-id", "endpoint", "allow-internal-general"],
+	"feature-show": ["help", "json", "root", "feature-id", "authorized-project", "allowed-feature-id", "approved-customer", "customer-id"],
+	"experience-create": [
+		"help",
+		"json",
+		"root",
+		"write",
+		"experience-id",
+		"problem",
+		"symptom",
+		"root-cause",
+		"solution",
+		"applies-when",
+		"does-not-apply-when",
+		"source-project",
+		"authorized-project",
+		"feature-id",
+		"reuse-level",
+		"reuse-customer",
+		"reuse-authorization",
+		"validation",
+		"evidence-file",
+		"evidence-commit",
+	],
+	"experience-update": ["help", "json", "root", "write", "experience-id", "revision", "problem", "symptom", "root-cause", "solution", "applies-when", "does-not-apply-when", "feature-id", "authorized-project", "reuse-level", "reuse-customer", "reuse-authorization", "validation", "evidence-file", "evidence-commit"],
+	"experience-show": ["help", "json", "root", "experience-id", "authorized-project"],
+	review: ["help", "json", "root", "write", "experience-id", "revision", "action", "operator", "reason", "authorized-project"],
+	search: ["help", "json", "root", "query", "intent", "limit", "family", "status", "authorized-project", "allowed-feature-id", "approved-customer", "customer-id", "target-project", "endpoint", "allow-internal-general"],
+	reference: ["help", "json", "root", "experience-id", "authorized-project", "allowed-feature-id", "target-project", "customer-id", "endpoint", "allow-internal-general"],
 };
 
 /**
@@ -216,6 +245,36 @@ function reuseOf(args) {
 }
 
 /**
+ * 顶层来源证据：
+ * `--evidence-file <相对路径>:<SHA-256>[:<workspaceId>]` 与 `--evidence-commit <提交号>`。
+ * @param {ParsedArgs} args
+ * @returns {Array<import("../core/knowledge/index.ts").ExperienceEvidenceInput>}
+ */
+function evidenceOf(args) {
+	/** @type {Array<import("../core/knowledge/index.ts").ExperienceEvidenceInput>} */
+	const entries = [];
+	for (const raw of takeList(args, "evidence-file")) {
+		const parts = raw.split(":");
+		const relativePath = parts[0] ?? "";
+		const contentHash = parts[1] ?? "";
+		const workspaceId = parts.length > 2 ? parts.slice(2).join(":") : "";
+		if (relativePath === "" || contentHash === "") throw new UsageError(`--evidence-file 需要 <相对路径>:<SHA-256>[:<workspaceId>]，实际：${short(raw)}`);
+		entries.push({ type: "source-file", relativePath, contentHash, ...(workspaceId === "" ? {} : { workspaceId }) });
+	}
+	for (const commit of takeList(args, "evidence-commit")) entries.push({ type: "commit", commit });
+	return entries;
+}
+
+/**
+ * 需求可见范围：显式 ID、被授权来源项目、批准客户三条都是**显式**声明；都不给即缺省拒绝。
+ * @param {ParsedArgs} args
+ * @returns {{ authorizedProjectIds: string[], allowedFeatureIds: string[], approvedCustomers: string[] }}
+ */
+function featureVisibilityOf(args) {
+	return { authorizedProjectIds: takeList(args, "authorized-project"), allowedFeatureIds: takeList(args, "allowed-feature-id"), approvedCustomers: takeList(args, "approved-customer") };
+}
+
+/**
  * @param {{ status: "applied" | "audit-pending" | "journal-pending", action: string, stateAfter: string, revision: number, needsReview: readonly string[] }} result
  * @param {boolean} asJson
  */
@@ -227,6 +286,23 @@ function reviewOutcome(result, asJson) {
 		for (const reason of result.needsReview) process.stdout.write(`  需人工核对：${reason}\n`);
 	}
 	setExit(exitCode);
+}
+
+/**
+ * 写命令统一退出码（R29-3）。
+ *
+ * 已提交（created/updated）但底层报告了 `needsReview`（journal 终态未写、清理/锁释放异常）
+ * 时**不得干净成功**：保留已提交事实，但退 8 让调用方去核对，且不提示重试同一 revision。
+ * @param {string} status @param {readonly string[]} okStatuses @param {readonly string[]} needsReview @returns {number}
+ */
+function writeExitCode(status, okStatuses, needsReview) {
+	if (okStatuses.includes(status)) return needsReview.length > 0 ? EXIT.needsReview : EXIT.ok;
+	return status === "revision-conflict" ? EXIT.conflict : EXIT.needsReview;
+}
+
+/** @param {string} status @param {number} exitCode @returns {string} */
+function writeOutcomeCode(status, exitCode) {
+	return exitCode === EXIT.ok ? "ok" : exitCode === EXIT.conflict ? status : "needs-review";
 }
 
 /** @param {ParsedArgs} args @param {boolean} asJson @param {AbortSignal} signal */
@@ -247,9 +323,12 @@ async function commandFeatureCreate(args, asJson, signal) {
 			...(declaredField(args, "product-line", "product-line-status", "产品线") === undefined ? {} : { productLine: declaredField(args, "product-line", "product-line-status", "产品线") }),
 		},
 	});
-	const exitCode = result.status === "created" || result.status === "unchanged" ? EXIT.ok : result.status === "revision-conflict" ? EXIT.conflict : EXIT.needsReview;
-	if (asJson) writeJson({ ...result, ...outcome(exitCode === EXIT.ok ? "ok" : result.status, exitCode) });
-	else process.stdout.write(`需求：${result.status}（revision=${result.revision ?? "-"}）\n`);
+	const exitCode = writeExitCode(result.status, ["created", "unchanged"], result.needsReview);
+	if (asJson) writeJson({ ...result, ...outcome(writeOutcomeCode(result.status, exitCode), exitCode) });
+	else {
+		process.stdout.write(`需求：${result.status}（revision=${result.revision ?? "-"}）\n`);
+		for (const reason of result.needsReview) process.stdout.write(`  需人工核对：${reason}\n`);
+	}
 	setExit(exitCode);
 }
 
@@ -269,19 +348,23 @@ async function commandFeatureUpdate(args, asJson, signal) {
 	const productLine = declaredField(args, "product-line", "product-line-status", "产品线");
 	if (productLine !== undefined) changes.productLine = productLine;
 	const result = await updateFeature({ root: takeString(args, "root", { required: true }), featureId, expectedRevision: revision, changes, signal });
-	const exitCode = result.status === "updated" || result.status === "unchanged" ? EXIT.ok : result.status === "revision-conflict" ? EXIT.conflict : EXIT.needsReview;
-	if (asJson) writeJson({ ...result, ...outcome(exitCode === EXIT.ok ? "ok" : result.status, exitCode) });
-	else process.stdout.write(`需求：${result.status}（revision=${result.revision ?? "-"}；变更 ${result.changedFields.join("、") || "无"}）\n`);
+	const exitCode = writeExitCode(result.status, ["updated", "unchanged"], result.needsReview);
+	if (asJson) writeJson({ ...result, ...outcome(writeOutcomeCode(result.status, exitCode), exitCode) });
+	else {
+		process.stdout.write(`需求：${result.status}（revision=${result.revision ?? "-"}；变更 ${result.changedFields.join("、") || "无"}）\n`);
+		for (const reason of result.needsReview) process.stdout.write(`  需人工核对：${reason}\n`);
+	}
 	setExit(exitCode);
 }
 
-/** @param {ParsedArgs} args @param {boolean} asJson */
-async function commandFeatureShow(args, asJson) {
+/** @param {ParsedArgs} args @param {boolean} asJson @param {AbortSignal} signal */
+async function commandFeatureShow(args, asJson, signal) {
 	const result = await readFeatureDetail({
 		root: takeString(args, "root", { required: true }),
 		featureId: takeString(args, "feature-id", { required: true }),
-		visibility: { authorizedProjectIds: takeList(args, "authorized-project"), allowedFeatureIds: takeList(args, "allowed-feature-id") },
+		visibility: featureVisibilityOf(args),
 		customerId: takeString(args, "customer-id") ?? null,
+		signal,
 	});
 	const exitCode = result.status === "ok" ? EXIT.ok : result.status === "not-authorized" ? EXIT.refused : result.status === "not-found" ? EXIT.notFound : EXIT.inconsistent;
 	if (asJson) writeJson({ ...result, ...outcome(result.status === "ok" ? "ok" : result.status, exitCode) });
@@ -298,13 +381,20 @@ async function commandFeatureShow(args, asJson) {
 /** @param {ParsedArgs} args @param {boolean} asJson @param {AbortSignal} signal */
 async function commandExperienceCreate(args, asJson, signal) {
 	const experienceId = takeString(args, "experience-id", { required: true });
-	if (!takeBool(args, "write")) return refuseWrite("experience-create", asJson, [`在 ${takeString(args, "root", { required: true })} 新建经验草稿 ${experienceId}（状态恒为 draft）`]);
+	const sourceProject = takeString(args, "source-project", { required: true });
+	// 公开入口缺省拒绝（R29-1）：来源项目必须显式授权，且必须覆盖本次写入的来源。
+	const authorizedProjectIds = takeList(args, "authorized-project");
+	if (authorizedProjectIds.length === 0) throw new UsageError("experience-create 必须显式给出 --authorized-project（来源项目授权），不能省略后按来源项目读写");
+	if (!authorizedProjectIds.includes(sourceProject)) throw new UsageError("--source-project 必须在 --authorized-project 中显式列出");
+	if (!takeBool(args, "write")) return refuseWrite("experience-create", asJson, [`在 ${takeString(args, "root", { required: true })} 新建经验草稿 ${experienceId}（来源项目 ${sourceProject}，状态恒为 draft）`]);
 	const validations = validationsOf(args);
+	const evidence = evidenceOf(args);
 	const reuse = reuseOf(args);
 	const featureId = takeString(args, "feature-id");
 	const symptom = takeString(args, "symptom");
 	const result = await createExperienceDraft({
 		root: takeString(args, "root", { required: true }),
+		authorizedProjectIds,
 		signal,
 		experience: {
 			experienceId,
@@ -314,15 +404,19 @@ async function commandExperienceCreate(args, asJson, signal) {
 			solution: takeString(args, "solution", { required: true }),
 			appliesWhen: takeList(args, "applies-when"),
 			doesNotApplyWhen: takeList(args, "does-not-apply-when"),
-			sourceProjectId: takeString(args, "source-project", { required: true }),
+			sourceProjectId: sourceProject,
 			...(featureId === undefined ? {} : { featureId }),
 			...(validations.length === 0 ? {} : { validations }),
+			...(evidence.length === 0 ? {} : { evidence }),
 			...(reuse === undefined ? {} : { reuse }),
 		},
 	});
-	const exitCode = result.status === "created" ? EXIT.ok : result.status === "revision-conflict" ? EXIT.conflict : EXIT.needsReview;
-	if (asJson) writeJson({ ...result, ...outcome(exitCode === EXIT.ok ? "ok" : result.status, exitCode) });
-	else process.stdout.write(`经验草稿：${result.status}（revision=${result.revision ?? "-"}，状态 ${result.status_after ?? "-"}）\n`);
+	const exitCode = writeExitCode(result.status, ["created"], result.needsReview);
+	if (asJson) writeJson({ ...result, ...outcome(writeOutcomeCode(result.status, exitCode), exitCode) });
+	else {
+		process.stdout.write(`经验草稿：${result.status}（revision=${result.revision ?? "-"}，状态 ${result.status_after ?? "-"}）\n`);
+		for (const reason of result.needsReview) process.stdout.write(`  需人工核对：${reason}\n`);
+	}
 	setExit(exitCode);
 }
 
@@ -349,27 +443,33 @@ async function commandExperienceUpdate(args, asJson, signal) {
 	if (args.repeated.has("does-not-apply-when")) changes.doesNotApplyWhen = takeList(args, "does-not-apply-when");
 	const validations = validationsOf(args);
 	if (validations.length > 0) changes.validations = validations;
+	const evidence = evidenceOf(args);
+	if (evidence.length > 0) changes.evidence = evidence;
 	const reuse = reuseOf(args);
 	if (reuse !== undefined) changes.reuse = reuse;
 	// 选项名 → 记录字段名的映射在运行时确定，类型在这里一次性收窄（字段名由 OPTION_SPEC 白名单保证）。
 	const draftChanges = /** @type {Partial<Omit<import("../core/knowledge/index.ts").ExperienceDraft, "experienceId" | "sourceProjectId">>} */ (changes);
-	const result = await updateExperienceDraft({ root: takeString(args, "root", { required: true }), experienceId, expectedRevision: revision, changes: draftChanges, signal });
-	const exitCode = result.status === "updated" || result.status === "unchanged" ? EXIT.ok : result.status === "revision-conflict" ? EXIT.conflict : result.status === "not-draft" ? EXIT.inconsistent : EXIT.needsReview;
-	if (asJson) writeJson({ ...result, ...outcome(exitCode === EXIT.ok ? "ok" : result.status, exitCode) });
+	const result = await updateExperienceDraft({ root: takeString(args, "root", { required: true }), experienceId, expectedRevision: revision, changes: draftChanges, authorizedProjectIds: takeList(args, "authorized-project"), signal });
+	const exitCode = result.status === "not-draft" ? EXIT.inconsistent : writeExitCode(result.status, ["updated", "unchanged"], result.needsReview);
+	if (asJson) writeJson({ ...result, ...outcome(writeOutcomeCode(result.status, exitCode), exitCode) });
 	else {
-		process.stdout.write(`经验草稿：${result.status}（revision=${result.revision ?? "-"}）\n`);
+		process.stdout.write(`经验草稿：${result.status}（revision=${result.revision ?? "-"}；变更 ${result.changedFields.join("、") || "无"}）\n`);
 		for (const problem of result.problems) process.stdout.write(`  提示 ${problem}\n`);
+		for (const reason of result.needsReview) process.stdout.write(`  需人工核对：${reason}\n`);
 	}
 	setExit(exitCode);
 }
 
-/** @param {ParsedArgs} args @param {boolean} asJson */
-async function commandExperienceShow(args, asJson) {
+/** @param {ParsedArgs} args @param {boolean} asJson @param {AbortSignal} signal */
+async function commandExperienceShow(args, asJson, signal) {
 	const experienceId = takeString(args, "experience-id", { required: true });
+	// 公开入口缺省拒绝（R29-1）：不给 --authorized-project 时连"记录是否存在"都不读取。
+	const authorizedProjectIds = takeList(args, "authorized-project");
+	if (authorizedProjectIds.length === 0) throw new UsageError("experience-show 必须显式给出 --authorized-project（来源项目授权），不能省略后读取经验内容");
 	const { readExperienceDetail } = await import("../core/knowledge/index.ts");
-	const result = await readExperienceDetail({ root: takeString(args, "root", { required: true }), experienceId });
-	const exitCode = result.status === "ok" ? EXIT.ok : EXIT.notFound;
-	if (asJson) writeJson({ ...result, ...outcome(result.status === "ok" ? "ok" : "not-found", exitCode) });
+	const result = await readExperienceDetail({ root: takeString(args, "root", { required: true }), experienceId, authorizedProjectIds, signal });
+	const exitCode = result.status === "ok" ? EXIT.ok : result.status === "not-authorized" ? EXIT.refused : EXIT.notFound;
+	if (asJson) writeJson({ ...result, ...outcome(result.status === "ok" ? "ok" : result.status, exitCode) });
 	else if (result.card !== null) {
 		process.stdout.write(`经验：${experienceId}（revision=${result.revision}，状态 ${result.card.status}）\n`);
 		process.stdout.write(`  根因：${result.card.rootCause}\n  方案：${result.card.solution}\n`);
@@ -387,9 +487,12 @@ async function commandReview(args, asJson, signal) {
 	const reviewAction = /** @type {"submit-review" | "request-changes" | "approve" | "deprecate" | "restore"} */ (action);
 	const operator = takeString(args, "operator", { required: true });
 	const reason = takeString(args, "reason", { required: true });
+	// 审核是写动作（R30-1）：必须显式给出被授权来源项目，缺省即拒绝。
+	const authorizedProjectIds = takeList(args, "authorized-project");
+	if (authorizedProjectIds.length === 0) throw new UsageError("review 必须显式给出 --authorized-project（来源项目授权），不能省略后审核");
 	if (!takeBool(args, "write")) return refuseWrite("review", asJson, [`对经验卡 ${experienceId}（期望 revision=${revision}）执行 ${action}，并写入一条审计事件`]);
 	try {
-		const result = await reviewExperience({ root: takeString(args, "root", { required: true }), experienceId, expectedRevision: revision, action: reviewAction, operatorLabel: operator, reason, signal });
+		const result = await reviewExperience({ root: takeString(args, "root", { required: true }), experienceId, expectedRevision: revision, action: reviewAction, operatorLabel: operator, reason, authorizedProjectIds, signal });
 		reviewOutcome(result, asJson);
 	} catch (error) {
 		// 非法状态迁移等受控拒绝：报成 inconsistent（不是 io-error）。
@@ -408,17 +511,26 @@ async function commandSearch(args, asJson, signal) {
 		if (family !== "experience-card" && family !== "feature-record") throw new UsageError("--family 只能是 experience-card 或 feature-record");
 	}
 	const statuses = takeList(args, "status");
+	// `--status` 不依赖 `--family`（R29-3）：未知状态显式拒绝，不再被静默忽略。
+	const STATUS_VALUES = ["draft", "reviewed", "verified", "deprecated"];
+	for (const status of statuses) {
+		if (!STATUS_VALUES.includes(status)) throw new UsageError(`--status 只能是 ${STATUS_VALUES.join(" / ")}，实际：${short(status)}`);
+	}
+	const filters = {
+		...(families.length === 0 ? {} : { recordFamilies: /** @type {Array<"experience-card" | "feature-record">} */ (families) }),
+		...(statuses.length === 0 ? {} : { statuses: /** @type {Array<"draft" | "reviewed" | "verified" | "deprecated">} */ (statuses) }),
+	};
 	const result = await searchKnowledge({
 		root: takeString(args, "root", { required: true }),
 		query,
-		visibility: { authorizedProjectIds: takeList(args, "authorized-project"), allowedFeatureIds: takeList(args, "allowed-feature-id") },
+		visibility: featureVisibilityOf(args),
 		target: {
 			projectId: takeString(args, "target-project") ?? null,
 			customerId: takeString(args, "customer-id") ?? null,
 		},
 		authorization: authorizationOf(args),
 		intent,
-		...(families.length === 0 ? {} : { filters: { recordFamilies: /** @type {Array<"experience-card" | "feature-record">} */ (families), ...(statuses.length === 0 ? {} : { statuses: /** @type {Array<"draft" | "reviewed" | "verified" | "deprecated">} */ (statuses) }) } }),
+		...(Object.keys(filters).length === 0 ? {} : { filters }),
 		...(limit === undefined ? {} : { limits: { maxSearchResults: limit } }),
 		signal,
 	});
@@ -441,6 +553,7 @@ async function commandReference(args, asJson, signal) {
 		targetProjectId: takeString(args, "target-project") ?? null,
 		targetCustomerId: takeString(args, "customer-id") ?? null,
 		authorization: { endpointAllowed: authorization.endpointAllowed, allowInternalGeneral: authorization.allowInternalGeneral, customers: authorization.customers, authorizedProjectIds: authorization.authorizedProjectIds },
+		allowedFeatureIds: takeList(args, "allowed-feature-id"),
 		signal,
 	});
 	const exitCode = result.status === "ok" ? EXIT.ok : result.status === "not-found" ? EXIT.notFound : EXIT.inconsistent;
@@ -451,6 +564,9 @@ async function commandReference(args, asJson, signal) {
 			process.stdout.write(`  来源项目 ${result.reference.sourceProjectId}\n  根因：${result.reference.rootCause}\n  方案：${result.reference.solution}\n`);
 			process.stdout.write(`  适用：${result.reference.appliesWhen.join("、") || "（未声明）"}\n  不适用：${result.reference.doesNotApplyWhen.join("、") || "（未声明）"}\n`);
 			process.stdout.write(`  声明验证：${result.reference.declaredValidations.map((validation) => `${validation.kind}:${validation.result}`).join("、") || "（没有声明）"}\n`);
+			process.stdout.write(`  来源 commit：${result.reference.sourceCommit ?? "未知（没有带 commit 的合法 EvidenceRef）"}\n`);
+			process.stdout.write(`  证据：${result.reference.evidence.map((entry) => `${entry.type}:${entry.relativePath ?? entry.commit ?? entry.location ?? "（无定位）"}`).join("、") || "（没有声明）"}\n`);
+			if (result.reference.feature !== null) process.stdout.write(`  关联需求原文：${result.reference.feature.originalRequirement}\n`);
 		}
 		for (const reason of result.porting.reasons) process.stdout.write(`  移植口径：${reason}\n`);
 	}

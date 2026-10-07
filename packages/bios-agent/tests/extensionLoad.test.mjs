@@ -146,14 +146,66 @@ async function loadExtensionTools() {
 	}
 }
 
-test("Pi 加载器能装载本包扩展，且只注册一个入口与一个工具", async () => {
+test("Pi 加载器能装载本包扩展，且注册唯一入口、只读及受控工作流工具/命令", async () => {
 	const { result, agentDir } = await loadExtensionTools();
 	try {
 		assert.deepEqual(result.errors, [], "扩展加载不应产生错误");
 		assert.equal(result.extensions.length, 1, "只应有一个自动加载入口");
 		const tools = result.extensions.flatMap((extension) => [...extension.tools.keys()]);
-		assert.deepEqual(tools, ["bios_detect_project"]);
+		// BM-06：线索检测 + 六个只读专业工具（顺序与 BIOS_TOOL_NAMES 一致）。
+		assert.deepEqual(tools, [
+			"bios_detect_project",
+			"bios_get_project_info",
+			"bios_get_task",
+			"bios_search_knowledge",
+			"bios_get_feature",
+			"bios_get_experience",
+			"bios_preview_context",
+			"bios_manage_task",
+			"bios_read_history",
+			"bios_save_experience_draft",
+			"bios_confirm_project_fields",
+			"bios_propose_feature",
+			"bios_maintain_memory",
+		]);
+		const commands = result.extensions.flatMap((extension) => [...extension.commands.keys()]);
+		assert.deepEqual(commands, ["bios-task", "bios-context", "bios-workflow"], "人工选择、上下文与工作流撤回命令必须注册");
 	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("BM-06：模型参数不能扩权——工具 schema 里没有知识根/授权/端点参数", async () => {
+	const { result, agentDir } = await loadExtensionTools();
+	try {
+		for (const name of ["bios_get_project_info", "bios_get_task", "bios_search_knowledge", "bios_get_feature", "bios_get_experience", "bios_preview_context"]) {
+			const definition = result.extensions[0].tools.get(name)?.definition;
+			assert.ok(definition !== undefined, `${name} 必须注册`);
+			const properties = Object.keys((definition.parameters ?? {}).properties ?? {});
+			for (const forbidden of ["root", "knowledgeRoot", "authorizedRoots", "authorizedProjectIds", "approvedCustomers", "allowedFeatureIds", "endpointAllowed", "allowInternalGeneral", "cwd"]) {
+				assert.ok(!properties.includes(forbidden), `${name} 不得接受模型传入 ${forbidden}`);
+			}
+		}
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("BM-06：未配置宿主时知识工具返回受控缺口，不读取任何记录", async () => {
+	const { result, agentDir } = await loadExtensionTools();
+	const savedRoot = process.env.BIOS_KNOWLEDGE_ROOT;
+	const savedProjects = process.env.BIOS_AUTHORIZED_PROJECTS;
+	delete process.env.BIOS_KNOWLEDGE_ROOT;
+	delete process.env.BIOS_AUTHORIZED_PROJECTS;
+	try {
+		const definition = result.extensions[0].tools.get("bios_get_task").definition;
+		const outcome = await definition.execute("call-1", { projectId: PACKAGE_ROOT, taskId: "task-1" }, undefined, undefined, { cwd: PACKAGE_ROOT });
+		assert.equal(outcome.details.status, "denied", "未配置知识根/授权时必须拒绝");
+		assert.match(outcome.content[0].text, /未配置|未授权|未就绪/);
+		assert.doesNotMatch(outcome.content[0].text, /task-1/, "缺口文案不得泄漏任何记录内容");
+	} finally {
+		if (savedRoot !== undefined) process.env.BIOS_KNOWLEDGE_ROOT = savedRoot;
+		if (savedProjects !== undefined) process.env.BIOS_AUTHORIZED_PROJECTS = savedProjects;
 		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
@@ -272,6 +324,9 @@ test("隔离配置下 get_commands 能看到两个 BIOS Skills，且宿主技能
 
 		assert.ok(skills.includes("skill:bios-project-onboarding"), `实际技能：${skills.join(", ")}`);
 		assert.ok(skills.includes("skill:customer-feature-porting"), `实际技能：${skills.join(", ")}`);
+		// AW-07：新增的通用方法必须**真实可被 Pi 发现**（技术名匹配不等于已加载）。
+		assert.ok(skills.includes("skill:common-uefi"), `实际技能：${skills.join(", ")}`);
+		assert.ok(skills.includes("skill:bios-investigation"), `实际技能：${skills.join(", ")}`);
 		// 隔离证据：桌面端装进个人配置目录的技能不应出现（出现即说明隔离没生效）。
 		assert.ok(!skills.includes("skill:image-gen"), `隔离配置未生效，宿主技能混入：${skills.join(", ")}`);
 	} finally {
