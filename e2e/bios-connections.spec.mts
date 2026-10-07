@@ -1,0 +1,131 @@
+import { expect, test } from "./mock-pi-fixture";
+import { makeSeedProject } from "./open-session";
+import { armStartupOverlayDismissal } from "./startupOverlays";
+
+const workspace = makeSeedProject("ConnectionLifecycle");
+test.use({ seedProjects: [workspace], seedSettings: { biosHost: { knowledgeRoot: null, authorizedProjectIds: [], authorizedRoots: [], endpoint: "unknown" } } });
+
+test("ordinary chat never proposes BIOS project onboarding", async ({ window }) => {
+	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+	await armStartupOverlayDismissal(window);
+	await window.getByRole("tab", { name: "聊天", exact: true }).click();
+	await window.getByTestId("chat").getByRole("button", { name: "新建会话", exact: true }).click();
+	await window.getByRole("menuitem", { name: "聊天", exact: true }).click();
+	await expect(window.locator(".composer .rich-input")).toHaveAttribute("contenteditable", "true", { timeout: 30_000 });
+	await expect(window.getByTestId("bios-first-run")).toHaveCount(0);
+	await window.locator(".header-drawer-toggle").first().click();
+	await window.getByTestId("drawer-rail-bios").click();
+	await expect(window.getByTestId("bios-first-run")).toHaveCount(0);
+	expect((await window.evaluate(() => window.piDesktop.bios.getSettings())).authorizedProjectIds).toEqual([]);
+});
+
+test("project connection lifecycle: human cancellation preserves knowledge and enables reconnect", async ({ window }, testInfo) => {
+	test.setTimeout(120_000);
+	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+	await armStartupOverlayDismissal(window);
+	await window.getByRole("tab", { name: "项目", exact: true }).click();
+	const project = window.locator(".conversation", { hasText: workspace.name }).first();
+	await project.click();
+	const gate = window.getByTestId("bios-first-run");
+	await expect(gate).toBeVisible({ timeout: 20_000 });
+	await gate.getByTestId("bios-first-run-consent").click();
+	await gate.getByRole("button", { name: "确认授权并接入", exact: true }).click();
+	await expect(gate).toContainText("项目已接入", { timeout: 30_000 });
+	await gate.getByRole("button", { name: "关闭", exact: true }).click();
+	await project.hover();
+	await project.getByRole("button", { name: "普通会话", exact: true }).first().click();
+	const settings = await window.evaluate(() => window.piDesktop.bios.getSettings());
+	const before = await window.evaluate(() => window.piDesktop.bios.connections());
+	expect(before.projects).toHaveLength(1);
+	// Reproduce the reported transition: a real project was connected, then ordinary chat opened.
+	await window.getByRole("tab", { name: "聊天", exact: true }).click();
+	await window.getByTestId("chat").getByRole("button", { name: "新建会话", exact: true }).click();
+	await window.getByRole("menuitem", { name: "聊天", exact: true }).click();
+	await expect(window.getByTestId("bios-first-run")).toHaveCount(0);
+	await window.locator(".header-drawer-toggle").first().click();
+	await window.getByTestId("drawer-rail-bios").click();
+	await window.getByTestId("bios-manage-open").click();
+	const manager = window.getByTestId("bios-connection-manager");
+	await expect(window.getByTestId("bios-first-run")).toHaveCount(0, "ordinary Chat must not inherit the prior project's inline onboarding");
+	await manager.getByRole("button", { name: "管理接入 / 处理绑定冲突", exact: true }).click();
+	const activeConnections = manager.getByTestId("bios-active-connections");
+	await expect(activeConnections).toContainText(workspace.name);
+	await manager.getByRole("button", { name: "取消接入", exact: true }).click();
+	const dialog = window.getByRole("alertdialog");
+	await expect(dialog).toContainText("源码、任务和历史经验不会删除");
+	await dialog.getByRole("button", { name: "取消", exact: true }).click();
+	expect((await window.evaluate(() => window.piDesktop.bios.getSettings())).authorizedProjectIds).toEqual(settings.authorizedProjectIds);
+	await manager.getByRole("button", { name: "取消接入", exact: true }).click();
+	await dialog.getByRole("button", { name: "确认", exact: true }).click();
+	await expect(manager).toContainText("已取消接入", { timeout: 20_000 });
+	const after = await window.evaluate(() => window.piDesktop.bios.connections());
+	expect(after.projects[0].projectId).toBe(before.projects[0].projectId);
+	expect(after.projects[0].authorized).toBe(false);
+	expect(after.projects[0].desktopProjectId).toBeUndefined();
+	expect(after.projects[0].paths).toEqual(before.projects[0].paths);
+	await expect(activeConnections).not.toContainText(workspace.name);
+	const archive = manager.getByTestId("bios-archived-connections");
+	await expect(archive.locator("[data-testid='bios-archived-project']")).toBeHidden();
+	await manager.getByRole("button", { name: "刷新", exact: true }).click();
+	await expect(activeConnections).not.toContainText(workspace.name);
+	await expect(archive.locator("[data-testid='bios-archived-project']")).toBeHidden();
+	await archive.locator("summary").click();
+	await expect(archive).toContainText(workspace.name);
+	await expect(archive).toContainText("知识档案保留（未授权）");
+	await window.screenshot({ path: testInfo.outputPath("disconnected-knowledge-retained.png") });
+	const preview = await window.evaluate((desktopProjectId) => window.piDesktop.bios.prepareOnboarding({ desktopProjectId }), workspace.id);
+	expect(preview.biosProjectId).toBe(before.projects[0].projectId);
+	expect(preview.authorized).toBe(false);
+	const refused = await window.evaluate(async () => {
+		try {
+			await window.piDesktop.bios.prepareOnboarding({ desktopProjectId: "builtin-chat" });
+			return false;
+		} catch (error) {
+			return String(error).includes("普通聊天");
+		}
+	});
+	expect(refused).toBe(true);
+});
+
+test("minimal sidebar: cancel is read-only, retry uses one modal, connected project has no second onboarding form", async ({ window }, testInfo) => {
+	test.setTimeout(120_000);
+	await expect(window.locator("#boot-overlay")).toHaveCount(0, { timeout: 20_000 });
+	await armStartupOverlayDismissal(window);
+	await window.getByRole("tab", { name: "项目", exact: true }).click();
+	const project = window.locator(".conversation", { hasText: workspace.name }).first();
+	await project.click();
+	const gate = window.getByTestId("bios-first-run");
+	await expect(gate).toBeVisible({ timeout: 20_000 });
+	await window.setViewportSize({ width: 1100, height: 650 });
+	const box = await gate.boundingBox();
+	expect(box?.y).toBeGreaterThanOrEqual(0);
+	expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(650);
+	await gate.getByRole("button", { name: "取消接入", exact: true }).click();
+	await expect(gate).toHaveCount(0);
+	expect((await window.evaluate(() => window.piDesktop.bios.getSettings())).authorizedProjectIds).toEqual([]);
+	await window.locator(".header-drawer-toggle").first().click();
+	await window.getByTestId("drawer-rail-bios").click();
+	const status = window.getByTestId("bios-compact-status");
+	await expect(status).toBeVisible();
+	await expect(window.getByTestId("bios-onboarding")).toHaveCount(0);
+	await expect(window.getByTestId("bios-management-dialog")).toHaveCount(0);
+	await expect(window.getByTestId("bios-task-section")).toHaveCount(0);
+	await expect(window.getByTestId("bios-workflow-overview")).toHaveCount(0);
+	await status.getByTestId("bios-onboarding-open").click();
+	await expect(gate).toHaveCount(1);
+	await expect(gate).toBeVisible();
+	await gate.getByTestId("bios-first-run-consent").click();
+	await gate.getByRole("button", { name: "确认授权并接入", exact: true }).click();
+	await expect(gate).toContainText("项目已接入", { timeout: 30_000 });
+	await gate.getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(status.getByTestId("bios-compact-connection")).toContainText("已接入");
+	await expect(status.getByTestId("bios-onboarding-open")).toHaveCount(0);
+	await window.screenshot({ path: testInfo.outputPath("minimal-sidebar-connected.png") });
+	await status.getByTestId("bios-manage-open").click();
+	await expect(window.getByTestId("bios-management-dialog")).toBeVisible();
+	await expect(window.getByTestId("bios-onboarding")).toHaveCount(0);
+	await expect(window.getByRole("button", { name: "登记 / 连接", exact: true })).toHaveCount(0);
+	await expect(gate).toHaveCount(0);
+	expect((await window.evaluate(() => window.piDesktop.bios.connections())).projects).toHaveLength(1);
+	await window.screenshot({ path: testInfo.outputPath("single-management-window.png") });
+});

@@ -520,9 +520,17 @@ export type AskBatchDraft = {
 	expanded: boolean;
 };
 
-/** 空草稿：所有字段的初始值。prefill 由组件在首次挂载时注入（见 SessionRuntimeUiOverlay）。 */
+/** 空草稿：所有字段的初始值。 */
 export function emptyAskBatchDraft(): AskBatchDraft {
 	return { answers: {}, labels: {}, customAnswerIds: [], inputValues: {}, currentTab: 0, expanded: true };
+}
+
+/** 仅新请求初始化时预填；候选不是答案，placeholder 也不是候选。 */
+export function initialAskBatchDraft(questions: ReadonlyArray<AgentUiBatchQuestion>): AskBatchDraft {
+	return {
+		...emptyAskBatchDraft(),
+		inputValues: Object.fromEntries(questions.filter((question) => question.prefill).map((question) => [question.id, question.prefill ?? ""])),
+	};
 }
 
 /** 单问题卡的交互草稿初始值。 */

@@ -13,6 +13,7 @@ let injectedCustomTokens = new Set<string>();
 import {
 	Code,
 	Activity,
+	CircuitBoard,
 	FolderOpen,
 	Globe,
 	History,
@@ -31,9 +32,10 @@ import { configureNoticeDefaults, showNotice, type NoticeKind } from "./utils/no
 import { copyTextWithCopiedNotice } from "./utils/clipboardNotice";
 import { buildSettingsCommands, type PaletteCommand } from "./utils/commandPaletteCommands";
 import { CommandPalette } from "./components/overlays/CommandPalette";
+import { BiosFirstRunGate } from "./components/bios/BiosFirstRunGate";
 import { CommandPaletteOnboarding, markCommandPaletteOnboardingSeen } from "./components/overlays/CommandPaletteOnboarding";
 import { desktopApi as api, isLanWeb, missingElectronPreload } from "./desktopApi";
-import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, hiddenModulesAtom, imageGenConfigAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom } from "./atoms";
+import { turnFlowSettingsAtom, defaultAgentBackendAtom, effectiveAgentBackendAtom, busySendDeliveryAtom, hiddenModulesAtom, imageGenConfigAtom, openSettingsAtom, openAutomationModalAtom, sessionRecordsAtom, bumpNewTurnCollapseTickAtom, workspaceDrawerRequestAtom } from "./atoms";
 import { resolveBusySendDelivery } from "../../shared/busySendDelivery";
 import { SESSION_TAB_MAX_WIDTH_DEFAULT } from "../../shared/sessionTabWidth";
 import { FILE_TREE_ABSOLUTE_MAX_DEPTH } from "../../shared/fileTree";
@@ -1412,6 +1414,16 @@ export function App() {
 		},
 		[workspace, gitDrawerDiff, closeGitDiff, activeProjectId, refreshVisibleFiles, restoreExpandedDirs],
 	);
+
+	// BM-07B B-03：其它界面（BIOS 设置页入口）只能**请求**打开抽屉；App 消费后立即清空。
+	// 用 openDrawerForce（入口语义是"打开"，不是"切换"），避免把请求读成"再点一次关闭"。
+	const drawerRequest = useAtomValue(workspaceDrawerRequestAtom);
+	const setDrawerRequest = useSetAtom(workspaceDrawerRequestAtom);
+	useEffect(() => {
+		if (drawerRequest === null) return;
+		setDrawerRequest(null);
+		workspace.openDrawerForce(drawerRequest);
+	}, [drawerRequest, setDrawerRequest, workspace]);
 
 	const workspaceChrome = useSessionWorkspaceChrome({
 		currentSessionId,
@@ -3755,6 +3767,7 @@ export function App() {
 
 	// ── DrawerSurface port objects (stable via useMemo) ──
 	const drawerPorts = useDrawerPorts({
+		onRestartBiosRuntime: () => currentSessionId && void restartSessionAnyState(currentSessionId),
 		enableGitManagement: settings.enableGitManagement,
 		activeProjectId,
 		gitDrawerDiff,
@@ -3957,10 +3970,19 @@ export function App() {
 									active: drawer === "browser",
 									onClick: () => handleToolDrawerAction("browser"),
 								},
+								// BM-07B B-03：BIOS 工作台入口（项目/任务/知识三个业务区）。
+								// 不是受开关门控的开发者面板：未配置知识库时面板自身会给出首次使用引导。
+								{
+									id: "bios",
+									label: t("bios.workbench.title"),
+									icon: <CircuitBoard size={16} />,
+									active: drawer === "bios",
+									onClick: () => handleToolDrawerAction("bios"),
+								},
 							]}
 						/>
 					}
-					drawerContent={(visibleDrawerPanel) => <DrawerSurface drawer={visibleDrawerPanel} drawerCollapsed={drawerCollapsed} git={drawerPorts.git} chrome={drawerPorts.chrome} browser={drawerPorts.browser} files={drawerPorts.files} />}
+					drawerContent={(visibleDrawerPanel) => <DrawerSurface drawer={visibleDrawerPanel} drawerCollapsed={drawerCollapsed} git={drawerPorts.git} chrome={drawerPorts.chrome} browser={drawerPorts.browser} files={drawerPorts.files} bios={drawerPorts.bios} />}
 					setListCollapsed={setListCollapsed}
 					setListWidth={setListWidth}
 					setDrawerCollapsed={setDrawerCollapsed}
@@ -4246,6 +4268,10 @@ export function App() {
         不主动提示就等于不存在。看完即写 localStorage，只弹一次。
         空状态（没项目）不弹——那时面板本身也没什么可搜的。 */}
 				{!quickTask.active && <CommandPaletteOnboarding enabled={Boolean(activeProjectId) && !commandPaletteOpen} onTryNow={openCommandPalette} />}
+
+				{/* C5：首次接入提议挂在**根级**（不依赖 BIOS 右栏是否打开）。已精确绑定的项目不出卡；
+				    用户主动打开 BIOS 右栏时由右栏内的接入卡接管，避免同一个动作出现两张卡。 */}
+				<BiosFirstRunGate desktopProjectId={isChatProject(activeProject) ? undefined : activeProjectId} desktopProjectName={activeProject?.name} onRestartRuntime={() => currentSessionId && void restartSessionAnyState(currentSessionId)} />
 
 				{/* 数据环境弹窗族：首启数据模式选择（内含导入向导）与目录标记警告，事件/atom 驱动 */}
 				<DataModeChoiceDialog />

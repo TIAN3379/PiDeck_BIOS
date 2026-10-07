@@ -1620,7 +1620,7 @@ export const bindSessionRuntimeAtom = atom(
 		if (input.runtimeGeneration !== undefined && input.runtimeGeneration < currentGeneration) {
 			return;
 		}
-		const bindingChanged = Boolean(current?.agentId && current.agentId !== input.agentId);
+		const bindingChanged = Boolean(current?.agentId && (current.agentId !== input.agentId || (input.runtimeGeneration !== undefined && input.runtimeGeneration !== currentGeneration)));
 		const record = get(sessionRecordsAtom)[input.sessionId];
 		if (record && !record.noSession && (input.status === "running" || current?.agentId !== input.agentId)) {
 			set(touchRecentSessionAtom, { sessionId: record.id, projectId: record.projectId });
@@ -1633,6 +1633,9 @@ export const bindSessionRuntimeAtom = atom(
 		set(sessionRuntimeByIdAtom, {
 			...get(sessionRuntimeByIdAtom),
 			[input.sessionId]: {
+				// prompt ACK 只携带运行实例身份，不是完整状态；同实例必须保留 Pi session/cwd 等，
+				// 否则每次发送都会令 BIOS 身份守卫误判换会话。换代则绝不能沿用旧元数据。
+				...(bindingChanged ? {} : current),
 				agentId: input.agentId,
 				runtimeGeneration: input.runtimeGeneration ?? currentGeneration,
 				status: input.status ?? (bindingChanged ? "idle" : current?.status) ?? "idle",

@@ -1,13 +1,15 @@
 import { useMemo } from "react";
+import { isChatProject } from "../rendererUtils";
 import type { WorkspaceDrawerPanel } from "./useWorkspacePanels";
 import type { SessionFilterPill } from "../sessionFilterPills";
 import { openGitFileInEditor } from "../utils/gitFileOpen";
-import type { DrawerGitPort, DrawerChromePort, DrawerBrowserPort, DrawerFilesPort } from "../components/workspace/DrawerSurface";
+import type { DrawerGitPort, DrawerChromePort, DrawerBrowserPort, DrawerFilesPort, DrawerBiosPort } from "../components/workspace/DrawerSurface";
 
 interface UseDrawerPortsInput {
 	// Git
 	enableGitManagement: boolean;
 	activeProjectId: string | undefined;
+	onRestartBiosRuntime?: () => void;
 	gitDrawerDiff: any;
 	gitDiffDisplayMode: string;
 	openCommitFileDiff: any;
@@ -132,10 +134,18 @@ export function useDrawerPorts(input: UseDrawerPortsInput) {
 			onMoveFiles: input.onMoveFiles,
 		};
 
-		return { git, chrome, browser, files };
+		// BM-07B B-03：工作台只拿得到"当前桌面项目"的身份（ID + 展示名），不拿路径/授权。
+		const bios: DrawerBiosPort = {
+			onRestartRuntime: input.onRestartBiosRuntime,
+			desktopProjectId: isChatProject(input.projects.find((project: { id: string }) => project.id === input.activeProjectId)) ? undefined : input.activeProjectId,
+			desktopProjectName: input.projects.find((project: { id: string; name?: string }) => project.id === input.activeProjectId)?.name,
+		};
+
+		return { git, chrome, browser, files, bios };
 	}, [
 		input.enableGitManagement,
 		input.activeProjectId,
+		input.onRestartBiosRuntime,
 		input.gitDrawerDiff,
 		input.gitDiffDisplayMode,
 		input.openCommitFileDiff,

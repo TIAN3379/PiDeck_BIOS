@@ -2,6 +2,7 @@ import { BrowserSurface } from "./BrowserSurface";
 import { GitDrawerHost } from "./GitDrawerHost";
 import { RewindPanel } from "./RewindPanel";
 import { DrawerContent } from "../app/AppParts";
+import { BiosWorkbenchPanel } from "../bios/BiosWorkbenchPanel";
 import { SessionTrajectoryPanel } from "../session/trajectory/SessionTrajectoryPanel";
 import { LazyWrapper } from "../../hooks/useLazyComponent";
 import { LoaderCircle } from "lucide-react";
@@ -24,6 +25,17 @@ export interface DrawerGitPort {
 	gitInfo: any;
 	switchBranch: any;
 	createBranch: any;
+}
+
+/**
+ * BM-07B B-03：BIOS 工作台只需要**当前桌面项目**的身份（ID + 展示名）。
+ *
+ * 刻意不把路径/授权交给界面：工作台只提交 ID，主进程按真实项目表解析路径。
+ */
+export interface DrawerBiosPort {
+	desktopProjectId: string | undefined;
+	desktopProjectName: string | undefined;
+	onRestartRuntime?: () => void;
 }
 
 export interface DrawerChromePort {
@@ -82,10 +94,11 @@ export interface DrawerSurfaceProps {
 	chrome: DrawerChromePort;
 	browser: DrawerBrowserPort;
 	files: DrawerFilesPort;
+	bios: DrawerBiosPort;
 }
 
 export function DrawerSurface(props: DrawerSurfaceProps) {
-	const { drawer, drawerCollapsed, git, chrome, browser, files } = props;
+	const { drawer, drawerCollapsed, git, chrome, browser, files, bios } = props;
 
 	return (
 		<>
@@ -97,6 +110,11 @@ export function DrawerSurface(props: DrawerSurfaceProps) {
 			) : drawer === "rewind" && !drawerCollapsed ? (
 				<div className="drawer-content-frame flex min-h-0 flex-1 flex-col overflow-hidden">
 					<RewindPanel />
+				</div>
+			) : drawer === "bios" && !drawerCollapsed ? (
+				// BM-07B B-03：BIOS 工作台自带滚动容器（与 files/sessions 的滚动上移策略一致）。
+				<div className="drawer-content-frame flex min-h-0 flex-1 flex-col overflow-hidden">
+					<BiosWorkbenchPanel desktopProjectId={bios.desktopProjectId} desktopProjectName={bios.desktopProjectName} onRestartRuntime={bios.onRestartRuntime} />
 				</div>
 			) : drawer === "browser" && !drawerCollapsed ? (
 				<div className="drawer-content-frame flex min-h-0 flex-1 flex-col overflow-hidden">

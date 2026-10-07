@@ -64,6 +64,15 @@ function findPreviewDirectory(nodes: FileTreeNode[], directory: string): FileTre
 	return undefined;
 }
 
+/**
+ * 预览模式下的 BIOS 业务读写一律显式拒绝（BM-07B B-02）。
+ *
+ * 不返回伪造的空结果：预览没有主进程、没有知识库，"看起来成功"会让实现与验收都失真。
+ */
+function previewReject(action: string): Promise<never> {
+	return Promise.reject(new Error(`预览模式没有主进程：${action}不可用`));
+}
+
 function getSessions(): SessionSummary[] {
 	return [
 		{
@@ -242,6 +251,69 @@ export function createPreviewApi(): PiDesktopApi {
 	};
 	return {
 		clipboard: clipboardStub,
+		// BIOS 面板在纯浏览器预览里没有主进程：返回"未就绪"与有限缺口，界面展示空态与指引。
+		bios: {
+			prepareOnboarding: async () => previewReject("项目接入预览"),
+			connections: async () => previewReject("项目接入管理"),
+			disconnectProject: async () => previewReject("取消项目接入"),
+			scanHistory: async () => previewReject("历史 Git 扫描"),
+			historyEvidence: async () => previewReject("历史 Git 证据"),
+			completeOnboarding: async () => previewReject("确认项目接入"),
+			readiness: async () => ({ ready: false, reason: "预览模式没有主进程：无法读取知识库", knowledgeRootConfigured: false }),
+			runtimeState: async () => ({ configVersion: 0, pendingRestart: false, stoppedRuntimes: [], stopFailures: [], note: null }),
+			getSettings: async () => ({ knowledgeRoot: null, authorizedProjectIds: [], allowedFeatureIds: [], approvedCustomers: [], authorizedRoots: [], endpoint: "unknown" as const, automation: { enabled: false, localBookkeeping: false, injectProjectData: false, version: 0 } }),
+			updateSettings: async (patch: Partial<import("../../shared/types/bios").BiosHostSettings>) => ({
+				settings: { knowledgeRoot: null, authorizedProjectIds: [], allowedFeatureIds: [], approvedCustomers: [], authorizedRoots: [], endpoint: "unknown" as const, automation: { enabled: false, localBookkeeping: false, injectProjectData: false, version: 0 }, ...patch },
+				droppedRoots: [],
+				runtime: { configVersion: 0, pendingRestart: false, stoppedRuntimes: [], stopFailures: [], note: null },
+				invalidated: [],
+				pushedOff: [],
+				stopped: [],
+				stopFailed: [],
+				stopFailureDetails: [],
+			}),
+			pickKnowledgeRoot: async () => ({ canceled: true, path: null }),
+			listProjects: async () => ({ items: [], gap: "预览模式没有主进程" }),
+			listTasks: async () => ({ items: [], gap: "预览模式没有主进程" }),
+			preview: async () => {
+				throw new Error("preview mode: BIOS 预览不可用");
+			},
+			applySelection: async () => ({ mode: "none" as const, applied: false, receipt: "预览模式：未同步", reason: "preview", currentSessionSynced: false }),
+			// BM-07B B-02：预览模式没有主进程——业务读写一律显式拒绝（不伪造空结果冒充成功）。
+			storeStatus: async () => ({ kind: "unconfigured" as const }),
+			automationStatus: async () => ({ available: false, reason: "no-knowledge-root" as const, checkpoints: 0, pendingReflection: 0, lastRecordedAt: null, durableSaved: 0, durablePending: 0, durableFailed: 0, durableUnrecovered: 0, receipt: null }),
+			initializeStore: async () => previewReject("创建知识库"),
+			bindProject: async () => previewReject("项目绑定"),
+			detectProject: async () => previewReject("候选检测"),
+			confirmProfile: async () => previewReject("字段确认"),
+			readProjectView: async () => previewReject("项目视图"),
+			readTaskDetail: async () => previewReject("任务详情"),
+			createTask: async () => previewReject("新建任务"),
+			updateTask: async () => previewReject("保存任务"),
+			changeTaskStatus: async () => previewReject("任务状态变更"),
+			createFeature: async () => previewReject("新建需求"),
+			updateFeature: async () => previewReject("更新需求"),
+			readFeatureDetail: async () => previewReject("需求详情"),
+			createExperience: async () => previewReject("新建经验"),
+			updateExperience: async () => previewReject("更新经验"),
+			readExperienceDetail: async () => previewReject("经验详情"),
+			reviewExperience: async () => previewReject("经验审核"),
+			searchKnowledge: async () => previewReject("知识检索"),
+			libraryList: async () => previewReject("本地知识库列表"),
+			libraryDetail: async () => previewReject("本地知识库详情"),
+			libraryUpdate: async () => previewReject("本地知识库编辑"),
+			libraryReview: async () => previewReject("本地知识库状态变更"),
+			readExperienceReference: async () => previewReject("跨项目参考"),
+			prepareDraft: async () => previewReject("经验预填"),
+			saveDraft: async () => previewReject("任务沉淀"),
+			// 预览模式没有系统对话框：如实返回"已取消"，让对方看到"没选到目录"而不是假路径。
+			pickBackupDir: async () => ({ canceled: true, path: null }),
+			exportBackup: async () => previewReject("离线导出"),
+			restoreBackup: async () => previewReject("离线恢复"),
+			saveManifest: async () => previewReject("Manifest 保存"),
+			verifyManifest: async () => previewReject("Manifest 重验"),
+			onChanged: () => () => undefined,
+		},
 		// 资源管理器右键菜单预览桩：预览环境无注册表操作，一律报不支持
 		quickTask: { getState: async () => ({ active: false, requestId: 0 }), onChanged: () => () => undefined, exit: async () => undefined },
 		// 预览模式没有真实 pi 认证宿主；提供与 preload 同形状的安全空实现，

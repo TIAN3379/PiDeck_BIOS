@@ -15,6 +15,7 @@ import {
 	commitBatchAnswer,
 	emptyAskBatchDraft,
 	emptyAskSingleDraft,
+	initialAskBatchDraft,
 	formatAskTitle,
 	isComposingKeyboardEvent,
 	isSameAskDraftKey,
@@ -33,6 +34,7 @@ import { Input } from "../ui-shadcn/input";
 import { Textarea } from "../ui-shadcn/textarea";
 import { ApprovalCard } from "../ui-shadcn/approval-card";
 import { PromptTooltip } from "../ui-shadcn/prompt-tooltip";
+import { BiosRuntimeConfirm } from "../bios/BiosRuntimeConfirm";
 
 /**
  * ask 选项选中态的 utility 表达（锚点类 `selected` 保留，供测试与 DOM 查询使用）。
@@ -132,14 +134,6 @@ function notifyAskExpanded(onExpandedChange: ((expanded: boolean) => void) | und
 	onExpandedChange?.(expanded);
 }
 
-/** 批量问答卡的交互草稿初始值：prefill 在此注入（与 Empty 草稿的区别）。 */
-function initialBatchDraft(questions: ReadonlyArray<AgentUiBatchQuestion>): AskBatchDraft {
-	return {
-		...emptyAskBatchDraft(),
-		inputValues: Object.fromEntries(questions.filter((question) => question.prefill).map((question) => [question.id, question.prefill ?? ""])),
-	};
-}
-
 /** 草稿写盘函数：值或函数式更新（与 jotai setAtom 的 SetStateAction 同构）。 */
 export type AskDraftSetter = (draft: AskInteractionDraft | ((current: AskInteractionDraft | undefined) => AskInteractionDraft)) => void;
 
@@ -174,7 +168,7 @@ function BatchAskInlineBar(props: {
 	// 不进此分支，已选内容原样恢复。
 	useEffect(() => {
 		if (!props.draft || !isSameAskDraftKey(props.draft.key, draftKey)) {
-			props.onDraftChange({ key: draftKey, batch: initialBatchDraft(questions) });
+			props.onDraftChange({ key: draftKey, batch: initialAskBatchDraft(questions) });
 		}
 	}, [draftKey]);
 
@@ -571,46 +565,55 @@ function BatchQuestion(props: {
 						<div className="mt-1 text-micro text-text-tertiary">{t("ask.multiSelectHint")}</div>
 					</>
 				) : question.type === "editor" ? (
-					<Textarea
-						className="h-auto min-h-[60px] w-full flex-1 resize-y rounded-sm border border-border-subtle bg-bg-panel p-2 text-caption leading-[1.5] text-text-primary outline-none transition-[border-color,box-shadow] duration-150 focus:border-[var(--color-accent)] focus:shadow-[var(--focus-ring)]"
-						value={props.inputValue}
-						placeholder={question.placeholder || t("ask.editorPlaceholder")}
-						disabled={props.responding}
-						onChange={(event) => {
-							// 答案与输入文本分两次写盘（函数式 updater 依次应用，互不覆盖）：
-							// 输入值同时作为答案（editor 题型持续作答语义），见 askUi.commitBatchAnswer。
-							props.onInputChange(event.target.value);
-							props.onAnswer(event.target.value || undefined, event.target.value);
-						}}
-						onKeyDown={(event) => {
-							// 多行编辑器：回车保留换行，Ctrl/Cmd+Enter 提交并进入下一题（末题 = 提交全部）
-							if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !isComposingKeyboardEvent(event) && !props.nextDisabled) {
-								event.preventDefault();
-								props.onNext();
-							}
-						}}
-					/>
-				) : (
-					<div className="flex w-full items-center gap-2">
-						<Input
-							className="h-9 flex-1 rounded-sm border border-border-subtle bg-bg-panel px-2.5 text-control text-text-primary outline-none transition-[border-color,box-shadow] duration-150 focus:border-[var(--color-accent)] focus:shadow-[var(--focus-ring)]"
+					<>
+						{question.prefill ? <p className="text-micro text-text-tertiary">{t("ask.prefillHint")}</p> : null}
+						<Textarea
+							className="h-auto min-h-[60px] w-full flex-1 resize-y rounded-sm border border-border-subtle bg-bg-panel p-2 text-caption leading-[1.5] text-text-primary outline-none transition-[border-color,box-shadow] duration-150 focus:border-[var(--color-accent)] focus:shadow-[var(--focus-ring)]"
 							value={props.inputValue}
-							placeholder={question.placeholder || t("ask.inputPlaceholder")}
+							placeholder={question.placeholder || t("ask.editorPlaceholder")}
 							disabled={props.responding}
-							onChange={(event) => props.onInputChange(event.target.value)}
+							onChange={(event) => {
+								// 答案与输入文本分两次写盘（函数式 updater 依次应用，互不覆盖）：
+								// 输入值同时作为答案（editor 题型持续作答语义），见 askUi.commitBatchAnswer。
+								props.onInputChange(event.target.value);
+								props.onAnswer(event.target.value || undefined, event.target.value);
+							}}
 							onKeyDown={(event) => {
-								// IME 合成中的回车只用于选字/提交候选，不能当作提交键
-								if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
+								// 多行编辑器：回车保留换行，Ctrl/Cmd+Enter 提交并进入下一题（末题 = 提交全部）
+								if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !isComposingKeyboardEvent(event) && !props.nextDisabled) {
 									event.preventDefault();
-									submitInput();
+									props.onNext();
 								}
 							}}
 						/>
-						{/* 纯输入题的按钮与输入框并排；不能使用 w-full，否则 Button 的 shrink-0 会把输入框压成窄条。 */}
-						<Button className="shrink-0" variant="default" disabled={props.responding || !props.inputValue.trim()} onClick={submitInput}>
+						<Button variant="default" disabled={props.responding || !props.inputValue.trim()} onClick={submitInput}>
 							{t("ask.submit")}
 						</Button>
-					</div>
+					</>
+				) : (
+					<>
+						{question.prefill ? <p className="text-micro text-text-tertiary">{t("ask.prefillHint")}</p> : null}
+						<div className="flex w-full items-center gap-2">
+							<Input
+								className="h-9 flex-1 rounded-sm border border-border-subtle bg-bg-panel px-2.5 text-control text-text-primary outline-none transition-[border-color,box-shadow] duration-150 focus:border-[var(--color-accent)] focus:shadow-[var(--focus-ring)]"
+								value={props.inputValue}
+								placeholder={question.placeholder || t("ask.inputPlaceholder")}
+								disabled={props.responding}
+								onChange={(event) => props.onInputChange(event.target.value)}
+								onKeyDown={(event) => {
+									// IME 合成中的回车只用于选字/提交候选，不能当作提交键
+									if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
+										event.preventDefault();
+										submitInput();
+									}
+								}}
+							/>
+							{/* 纯输入题的按钮与输入框并排；不能使用 w-full，否则 Button 的 shrink-0 会把输入框压成窄条。 */}
+							<Button className="shrink-0" variant="default" disabled={props.responding || !props.inputValue.trim()} onClick={submitInput}>
+								{t("ask.submit")}
+							</Button>
+						</div>
+					</>
 				)}
 			</div>
 			<div className="mt-1 flex min-h-7 items-center gap-2">
@@ -683,6 +686,11 @@ export function SessionRuntimeUiOverlay({ sessionId, runtime, ui, responder, onE
 
 	if (request.method === "batch_ask") {
 		return <BatchAskInlineBar request={request} responding={responding} onCancel={cancel} onSubmit={(answers) => submitValue(answers)} onExpandedChange={onExpandedChange} draft={draft} onDraftChange={setDraft} requestKey={requestKey} />;
+	}
+	// BIOS human approval belongs in one modal, not another sidebar/timeline form.
+	// Responses still go through the existing stale-runtime guard; ordinary questions stay unchanged.
+	if (request.method === "confirm" && /\bBIOS\b/i.test(request.title)) {
+		return <BiosRuntimeConfirm sessionId={sessionId} request={request} responding={responding} onConfirm={() => submitValue(true, true)} onCancel={() => submitValue(false, false)} />;
 	}
 
 	// 安全确认（pi-deck-security-gate 的「ask」动作）：用专用卡片展开工具/等级/详情，

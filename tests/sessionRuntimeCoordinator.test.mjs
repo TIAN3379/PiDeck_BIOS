@@ -1179,6 +1179,16 @@ test("runtime message snapshots fail closed when the runtime is replaced during 
 	assert.equal(coordinator.getTarget("session-1").agentId, "agent-b");
 });
 
+test("F3: successful model switch publishes current runtime identity for BIOS consent", async () => {
+	const { SessionRuntimeCoordinator } = loadCoordinator();
+	const harness = createHarness({ tabs: [{ id: "agent-a", status: "idle", createdAt: 1 }] });
+	const coordinator = new SessionRuntimeCoordinator(harness.catalog, harness.agents, harness.sender);
+	const runtimeGeneration = coordinator.bindExistingAgent("session-1", "agent-a");
+	const result = await coordinator.setRuntimeModel({ sessionId: "session-1", agentId: "agent-a", runtimeGeneration }, "mock", "new-model");
+	assert.equal(result.ok, true);
+	assert.equal(harness.calls.publishRuntimeState, 1);
+});
+
 test("runtime model preference is not persisted when AgentManager fails", async () => {
 	// 先写 catalog 再调 pi：用户取消「重启生效」后，下次启动仍会套上未确认模型。
 	// 失败路径不得改会话记录；needsRestart 由渲染层在用户确认后再 updateRecord。

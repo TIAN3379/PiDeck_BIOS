@@ -3,7 +3,7 @@ import { getDefaultStore, useAtom, useAtomValue } from "jotai";
 import { settingsFocusAtom, type SettingsPaneId, type SettingsTabId } from "../../atoms";
 import { hasPendingUpdateAtom } from "../../atoms/update-atoms";
 import { useSettingsFocus } from "./settings/useSettingsFocus.ts";
-import { Settings2, Network, Wrench, PawPrint, Bell, Trash2, Brush, Eye, ChartColumnBig, Activity, MessageSquare, ImageIcon, DatabaseBackup, Globe, FileCode2, GitBranch, SlidersHorizontal, MonitorCog, Keyboard, X } from "lucide-react";
+import { Settings2, Network, Wrench, PawPrint, Bell, Trash2, Brush, Eye, ChartColumnBig, Activity, MessageSquare, ImageIcon, DatabaseBackup, Globe, FileCode2, GitBranch, SlidersHorizontal, MonitorCog, Keyboard, CircuitBoard, X } from "lucide-react";
 import { t, type TranslationKey } from "../../i18n";
 import { applyAppearanceAttributes, type AppearanceSettings } from "../../themeAppearance";
 import { Button } from "../ui-shadcn/button";
@@ -42,6 +42,8 @@ const StorageTab = lazy(() => import("./settings/SettingsStorageTab").then((m) =
 const BackupTab = lazy(() => import("./settings/SettingsBackupTab").then((m) => ({ default: m.BackupTab })));
 const ProcessMetricsTab = lazy(() => import("./settings/ProcessMetricsTab").then((m) => ({ default: m.ProcessMetricsTab })));
 const UsageStatsTab = lazy(() => import("./settings/UsageStatsTab").then((m) => ({ default: m.UsageStatsTab })));
+// BM-07A C2：BIOS 面板（知识范围/选择/预览/开关）——只在切到该 tab 时才加载 chunk。
+const BiosTab = lazy(() => import("./settings/BiosTab").then((m) => ({ default: m.BiosTab })));
 const VisionBridgeSettingsTab = lazy(() => import("./settings/VisionBridgeSettingsTab").then((m) => ({ default: m.VisionBridgeSettingsTab })));
 const ImageGenSettingsTab = lazy(() => import("./settings/ImageGenSettingsTab").then((m) => ({ default: m.ImageGenSettingsTab })));
 
@@ -219,6 +221,7 @@ const TAB_META: Record<SettingsTabId, { labelKey: TranslationKey; icon: ReactNod
 	process: { labelKey: SETTINGS_TAB_LABEL_KEYS.process, icon: <Activity size={16} /> },
 	vision: { labelKey: SETTINGS_TAB_LABEL_KEYS.vision, icon: <Eye size={16} /> },
 	imagegen: { labelKey: SETTINGS_TAB_LABEL_KEYS.imagegen, icon: <ImageIcon size={16} /> },
+	bios: { labelKey: SETTINGS_TAB_LABEL_KEYS.bios, icon: <CircuitBoard size={16} /> },
 };
 
 /**
@@ -838,6 +841,14 @@ function SettingsModalContent(props: SettingsModalProps) {
 								<TabsContent value="usage" className="settings-panel min-w-0">
 									<Suspense fallback={<SettingsTabLoading />}>
 										<UsageStatsTab />
+									</Suspense>
+								</TabsContent>
+							)}
+							{/* ── BIOS 知识库 tab（BM-07A C2） ── */}
+							{activeTab === "bios" && (
+								<TabsContent value="bios" className="settings-panel min-w-0">
+									<Suspense fallback={<SettingsTabLoading />}>
+										<BiosTab />
 									</Suspense>
 								</TabsContent>
 							)}

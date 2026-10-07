@@ -40,6 +40,9 @@ export const SETTINGS_TAB_LAYOUT: readonly SettingsTabLayoutEntry[] = [
 	{ id: "process" },
 	{ id: "storage" },
 	{ id: "backup" },
+	// 专业能力（BM-07A C2）：BIOS 知识范围/选择/预览与上下文开关。单独一簇，
+	// 与"开发与维护"分开，避免日常维护项与专业知识库配置混在一起。
+	{ id: "bios", dividerBefore: true },
 ];
 
 /** 全部合法 tab id（顺序即展示顺序）：校验 localStorage 记忆值、防止旧版本残留值导致无高亮。 */
@@ -71,6 +74,7 @@ export const SETTINGS_TAB_LABEL_KEYS: Record<SettingsTabId, TranslationKey> = {
 	process: "settings.tabs.process",
 	vision: "settings.tabs.vision",
 	imagegen: "settings.tabs.imagegen",
+	bios: "settings.tabs.bios",
 };
 
 /**
@@ -95,4 +99,5 @@ export const SETTINGS_TAB_KEYWORDS: Record<SettingsTabId, readonly string[]> = {
 	process: ["进程", "监控", "内存", "process", "monitor"],
 	vision: ["视觉", "图片识别", "视觉桥", "vision", "multimodal"],
 	imagegen: ["生图", "画图", "图片生成", "imagegen", "image"],
+	bios: ["bios", "知识库", "知识范围", "需求", "任务", "板卡", "bios panel"],
 };

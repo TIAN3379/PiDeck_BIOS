@@ -76,6 +76,20 @@ function chatMessage(id, role, text, timestamp = 1) {
 	return { id, agentId: "agent", role, text, timestamp };
 }
 
+test("sending on the same runtime preserves Pi identity; replacement discards old metadata", () => {
+	const atoms = loadAtoms();
+	const store = createStore();
+	store.set(atoms.sessionRuntimeByIdAtom, { "session-a": { agentId: "agent-a", runtimeGeneration: 2, status: "idle", piSessionId: "pi-a", cwd: "/board-a", sessionPath: "/a.jsonl", state: { modelId: "model-a" } } });
+	store.set(atoms.bindSessionRuntimeAtom, { sessionId: "session-a", agentId: "agent-a", runtimeGeneration: 2, status: "running" });
+	assert.equal(store.get(atoms.sessionRuntimeByIdAtom)["session-a"].piSessionId, "pi-a");
+	assert.equal(store.get(atoms.sessionRuntimeByIdAtom)["session-a"].cwd, "/board-a");
+	store.set(atoms.bindSessionRuntimeAtom, { sessionId: "session-a", agentId: "agent-a", runtimeGeneration: 3 });
+	assert.equal(store.get(atoms.sessionRuntimeByIdAtom)["session-a"].piSessionId, undefined);
+	assert.equal(store.get(atoms.sessionRuntimeByIdAtom)["session-a"].state, undefined);
+	store.set(atoms.bindSessionRuntimeAtom, { sessionId: "session-a", agentId: "agent-b", runtimeGeneration: 4 });
+	assert.equal(store.get(atoms.sessionRuntimeByIdAtom)["session-a"].sessionPath, undefined);
+});
+
 test("stores catalog records and selection by stable session ID", () => {
 	const atoms = loadAtoms();
 	const store = createStore();

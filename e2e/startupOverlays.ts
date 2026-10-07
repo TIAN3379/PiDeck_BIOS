@@ -31,9 +31,11 @@ export async function armStartupOverlayDismissal(window: Page): Promise<boolean>
 		// 用轮询而不是 MutationObserver：引导的弹出时机跟「项目激活」挂钩（activeProjectId 变真
 		// 后 2.5s 才弹），可能落在用例中途；事件驱动会在“弹窗已在、后续无变更”时漏拍，
 		// 轮询（100ms，只查一个选择器）不会。
-		const timer = window.setInterval(() => {
-			if (dismiss()) window.clearInterval(timer);
-		}, 100);
+		//
+		// 关键：**首次关掉后不能停轮询**。引导的调度是「项目激活后 2.5s」，而 e2e 里设置弹窗
+		// 等界面可能先打开；如果第一次命中就 clearInterval，迟到弹出的引导会留在屏幕上抢走
+		// Esc/焦点，表现为"设置关不掉、后续点击被遮罩拦住"这类与业务无关的假失败。
+		const timer = window.setInterval(dismiss, 100);
 		window.setTimeout(() => window.clearInterval(timer), 120_000);
 		return dismiss();
 	});

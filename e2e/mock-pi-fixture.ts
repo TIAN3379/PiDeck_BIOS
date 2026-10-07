@@ -1,5 +1,5 @@
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ImageGenConfigFile } from "../src/shared/types/imagegen";
@@ -198,8 +198,14 @@ export const test = base.extend<
 				...(process.platform === "win32" ? { APPDATA: userDataRoot, USERPROFILE: userDataRoot } : process.platform === "darwin" ? { HOME: userDataRoot } : { XDG_CONFIG_HOME: userDataRoot, HOME: userDataRoot }),
 			};
 			delete env.ELECTRON_RENDERER_URL;
+			delete env.ELECTRON_RUN_AS_NODE;
+			// 与基础 fixture 同一入口：可在真实目录包中重跑 mock Pi 的 GUI 闭环，
+			// 用户数据隔离不变，未设置时仍运行开发构建。
+			const packagedExecutablePath = process.env.PIDEK_E2E_EXECUTABLE_PATH ? resolve(process.env.PIDEK_E2E_EXECUTABLE_PATH) : undefined;
+			if (packagedExecutablePath && !existsSync(packagedExecutablePath)) throw new Error(`Packaged E2E executable does not exist: ${packagedExecutablePath}`);
 			const app = await electron.launch({
-				args: [join(repoRoot, "out", "main", "index.js"), `--user-data-dir=${join(userDataRoot, "profile")}`, ...launchArgs],
+				...(packagedExecutablePath ? { executablePath: packagedExecutablePath } : {}),
+				args: [...(packagedExecutablePath ? [] : [join(repoRoot, "out", "main", "index.js")]), `--user-data-dir=${join(userDataRoot, "profile")}`, ...launchArgs],
 				env,
 			});
 			await use(app);

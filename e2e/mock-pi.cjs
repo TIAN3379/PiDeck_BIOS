@@ -62,8 +62,8 @@ const resumeSessionPath = sessionArgIndex >= 0 && process.argv[sessionArgIndex +
 // 模型/思考级别有状态跟踪：桌面端 set_model/set_thinking_level 后会重新
 // get_state 拉取（AgentManager.getRuntimeState），mock 必须返回更新后的值。
 const MODELS = [
-	{ provider: "mock", id: "mock-model", name: "Mock Model", contextWindow: 128000, reasoning: true },
-	{ provider: "mock", id: "mock-model-pro", name: "Mock Model Pro", contextWindow: 256000, reasoning: true },
+	{ provider: "mock", id: "mock-model", name: "Mock Model", baseUrl: "https://mock-api.invalid/private-path/v1?api_key=synthetic-secret", contextWindow: 128000, reasoning: true },
+	{ provider: "mock", id: "mock-model-pro", name: "Mock Model Pro", baseUrl: "https://mock-api-pro.invalid/v1", contextWindow: 256000, reasoning: true },
 ];
 let currentModel = MODELS[0];
 let currentThinking = "medium";
@@ -146,6 +146,17 @@ const pendingPrompts = []; // { text, streamingBehavior }
 // prompt 含 ASK_* 标记时，先发 extension_ui_request（桌面端渲染提问卡片），
 // 挂起等待 extension_ui_response 后再流式回复（回复包含用户答案，供断言结果正确）。
 const ASK_MARKERS = {
+	ASK_PREFILL: {
+		method: "input",
+		title: JSON.stringify({
+			__piDeckBatchAsk: 1,
+			review: true,
+			questions: [
+				{ id: "p1", type: "input", question: "确认项目名", placeholder: "例如：Example", prefill: "SampleBoard" },
+				{ id: "p2", type: "editor", question: "确认备注", prefill: "第一行\n第二行" },
+			],
+		}),
+	},
 	ASK_SELECT: { method: "select", title: "请选择操作", options: ["选项A", "选项B"], allowOther: false },
 	ASK_SELECT_CUSTOM: { method: "select", title: "请选择或输入", options: ["选项A", "选项B"], allowOther: true },
 	ASK_SELECT_NOOPTS: { method: "select", title: "无选项提问（应降级为输入）", options: [] },
@@ -421,50 +432,65 @@ function startStream(userText, options = {}) {
 	let manyToolEmitted = 0;
 	// prompt 含 "MDEMO" 时回复富 markdown，用于截图巡检渲染元素（链接/代码/表格/引用）
 	// raw 模式（Ask 回答回显）：不套模板、不截断，保证长 JSON 答案完整回传
-	const reply = userText.startsWith("MATH_REPRO\n")
-		? userText.slice("MATH_REPRO\n".length)
-		: options.raw
-			? userText
-			: userText.includes("BURST")
-				? "Mock 回复：「BURST」" + "第一段缓慢吐字节奏稳定，然后密集输出段以极快速度连续推送多字符用于复现真实模型突发输出导致的蹦字现象，这段文本会在一两百毫秒内一次性灌入渲染层。"
-				: userText.includes("LONG")
-					? "Mock 回复：「LONG」" +
-						Array.from({ length: 120 })
-							.map((_, i) => `第 ${i + 1} 行：长回答示例文本，用于撑高时间线高度（滚动/贴底类用例需要内容溢出视口）。`)
-							.join("\n")
-					: userText.includes("MDEMO")
-						? [
-								"以下是渲染元素巡检：",
-								"",
-								"修改了 src/main/index.ts 和 ./docs/ui-2.0-revamp-plan.md，详见 https://github.com/miaojingang/pi-desktop 。",
-								"",
-								"> 引用块：重构期间禁止静默吞掉对方改动，每个冲突都要确认能力归属。",
-								"",
-								"行内代码 `npm run typecheck` 必须通过。",
-								"",
-								"```ts",
-								"const gate = await runTypecheck();",
-								'if (!gate.ok) throw new Error("typecheck failed");',
-								"```",
-								"",
-								"| 批次 | 状态 | 说明 |",
-								"| --- | --- | --- |",
-								"| U2 | ✅ | Streamdown 渲染管线 |",
-								"| U5 | ✅ | 组件清扫 |",
-								"",
-								"```mermaid",
-								"graph LR",
-								"  A[启动] --> B{校验}",
-								"  B -->|通过| C[执行]",
-								"  B -->|失败| D[报错]",
-								"  C --> E[结束]",
-								"```",
-								"",
-								"行内公式 $x^2 + y^2 = z^2$ 与块级公式：",
-								"",
-								"$$\\int_0^1 x^2 \\, dx = \\frac{1}{3}$$",
-							].join("\n")
-						: `Mock 回复：「${userText.slice(0, 40)}」流式渲染验证完成。`;
+	// HX GUI: deterministic proposal via the real RPC loop (never a real model).
+	let historyReply;
+	if (userText.includes('"metadata":') && userText.includes('"diff":')) {
+		try {
+			const evidence = JSON.parse(userText.slice(userText.indexOf('{"token":')));
+			if (typeof evidence.token === "string" && /^[a-f0-9]{40,64}$/.test(evidence.commit))
+				historyReply = JSON.stringify({ token: evidence.token, commit: evidence.commit, problem: "Synthetic S3 resume failure", rootCause: "", solution: "Synthetic patch changes Board.c", appliesWhen: ["Synthetic source board only"], doesNotApplyWhen: ["Other silicon requires separate validation"] });
+		} catch {
+			/* Not a history prompt: use ordinary mock reply. */
+		}
+	}
+	const reply =
+		historyReply ??
+		(userText.startsWith("MATH_REPRO\n")
+			? userText.slice("MATH_REPRO\n".length)
+			: userText === "BIOS_CONFIG_STATE"
+				? `BIOS_ENDPOINT=${process.env.BIOS_ENDPOINT ?? "missing"}\nBIOS_KNOWLEDGE_ROOT=${process.env.BIOS_KNOWLEDGE_ROOT ?? "missing"}`
+				: options.raw
+					? userText
+					: userText.includes("BURST")
+						? "Mock 回复：「BURST」" + "第一段缓慢吐字节奏稳定，然后密集输出段以极快速度连续推送多字符用于复现真实模型突发输出导致的蹦字现象，这段文本会在一两百毫秒内一次性灌入渲染层。"
+						: userText.includes("LONG")
+							? "Mock 回复：「LONG」" +
+								Array.from({ length: 120 })
+									.map((_, i) => `第 ${i + 1} 行：长回答示例文本，用于撑高时间线高度（滚动/贴底类用例需要内容溢出视口）。`)
+									.join("\n")
+							: userText.includes("MDEMO")
+								? [
+										"以下是渲染元素巡检：",
+										"",
+										"修改了 src/main/index.ts 和 ./docs/ui-2.0-revamp-plan.md，详见 https://github.com/miaojingang/pi-desktop 。",
+										"",
+										"> 引用块：重构期间禁止静默吞掉对方改动，每个冲突都要确认能力归属。",
+										"",
+										"行内代码 `npm run typecheck` 必须通过。",
+										"",
+										"```ts",
+										"const gate = await runTypecheck();",
+										'if (!gate.ok) throw new Error("typecheck failed");',
+										"```",
+										"",
+										"| 批次 | 状态 | 说明 |",
+										"| --- | --- | --- |",
+										"| U2 | ✅ | Streamdown 渲染管线 |",
+										"| U5 | ✅ | 组件清扫 |",
+										"",
+										"```mermaid",
+										"graph LR",
+										"  A[启动] --> B{校验}",
+										"  B -->|通过| C[执行]",
+										"  B -->|失败| D[报错]",
+										"  C --> E[结束]",
+										"```",
+										"",
+										"行内公式 $x^2 + y^2 = z^2$ 与块级公式：",
+										"",
+										"$$\\int_0^1 x^2 \\, dx = \\frac{1}{3}$$",
+									].join("\n")
+								: `Mock 回复：「${userText.slice(0, 40)}」流式渲染验证完成。`);
 	const chunkCount = slow ? 18 : burst ? 24 : 12;
 	const per = Math.max(1, Math.ceil(reply.length / chunkCount));
 	streamChunks = [];

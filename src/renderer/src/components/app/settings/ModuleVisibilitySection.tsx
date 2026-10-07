@@ -29,6 +29,7 @@ const MODULE_LABEL_KEYS: Record<HideableModuleId, TranslationKey> = {
 	git: SETTINGS_TAB_LABEL_KEYS.git,
 	usage: SETTINGS_TAB_LABEL_KEYS.usage,
 	process: SETTINGS_TAB_LABEL_KEYS.process,
+	bios: SETTINGS_TAB_LABEL_KEYS.bios,
 };
 
 /** 每个模块隐藏后受影响的入口说明（行描述）。 */
@@ -41,6 +42,7 @@ const MODULE_DESC_KEYS: Record<HideableModuleId, TranslationKey> = {
 	git: "settings.modules.gitDesc",
 	usage: "settings.modules.usageDesc",
 	process: "settings.modules.processDesc",
+	bios: "settings.modules.biosDesc",
 };
 
 /**
@@ -78,6 +80,7 @@ export const ModuleVisibilitySection = memo(function ModuleVisibilitySection(pro
 				return imageGenConfig.providers.length > 0 ? "settings.modules.statusConfigured" : null;
 			case "usage":
 			case "process":
+			case "bios":
 				return null;
 		}
 	};

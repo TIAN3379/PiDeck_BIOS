@@ -11,8 +11,17 @@ import { DEFAULT_SIDEBAR_NAV_TAB, readSidebarNavTab, type SidebarNavTab } from "
 /** Settings overlay visibility is shared by Sidebar, Pi environment flow, and Session surface. */
 export const settingsOpenAtom = atom(false);
 
+/**
+ * 请求打开某个右侧抽屉面板（BM-07B B-03）。
+ *
+ * 抽屉状态本身归 `useWorkspacePanels`（在 App 里），其它界面（如 BIOS 设置页的
+ * 「打开工作台」入口）不持有它，只能**请求**：App 消费后立即清空，保持单向数据流。
+ * 用 `openDrawerForce` 消费——入口语义是"打开"，不是"切换/关闭"。
+ */
+export const workspaceDrawerRequestAtom = atom<import("../hooks/useWorkspacePanels").WorkspaceDrawerPanel | null>(null);
+
 /** 与 SettingsModal 侧栏 tab 对齐；深链/焦点目标用同一套 id，避免 Git 去设置落到上次记住的非「常用」页。 */
-export type SettingsTabId = "common" | "shortcuts" | "appearance" | "proxy" | "web" | "editors" | "git" | "dev" | "im" | "pet" | "notification" | "storage" | "backup" | "usage" | "process" | "vision" | "imagegen";
+export type SettingsTabId = "common" | "shortcuts" | "appearance" | "proxy" | "web" | "editors" | "git" | "dev" | "im" | "pet" | "notification" | "storage" | "backup" | "usage" | "process" | "vision" | "imagegen" | "bios";
 
 /**
  * 设置页内可直达的锚点 slug（对应 DOM 上的 `id="settings-section-<slug>"`）。
